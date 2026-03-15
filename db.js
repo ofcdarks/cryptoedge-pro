@@ -7,7 +7,7 @@ const path    = require('path');
 const fs      = require('fs');
 const initSQL = require('sql.js');
 
-const DB_PATH = process.env.DB_PATH || './data';
+const DB_PATH = process.env.DB_PATH || '/data';
 const DB_FILE = path.join(DB_PATH, 'cryptoedge.db');
 
 let _db = null;
