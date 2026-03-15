@@ -1,0 +1,1891 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CryptoEdge Pro — Plataforma de Day Trade</title>
+<!-- PWA -->
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#F0B90B">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="CryptoEdge">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="application-name" content="CryptoEdge Pro">
+<meta name="description" content="Plataforma profissional de day trade de criptomoedas com Analysis AI, Grid Bot e gestão de risco">
+<!-- Icons -->
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="icon" type="image/svg+xml" href="/icons/favicon.svg">
+<link rel="stylesheet" href="/css/app.css">
+
+<style>
+.admin-mode .admin-only { display: flex !important; }
+</style>
+</head>
+<body>
+<!-- ── Cookie Consent Banner ── -->
+<div id="cookie-banner" style="display:none;position:fixed;bottom:0;left:0;right:0;z-index:99999;background:rgba(22,27,34,0.97);border-top:1px solid rgba(240,185,11,0.3);padding:16px 20px;backdrop-filter:blur(10px)">
+  <div style="max-width:900px;margin:0 auto;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+    <div style="flex:1;min-width:260px">
+      <div style="font-size:13px;font-weight:600;color:#e6edf3;margin-bottom:4px">🍪 Cookies & Armazenamento Local</div>
+      <div style="font-size:12px;color:#7d8590;line-height:1.5">
+        Usamos <strong style="color:#e6edf3">armazenamento local do navegador</strong> para sua sessão e preferências. 
+        Não usamos cookies de rastreamento ou marketing. 
+        <a href="/privacy" target="_blank" style="color:#F0B90B;text-decoration:none">Política de Privacidade</a> · 
+        <a href="/terms" target="_blank" style="color:#F0B90B;text-decoration:none">Termos de Uso</a>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;flex-shrink:0">
+      <button onclick="rejectCookies()" style="padding:8px 16px;background:transparent;border:1px solid #30363d;border-radius:6px;color:#7d8590;font-size:12px;cursor:pointer">Somente essenciais</button>
+      <button onclick="acceptCookies()" style="padding:8px 20px;background:#F0B90B;border:none;border-radius:6px;color:#000;font-size:13px;font-weight:700;cursor:pointer">Aceitar e Continuar ✓</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Login Screen ── -->
+<div id="login-screen">
+  <!-- Animated background particles -->
+  <canvas id="login-canvas" style="position:absolute;inset:0;z-index:0;opacity:0.4"></canvas>
+
+  <div class="login-wrap" style="position:relative;z-index:1;width:100%;max-width:460px;padding:20px">
+    <!-- Main card -->
+    <div class="login-box" style="position:relative;overflow:hidden">
+      <!-- Top gradient bar -->
+      <div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#F0B90B,#ff9500,#F0B90B);background-size:200% 100%;animation:shimmer 2s linear infinite"></div>
+
+      <!-- Logo -->
+      <div class="login-logo" style="margin-bottom:1.5rem">
+        <div class="login-logo-icon" style="position:relative">
+          <span style="font-size:22px;font-weight:800">C</span>
+          <div style="position:absolute;inset:-3px;border-radius:12px;border:2px solid rgba(240,185,11,0.4);animation:pulse-ring 2s ease infinite"></div>
+        </div>
+        <div>
+          <div class="login-title" style="font-size:24px">CryptoEdge <span style="color:var(--gold)">Pro</span></div>
+          <div class="login-subtitle" id="login-subtitle-text">Plataforma Profissional de Day Trade</div>
+        </div>
+      </div>
+
+      <div id="login-error" class="login-error"></div>
+
+      <!-- Setup form -->
+      <div id="setup-form">
+        <div style="text-align:center;margin-bottom:1.5rem;padding:12px;background:rgba(240,185,11,0.08);border:1px solid rgba(240,185,11,0.2);border-radius:10px">
+          <div style="font-size:20px;margin-bottom:4px">🎉</div>
+          <div style="font-size:14px;font-weight:600;color:var(--t1)">Primeiro acesso detectado</div>
+          <div style="font-size:12px;color:var(--t3);margin-top:2px">Crie sua conta de administrador para continuar</div>
+        </div>
+        <div class="login-field">
+          <label>Usuário</label>
+          <div style="position:relative">
+            <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:16px;pointer-events:none">👤</span>
+            <input type="text" id="setup-user" placeholder="Escolha um usuário" autocomplete="username" style="padding-left:40px">
+          </div>
+        </div>
+        <div class="login-field">
+          <label>Senha</label>
+          <div style="position:relative">
+            <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:16px;pointer-events:none">🔒</span>
+            <input type="password" id="setup-pass" placeholder="Mínimo 6 caracteres" autocomplete="new-password" style="padding-left:40px" oninput="checkPasswordStrength(this.value)">
+            <button type="button" onclick="togglePass('setup-pass')" style="position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--t3);font-size:14px" id="toggle-setup-pass">👁</button>
+          </div>
+          <!-- Password strength bar -->
+          <div id="pass-strength-wrap" style="margin-top:6px;display:none">
+            <div style="height:3px;background:var(--bg3);border-radius:2px;overflow:hidden">
+              <div id="pass-strength-bar" style="height:100%;width:0%;transition:all 0.3s;border-radius:2px"></div>
+            </div>
+            <div id="pass-strength-label" style="font-size:10px;color:var(--t3);margin-top:3px"></div>
+          </div>
+        </div>
+        <div class="login-field">
+          <label>Confirmar senha</label>
+          <div style="position:relative">
+            <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:16px;pointer-events:none">🔐</span>
+            <input type="password" id="setup-pass2" placeholder="Repita a senha" autocomplete="new-password" style="padding-left:40px" onkeydown="if(event.key==='Enter')doSetup()">
+          </div>
+        </div>
+        <button class="login-btn" onclick="doSetup()" id="setup-btn">
+          <span>Criar conta e entrar</span>
+          <span style="margin-left:8px">→</span>
+        </button>
+      </div>
+
+      <!-- Register form -->
+      <div id="register-form" style="display:none">
+        <div style="text-align:center;margin-bottom:16px">
+          <div style="font-size:15px;font-weight:600;color:var(--t1)">Criar nova conta</div>
+          <div style="font-size:12px;color:var(--t3);margin-top:2px">Preencha os dados abaixo</div>
+        </div>
+        <div class="login-field">
+          <label>Usuário</label>
+          <div style="position:relative">
+            <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:16px;pointer-events:none">👤</span>
+            <input type="text" id="reg-user" placeholder="Escolha um usuário" autocomplete="username" style="padding-left:40px">
+          </div>
+        </div>
+        <div class="login-field">
+          <label>E-mail (opcional)</label>
+          <div style="position:relative">
+            <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:16px;pointer-events:none">📧</span>
+            <input type="email" id="reg-email" placeholder="seu@email.com" autocomplete="email" style="padding-left:40px">
+          </div>
+        </div>
+        <div class="login-field">
+          <label>Senha</label>
+          <div style="position:relative">
+            <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:16px;pointer-events:none">🔒</span>
+            <input type="password" id="reg-pass" placeholder="Mínimo 6 caracteres" style="padding-left:40px" oninput="checkPasswordStrength(this.value)">
+            <button type="button" onclick="togglePass('reg-pass')" style="position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--t3);font-size:14px">👁</button>
+          </div>
+          <div id="pass-strength-wrap" style="margin-top:6px;display:none">
+            <div style="height:3px;background:var(--bg3);border-radius:2px;overflow:hidden"><div id="pass-strength-bar" style="height:100%;width:0%;transition:all 0.3s;border-radius:2px"></div></div>
+            <div id="pass-strength-label" style="font-size:10px;color:var(--t3);margin-top:3px"></div>
+          </div>
+        </div>
+        <div class="login-field" id="invite-code-field">
+          <label>Código de Convite <span style="color:var(--red)">*</span></label>
+          <div style="position:relative">
+            <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:16px;pointer-events:none">🎟️</span>
+            <input type="text" id="reg-invite" placeholder="Ex: ABC1D2" style="padding-left:40px;text-transform:uppercase;font-family:var(--mono);letter-spacing:2px" oninput="this.value=this.value.toUpperCase()">
+          </div>
+          <div style="font-size:10px;color:var(--t3);margin-top:4px">Solicite um código ao administrador da plataforma</div>
+        </div>
+        <div style="margin-bottom:16px">
+          <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:12px;color:var(--t2)">
+            <input type="checkbox" id="reg-terms" style="margin-top:2px;accent-color:var(--gold)">
+            <span>Li e concordo com os <a href="/terms" target="_blank" style="color:var(--gold)">Termos de Uso</a> e a <a href="/privacy" target="_blank" style="color:var(--gold)">Política de Privacidade</a></span>
+          </label>
+        </div>
+        <button class="login-btn" onclick="doRegister()" id="reg-btn" style="position:relative;overflow:hidden">
+          <span id="reg-btn-text">Criar conta</span><span style="margin-left:8px">→</span>
+        </button>
+        <div style="text-align:center;margin-top:14px;font-size:13px;color:var(--t3)">
+          Já tem conta? <span onclick="showForm('login')" style="color:var(--gold);cursor:pointer;font-weight:600">Fazer login</span>
+        </div>
+      </div>
+
+      <!-- Forgot Password form -->
+      <div id="forgot-form" style="display:none">
+        <div style="text-align:center;margin-bottom:16px">
+          <div style="font-size:32px;margin-bottom:8px">🔐</div>
+          <div style="font-size:15px;font-weight:600;color:var(--t1)">Redefinir senha</div>
+          <div style="font-size:12px;color:var(--t3);margin-top:4px">Informe seu e-mail para receber o link de redefinição</div>
+        </div>
+        <div class="login-field">
+          <label>E-mail cadastrado</label>
+          <div style="position:relative">
+            <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:16px;pointer-events:none">📧</span>
+            <input type="email" id="forgot-email" placeholder="seu@email.com" autocomplete="email" style="padding-left:40px" onkeydown="if(event.key==='Enter')doForgotPassword()">
+          </div>
+        </div>
+        <div id="forgot-success-msg" style="display:none;background:rgba(63,185,80,0.1);border:1px solid rgba(63,185,80,0.3);border-radius:8px;padding:12px;font-size:13px;color:var(--green);margin-bottom:12px;text-align:center">
+          ✅ Se o e-mail existir, você receberá as instruções em breve.
+        </div>
+        <button class="login-btn" onclick="doForgotPassword()" id="forgot-btn">
+          <span id="forgot-btn-text">Enviar link de redefinição</span>
+          <span style="margin-left:8px">📨</span>
+        </button>
+        <div style="text-align:center;margin-top:14px;font-size:13px;color:var(--t3)">
+          Lembrou a senha? <span onclick="showForm('login')" style="color:var(--gold);cursor:pointer;font-weight:600">Fazer login</span>
+        </div>
+        <div style="margin-top:12px;padding:10px 12px;background:var(--bg2);border-radius:6px;font-size:11px;color:var(--t3);text-align:center">
+          ℹ️ Se o SMTP não estiver configurado, solicite o link ao administrador
+        </div>
+      </div>
+
+      <!-- Login form -->
+      <div id="login-form" style="display:none">
+        <div class="login-field">
+          <label>Usuário</label>
+          <div style="position:relative">
+            <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:16px;pointer-events:none">👤</span>
+            <input type="text" id="login-user" placeholder="Seu usuário" autocomplete="username" style="padding-left:40px" onkeydown="if(event.key==='Enter')document.getElementById('login-pass').focus()">
+          </div>
+        </div>
+        <div class="login-field">
+          <label>Senha</label>
+          <div style="position:relative">
+            <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:16px;pointer-events:none">🔒</span>
+            <input type="password" id="login-pass" placeholder="Sua senha" autocomplete="current-password" style="padding-left:40px" onkeydown="if(event.key==='Enter')doLogin()">
+            <button type="button" onclick="togglePass('login-pass')" style="position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--t3);font-size:14px">👁</button>
+          </div>
+        </div>
+        <!-- Remember me + Forgot -->
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--t2)">
+            <input type="checkbox" id="remember-me" style="width:16px;height:16px;accent-color:var(--gold);cursor:pointer">
+            <span>Lembrar acesso</span>
+          </label>
+          <span onclick="showForm('forgot')" style="font-size:12px;color:var(--gold);cursor:pointer;font-weight:500">Esqueceu a senha?</span>
+        </div>
+        <button class="login-btn" onclick="doLogin()" id="login-btn" style="position:relative;overflow:hidden">
+          <span id="login-btn-text">Entrar na plataforma</span>
+          <span style="margin-left:8px">🚀</span>
+          <div id="login-ripple" style="position:absolute;border-radius:50%;background:rgba(255,255,255,0.3);width:0;height:0;transform:translate(-50%,-50%);transition:none;pointer-events:none"></div>
+        </button>
+        <div id="register-link" style="text-align:center;margin-top:14px;font-size:13px;color:var(--t3);display:none">
+          Novo usuário? <span onclick="showForm('register')" style="color:var(--gold);cursor:pointer;font-weight:600">Criar conta</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Security badges -->
+    <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-top:16px;flex-wrap:wrap">
+      <div class="sec-badge" title="Conexão criptografada com HTTPS/TLS">
+        <span>🔒</span><span>HTTPS/TLS</span>
+      </div>
+      <div class="sec-badge" title="Senha protegida com SHA-256 + salt">
+        <span>🔐</span><span>SHA-256</span>
+      </div>
+      <div class="sec-badge" title="Sessão autenticada com token seguro">
+        <span>🛡️</span><span>Token Auth</span>
+      </div>
+      <div class="sec-badge" title="Nenhum dado é vendido ou compartilhado">
+        <span>🚫</span><span>Sem Telemetria</span>
+      </div>
+      <div class="sec-badge" title="Dados armazenados no seu próprio servidor VPS">
+        <span>🖥️</span><span>VPS Privado</span>
+      </div>
+      <div class="sec-badge" title="Acesso apenas com usuário e senha">
+        <span>🔑</span><span>Login Protegido</span>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div style="text-align:center;margin-top:12px;font-size:11px;color:var(--t3)">
+      CryptoEdge Pro v1.0 &nbsp;•&nbsp; Servidor privado &nbsp;•&nbsp; Acesso seguro via HTTPS
+    </div>
+  </div>
+</div>
+
+<div id="app" style="display:none">
+
+  <!-- ── Sidebar ── -->
+  <nav class="sidebar">
+    <div class="logo">
+      <div class="logo-icon">C</div>
+      <div>
+        <div class="logo-text">CryptoEdge</div>
+        <div class="logo-sub">Pro v1.0</div>
+      </div>
+    </div>
+
+    <div class="nav-section">Terminal</div>
+    <div class="nav-item active" data-panel="dashboard">
+      <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+      <span>Dashboard</span>
+    </div>
+    <div class="nav-item" data-panel="markets">
+      <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      <span>Mercados</span>
+    </div>
+
+    <div class="nav-section">Análise</div>
+    <div class="nav-item" data-panel="analysisai" style="background:linear-gradient(90deg,rgba(240,185,11,0.08),transparent);border-left:2px solid var(--gold)">
+      <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
+      <span style="color:var(--gold)">Analysis AI</span>
+      <span class="nav-badge" style="background:var(--gold);color:#000">AI</span>
+    </div>
+    <div class="nav-item" data-panel="calculator">
+      <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="4" y="2" width="16" height="20" rx="2"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="12" y2="16"/></svg>
+      <span>Calculadora</span>
+    </div>
+    <div class="nav-item" data-panel="risk">
+      <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      <span>Gestão Risco</span>
+    </div>
+
+    <div class="nav-section">Automação</div>
+    <div class="nav-item" data-panel="gridbot">
+      <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
+      <span>Grid Bot</span>
+      <span class="nav-badge">BOT</span>
+    </div>
+    <div class="nav-item" data-panel="botcontrol">
+      <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>
+      <span>Bot Control</span>
+      <span class="nav-badge" id="bot-status-badge">OFF</span>
+    </div>
+
+    <div class="nav-section">Operações</div>
+    <div class="nav-item" data-panel="alerts">
+      <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+      <span>Alertas</span>
+      <span class="nav-badge" id="alerts-badge" style="display:none">0</span>
+    </div>
+    <div class="nav-item" data-panel="scanner">
+      <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <span>Scanner</span>
+    </div>
+    <div class="nav-item" data-panel="checklist">
+      <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+      <span>Checklist</span>
+    </div>
+    <div class="nav-item" data-panel="journal">
+      <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+      <span>Diário</span>
+    </div>
+    <div class="nav-item" data-panel="backtest">
+      <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+      <span>Backtesting</span>
+    </div>
+    <div class="nav-item" data-panel="pnlchart">
+      <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+      <span>PnL Chart</span>
+    </div>
+    <div class="nav-item" data-panel="ai">
+      <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <span>IA Expert</span>
+    </div>
+    <div class="nav-item" data-panel="profile">
+      <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      <span>Meu Perfil</span>
+    </div>
+    <div class="nav-item admin-only" data-panel="admin" id="nav-admin" style="display:none;background:rgba(240,185,11,0.06);border-left:2px solid var(--gold)">
+      <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      <span style="color:var(--gold)">⚙ Admin</span>
+      <span class="nav-badge" style="background:var(--gold);color:#000">ADM</span>
+    </div>
+
+    <div style="padding:8px 8px 4px;border-top:1px solid var(--border)">
+      <div style="font-size:9px;color:var(--t3);font-family:var(--mono);text-transform:uppercase;letter-spacing:1px;padding:0 4px;margin-bottom:6px">Watchlist ⭐</div>
+      <div id="sidebar-watchlist" style="max-height:160px;overflow-y:auto;display:flex;flex-direction:column;gap:2px">
+        <div style="font-size:11px;color:var(--t3);padding:4px 8px">Nenhuma moeda favoritada</div>
+      </div>
+    </div>
+    <div class="sidebar-footer">
+      <div class="status-indicator">
+        <div class="status-dot live" id="ws-dot"></div>
+        <span id="ws-status">Conectando...</span>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ── Main ── -->
+  <div class="main">
+    <!-- Topbar -->
+    <div class="topbar">
+      <span class="topbar-pair" id="tb-pair">BTC/USDT</span>
+      <span class="topbar-price up" id="tb-price">—</span>
+      <span class="topbar-change up" id="tb-change">—</span>
+      <div class="topbar-stat">
+        <label>24h High</label>
+        <span id="tb-high">—</span>
+      </div>
+      <div class="topbar-stat">
+        <label>24h Low</label>
+        <span id="tb-low">—</span>
+      </div>
+      <div class="topbar-stat">
+        <label>Volume 24h</label>
+        <span id="tb-vol">—</span>
+      </div>
+      <div class="topbar-right">
+        <!-- Real/Sim mode badge -->
+        <div id="mode-badge" class="mode-badge sim" onclick="window.location='#botcontrol'" title="Clique para configurar o bot">
+          <div class="mode-dot"></div>
+          <span id="mode-text">SIMULAÇÃO</span>
+        </div>
+        <span class="topbar-time" id="clock"></span>
+        <!-- Theme toggle -->
+        <button class="theme-btn" onclick="toggleTheme()" id="theme-btn" title="Alternar tema">🌙</button>
+        <!-- Admin gear (only for admins) -->
+        <div id="topbar-admin-btn" class="topbar-admin-hidden" onclick="goToAdmin()" title="⚙️ Painel Admin" style="cursor:pointer;width:32px;height:32px;background:rgba(240,185,11,0.15);border:1px solid rgba(240,185,11,0.4);border-radius:6px;align-items:center;justify-content:center;font-size:18px;transition:all 0.2s;flex-shrink:0">
+          ⚙️
+        </div>
+        <!-- User -->
+        <div style="display:flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid var(--border);border-radius:6px;cursor:pointer" onclick="logout()" title="Sair">
+          <div style="width:22px;height:22px;background:var(--gold);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#000" id="user-avatar">?</div>
+          <span style="font-size:12px;color:var(--t2)" id="user-name">—</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Content -->
+    <div class="content">
+
+      <!-- ──────────── DASHBOARD ──────────── -->
+      <div id="panel-dashboard" class="panel active">
+
+        <!-- Metric strip -->
+        <div class="grid g4" style="margin-bottom:10px">
+          <div class="metric"><label>P&L Hoje</label><div class="val green" id="d-pnl">$0.00</div><div class="sub" id="d-trades-sub">0 trades</div></div>
+          <div class="metric"><label>Win Rate</label><div class="val gold" id="d-winrate">—</div><div class="sub" id="d-wl">0W / 0L</div></div>
+          <div class="metric"><label>Saldo Simulado</label><div class="val" id="d-bal">$500.00</div><div class="sub">Capital base</div></div>
+          <div class="metric"><label>Fear & Greed</label><div class="val" id="d-fng-val">—</div><div class="sub" id="d-fng-label">Carregando...</div></div>
+        </div>
+
+        <!-- Main: Big chart + sidebar -->
+        <div style="display:grid;grid-template-columns:1fr 300px;gap:10px;margin-bottom:10px">
+
+          <!-- Chart column -->
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <!-- Chart header -->
+            <div class="card" style="padding:10px 12px">
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                <select id="dash-chart-pair" onchange="switchChartPair(this.value)"
+                  style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:5px 10px;font-family:var(--mono);font-size:12px;color:var(--t1);outline:none;font-weight:600;min-width:120px">
+                </select>
+                <select id="dash-chart-tf" onchange="switchChartPair()"
+                  style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:5px 8px;font-family:var(--mono);font-size:11px;color:var(--t1);outline:none">
+                  <option value="1">1m</option><option value="3">3m</option><option value="5">5m</option>
+                  <option value="15" selected>15m</option><option value="30">30m</option>
+                  <option value="60">1h</option><option value="240">4h</option><option value="D">1d</option>
+                </select>
+                <div id="chart-price-badge" style="font-family:var(--mono);font-size:18px;font-weight:600;color:var(--green)">—</div>
+                <div id="chart-change-badge" style="font-family:var(--mono);font-size:12px;padding:3px 8px;border-radius:4px;background:var(--greendim);color:var(--green)">—</div>
+                <button class="btn btn-outline" style="margin-left:auto;font-size:10px;padding:4px 10px" onclick="toggleOrderPanel()">+ Nova Ordem</button>
+                <button class="btn btn-outline" style="font-size:10px;padding:4px 10px" onclick="toggleBotMonitor()" id="monitor-btn">👁 Monitor Bot</button>
+              </div>
+            </div>
+
+            <!-- TradingView Chart — LARGE -->
+            <div style="background:var(--bg1);border:1px solid var(--border);border-radius:var(--r2);overflow:hidden;position:relative">
+              <div id="tradingview-widget" style="height:420px"></div>
+              <div id="tv-loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:var(--bg0);flex-direction:column;gap:8px;pointer-events:none">
+                <div style="width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--gold);border-radius:50%;animation:spin 0.8s linear infinite"></div>
+                <div style="font-size:12px;color:var(--t3);font-family:var(--mono)">Carregando gráfico...</div>
+              </div>
+            </div>
+
+            <!-- Order Panel (hidden by default) -->
+            <div id="order-panel" style="display:none">
+              <div class="card">
+                <div class="card-title">Abrir Ordem Manual</div>
+                <div class="grid g2" style="margin-bottom:10px">
+                  <div class="field"><label>Par</label><div id="op-pair" style="font-family:var(--mono);font-size:14px;font-weight:600;color:var(--gold);padding:8px 0">BTC/USDT</div></div>
+                  <div class="field"><label>Preço Atual</label><div id="op-current-price" style="font-family:var(--mono);font-size:14px;padding:8px 0;color:var(--green)">—</div></div>
+                </div>
+                <div class="grid g2" style="margin-bottom:10px">
+                  <div class="field"><label>Preço de Entrada</label><input type="number" id="op-entry" placeholder="Ex: 71000"></div>
+                  <div class="field"><label>Tamanho (USDT)</label><input type="number" id="op-size" value="100"></div>
+                </div>
+                <div class="grid g2" style="margin-bottom:10px">
+                  <div class="field"><label>Stop Loss (%)</label><input type="number" id="op-sl" value="2" step="0.1"></div>
+                  <div class="field"><label>Take Profit (%)</label><input type="number" id="op-tp" value="4" step="0.1"></div>
+                </div>
+                <div id="op-preview" class="result-box" style="margin-bottom:10px">
+                  <div class="result-row"><span class="rk">SL em</span><span class="rv red" id="op-sl-price">—</span></div>
+                  <div class="result-row"><span class="rk">TP em</span><span class="rv green" id="op-tp-price">—</span></div>
+                  <div class="result-row"><span class="rk">Perda máx.</span><span class="rv red" id="op-max-loss">—</span></div>
+                  <div class="result-row"><span class="rk">Ganho alvo</span><span class="rv green" id="op-max-gain">—</span></div>
+                </div>
+                <div style="display:flex;gap:8px">
+                  <button class="btn btn-green btn-full" onclick="openManualOrder('BUY')" id="op-long-btn">🟢 Long</button>
+                  <button class="btn btn-red btn-full" onclick="openManualOrder('SELL')" id="op-short-btn">🔴 Short</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Bot Monitor (hidden by default) -->
+            <div id="bot-monitor-panel" style="display:none">
+              <div class="card" style="padding:0">
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border)">
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <div class="status-dot" id="bm-dot" style="width:8px;height:8px"></div>
+                    <span style="font-size:12px;font-weight:500" id="bm-status">Bot parado</span>
+                  </div>
+                  <div style="display:flex;gap:6px">
+                    <button class="btn btn-green" style="font-size:10px;padding:4px 12px" onclick="botStart()">▶ Start</button>
+                    <button class="btn btn-red"   style="font-size:10px;padding:4px 12px" onclick="botStop()">■ Stop</button>
+                    <button class="btn btn-outline" style="font-size:10px;padding:4px 10px" onclick="loadBotLogs();loadBotStatus()">↻</button>
+                  </div>
+                </div>
+                <div id="bm-logs" style="height:200px;overflow-y:auto;padding:10px;background:var(--bg0);font-family:var(--mono);font-size:10px;line-height:1.7">
+                  <span style="color:var(--t3)">Clique em ↻ para carregar os logs...</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Sidebar: Gainers/Losers/Promising -->
+          <div style="display:flex;flex-direction:column;gap:8px;min-height:0">
+            <div class="card" style="flex:1;min-height:0;overflow:hidden">
+              <div class="card-title" style="color:var(--green);margin-bottom:6px">🚀 Maiores Altas</div>
+              <div id="d-gainers" style="overflow-y:auto;max-height:200px"></div>
+              <div class="divider"></div>
+              <div class="card-title" style="color:var(--red);margin-bottom:6px">📉 Maiores Quedas</div>
+              <div id="d-losers" style="overflow-y:auto;max-height:200px"></div>
+              <div class="divider"></div>
+              <div class="card-title" style="color:var(--gold);margin-bottom:3px">⭐ Promissoras</div>
+              <div style="font-size:9px;color:var(--t3);margin-bottom:6px">volume alto + variação positiva moderada</div>
+              <div id="d-promising" style="overflow-y:auto;max-height:180px"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bottom: Rules + Recent Trades -->
+        <div class="grid g2">
+          <div class="card">
+            <div class="card-title">Regras do profissional</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+              <div class="card-sm"><span style="color:var(--gold);font-family:var(--mono);font-size:10px">REGRA 1 </span><span style="font-size:11px;color:var(--t2)">Nunca arrisque mais de 2% do capital por trade</span></div>
+              <div class="card-sm"><span style="color:var(--gold);font-family:var(--mono);font-size:10px">REGRA 2 </span><span style="font-size:11px;color:var(--t2)">Defina o Stop Loss antes de entrar na posição</span></div>
+              <div class="card-sm"><span style="color:var(--gold);font-family:var(--mono);font-size:10px">REGRA 3 </span><span style="font-size:11px;color:var(--t2)">Risco/Retorno mínimo de 1:2 em toda operação</span></div>
+              <div class="card-sm"><span style="color:var(--gold);font-family:var(--mono);font-size:10px">REGRA 4 </span><span style="font-size:11px;color:var(--t2)">Stop de 10% no dia — pare e volte amanhã</span></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">Últimos trades</div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Par</th><th>Dir.</th><th>Entrada</th><th>Saída</th><th>Alav.</th><th>PnL</th><th>%</th><th>Resultado</th></tr></thead>
+                <tbody id="d-recent-trades"><tr><td colspan="8" style="color:var(--t3);text-align:center;padding:20px">Nenhum trade registrado</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- ──────────── MERCADOS ──────────── -->
+      <div id="panel-markets" class="panel">
+
+        <!-- Filters -->
+        <div class="card" style="padding:10px 14px;margin-bottom:10px">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <input id="mkt-search" placeholder="Buscar moeda..." oninput="filterMarkets()" onkeyup="filterMarkets()" onpaste="setTimeout(filterMarkets,10)"
+              style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:7px 12px;font-family:var(--mono);font-size:12px;color:var(--t1);outline:none;width:180px">
+            <select id="mkt-sort" onchange="filterMarkets()"
+              style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:7px 10px;font-family:var(--mono);font-size:11px;color:var(--t1);outline:none">
+              <option value="vol_desc">Volume ↓</option>
+              <option value="chg_desc">Maior Alta</option>
+              <option value="chg_asc">Maior Queda</option>
+              <option value="price_desc">Preço ↓</option>
+              <option value="name_asc">Nome A-Z</option>
+            </select>
+            <div id="mkt-filter-btns" style="display:flex;gap:4px">
+              <button class="btn btn-outline mkt-filter-btn active-filter" data-filter="all" onclick="setMarketFilter('all',this)" style="font-size:10px;padding:5px 10px">Todas</button>
+              <button class="btn btn-outline mkt-filter-btn" data-filter="up" onclick="setMarketFilter('up',this)" style="font-size:10px;padding:5px 10px;color:var(--green)">Alta ▲</button>
+              <button class="btn btn-outline mkt-filter-btn" data-filter="down" onclick="setMarketFilter('down',this)" style="font-size:10px;padding:5px 10px;color:var(--red)">Queda ▼</button>
+            </div>
+            <span id="mkt-count" style="font-size:10px;color:var(--t3);font-family:var(--mono);margin-left:auto"></span>
+          </div>
+        </div>
+
+        <!-- Top 4 Gainers Cards -->
+        <div class="grid g4" style="margin-bottom:10px" id="market-grid"></div>
+
+        <!-- Full table -->
+        <div class="card">
+          <div class="card-title">Tabela de mercado — <span id="mkt-table-count">0</span> pares</div>
+          <div class="table-wrap" style="max-height:calc(100vh - 280px);overflow-y:auto">
+            <table>
+              <thead style="position:sticky;top:0;background:var(--bg1);z-index:1">
+                <tr>
+                  <th style="cursor:pointer" onclick="sortMarket('rank')">#</th>
+                  <th style="cursor:pointer" onclick="sortMarket('name')">Par</th>
+                  <th style="cursor:pointer" onclick="sortMarket('price')">Preço</th>
+                  <th style="cursor:pointer" onclick="sortMarket('change')">24h %</th>
+                  <th>24h High</th><th>24h Low</th>
+                  <th style="cursor:pointer" onclick="sortMarket('vol')">Volume</th>
+                  <th>Tendência</th>
+                  <th>Ação</th>
+                </tr>
+              </thead>
+              <tbody id="market-table"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <!-- ──────────── CALCULADORA ──────────── -->
+      <div id="panel-calculator" class="panel">
+        <div class="grid g2">
+          <div class="card">
+            <div class="card-title">Calculadora de Alavancagem e Liquidação</div>
+            <div class="form-row g2">
+              <div class="field"><label>Capital (USDT)</label><input type="number" id="cl-cap" value="500" oninput="calcLev()"></div>
+              <div class="field"><label>Preço de Entrada</label><input type="number" id="cl-entry" value="83000" oninput="calcLev()"></div>
+            </div>
+            <div class="slider-wrap">
+              <label>Alavancagem <span id="cl-lev-disp">10x</span></label>
+              <input type="range" min="1" max="125" value="10" id="cl-lev" oninput="calcLev();this.previousElementSibling.querySelector('span').textContent=this.value+'x'">
+            </div>
+            <div class="form-row g2">
+              <div class="field"><label>Stop Loss %</label><input type="number" id="cl-sl" value="2" step="0.1" oninput="calcLev()"></div>
+              <div class="field"><label>Take Profit %</label><input type="number" id="cl-tp" value="4" step="0.1" oninput="calcLev()"></div>
+            </div>
+            <div class="field" style="margin-bottom:10px">
+              <label>Direção</label>
+              <select id="cl-dir" onchange="calcLev()"><option value="long">Long (Compra)</option><option value="short">Short (Venda)</option></select>
+            </div>
+            <div class="result-box">
+              <div class="result-row"><span class="rk">Tamanho da posição</span><span class="rv" id="cl-pos">—</span></div>
+              <div class="result-row"><span class="rk">Preço de Liquidação</span><span class="rv red" id="cl-liq">—</span></div>
+              <div class="result-row"><span class="rk">Distância até liq.</span><span class="rv" id="cl-liq-dist">—</span></div>
+              <div class="result-row"><span class="rk">Preço Stop Loss</span><span class="rv" id="cl-slp">—</span></div>
+              <div class="result-row"><span class="rk">Preço Take Profit</span><span class="rv" id="cl-tpp">—</span></div>
+              <div class="result-row"><span class="rk">Perda máxima (SL)</span><span class="rv red" id="cl-loss">—</span></div>
+              <div class="result-row"><span class="rk">Ganho alvo (TP)</span><span class="rv green" id="cl-gain">—</span></div>
+              <div class="result-row"><span class="rk">Risco/Retorno</span><span class="rv gold" id="cl-rr">—</span></div>
+              <div class="result-row"><span class="rk">Funding 8h estimado</span><span class="rv" id="cl-fund">—</span></div>
+            </div>
+            <div id="cl-alert" class="alert alert-warn" style="margin-top:10px;display:none"><span class="alert-icon">⚠</span><span id="cl-alert-msg"></span></div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Tabela de Alavancagem — Risco Visual</div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Alavancagem</th><th>Posição</th><th>Liq. Long</th><th>Liq. Short</th><th>Nível</th></tr></thead>
+                <tbody id="lev-table"></tbody>
+              </table>
+            </div>
+            <div class="divider"></div>
+            <div class="card-title">Custo de Funding (Binance Futures)</div>
+            <div class="result-box">
+              <div class="result-row"><span class="rk">Taxa funding típica</span><span class="rv">0.01% / 8h</span></div>
+              <div class="result-row"><span class="rk">Custo diário (3 fundings)</span><span class="rv red" id="fund-day">—</span></div>
+              <div class="result-row"><span class="rk">Custo semanal</span><span class="rv red" id="fund-week">—</span></div>
+              <div class="result-row"><span class="rk">Custo mensal</span><span class="rv red" id="fund-month">—</span></div>
+              <div class="result-row"><span class="rk">% do capital/mês</span><span class="rv" id="fund-pct">—</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ──────────── RISK ──────────── -->
+      <div id="panel-risk" class="panel">
+        <div class="grid g2">
+          <div class="card">
+            <div class="card-title">Position Sizing — Tamanho Ideal de Posição</div>
+            <div class="form-row g2">
+              <div class="field"><label>Capital Total</label><input type="number" id="rs-cap" value="500" oninput="calcRisk()"></div>
+              <div class="field"><label>Alavancagem</label><select id="rs-lev" onchange="calcRisk()"><option>1</option><option>2</option><option>3</option><option value="5" selected>5</option><option>10</option><option>20</option><option>50</option></select></div>
+            </div>
+            <div class="slider-wrap">
+              <label>Risco por operação <span id="rs-riskdisp" style="color:var(--gold)">2%</span></label>
+              <input type="range" min="0.5" max="10" step="0.5" value="2" id="rs-risk" oninput="calcRisk();document.getElementById('rs-riskdisp').textContent=this.value+'%'">
+            </div>
+            <div class="form-row g2">
+              <div class="field"><label>Preço de Entrada</label><input type="number" id="rs-entry" value="83000" oninput="calcRisk()"></div>
+              <div class="field"><label>Preço Stop Loss</label><input type="number" id="rs-stop" value="81340" oninput="calcRisk()"></div>
+            </div>
+            <div class="result-box">
+              <div class="result-row"><span class="rk">Valor em risco ($)</span><span class="rv red" id="rs-rval">—</span></div>
+              <div class="result-row"><span class="rk">Tamanho ideal da posição</span><span class="rv" id="rs-pos">—</span></div>
+              <div class="result-row"><span class="rk">Margem necessária</span><span class="rv" id="rs-margin">—</span></div>
+              <div class="result-row"><span class="rk">% do capital em margem</span><span class="rv" id="rs-mpct">—</span></div>
+              <div class="result-row"><span class="rk">Quantidade (BTC aprox.)</span><span class="rv" id="rs-qty">—</span></div>
+            </div>
+            <div id="rs-verdict" class="alert" style="margin-top:10px"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Medidor de Risco</div>
+            <div class="risk-meter" id="risk-meter">
+              <div class="risk-item"><label>Risco por operação <span id="rm-r">2%</span></label><div class="bar-wrap"><div class="bar-fill" id="rm-b1" style="width:20%"></div></div></div>
+              <div class="risk-item"><label>Alavancagem <span id="rm-l">5x</span></label><div class="bar-wrap"><div class="bar-fill" id="rm-b2" style="width:4%"></div></div></div>
+              <div class="risk-item"><label>Margem utilizada <span id="rm-m">—</span></label><div class="bar-wrap"><div class="bar-fill" id="rm-b3" style="width:0%"></div></div></div>
+            </div>
+            <div class="divider"></div>
+            <div class="card-title">Simulação de Sequência de Perdas</div>
+            <div class="result-box">
+              <div class="result-row"><span class="rk">Capital inicial</span><span class="rv" id="kl-cap">$500</span></div>
+              <div class="result-row"><span class="rk">Após 3 perdas seguidas</span><span class="rv red" id="kl-3">—</span></div>
+              <div class="result-row"><span class="rk">Após 5 perdas seguidas</span><span class="rv red" id="kl-5">—</span></div>
+              <div class="result-row"><span class="rk">Após 10 perdas seguidas</span><span class="rv red" id="kl-10">—</span></div>
+              <div class="result-row"><span class="rk">% preservado após 10L</span><span class="rv" id="kl-pct">—</span></div>
+            </div>
+            <div class="divider"></div>
+            <div class="card-title">Drawdown máximo recomendado</div>
+            <div class="grid g3">
+              <div class="card-sm" style="text-align:center"><div style="font-family:var(--mono);font-size:18px;font-weight:600;color:var(--green)">2%</div><div style="font-size:10px;color:var(--t3)">por trade</div></div>
+              <div class="card-sm" style="text-align:center"><div style="font-family:var(--mono);font-size:18px;font-weight:600;color:var(--gold)">6%</div><div style="font-size:10px;color:var(--t3)">por dia</div></div>
+              <div class="card-sm" style="text-align:center"><div style="font-family:var(--mono);font-size:18px;font-weight:600;color:var(--red)">15%</div><div style="font-size:10px;color:var(--t3)">por mês</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ──────────── GRID BOT / ESTRATÉGIAS ──────────── -->
+      <div id="panel-gridbot" class="panel">
+
+        <!-- Strategy Selector -->
+        <div class="card" style="margin-bottom:12px">
+          <div class="card-title">Selecionar Estratégia</div>
+          <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:8px" id="strategy-grid">
+            <div class="strat-card active" data-strat="pattern" onclick="selectStrat(this)">
+              <div style="font-size:18px;margin-bottom:4px">🧠</div>
+              <div style="font-size:11px;font-weight:600">Pattern AI</div>
+              <div style="font-size:9px;color:var(--t3);margin-top:2px">Todos os padrões</div>
+            </div>
+            <div class="strat-card" data-strat="grid" onclick="selectStrat(this)">
+              <div style="font-size:18px;margin-bottom:4px">📊</div>
+              <div style="font-size:11px;font-weight:600">Grid Bot</div>
+              <div style="font-size:9px;color:var(--t3);margin-top:2px">Mercado lateral</div>
+            </div>
+            <div class="strat-card" data-strat="dca" onclick="selectStrat(this)">
+              <div style="font-size:18px;margin-bottom:4px">💰</div>
+              <div style="font-size:11px;font-weight:600">DCA</div>
+              <div style="font-size:9px;color:var(--t3);margin-top:2px">Compra nas quedas</div>
+            </div>
+            <div class="strat-card" data-strat="scalping" onclick="selectStrat(this)">
+              <div style="font-size:18px;margin-bottom:4px">⚡</div>
+              <div style="font-size:11px;font-weight:600">Scalping</div>
+              <div style="font-size:9px;color:var(--t3);margin-top:2px">RSI tick a tick</div>
+            </div>
+            <div class="strat-card" data-strat="trend" onclick="selectStrat(this)">
+              <div style="font-size:18px;margin-bottom:4px">📈</div>
+              <div style="font-size:11px;font-weight:600">Trend</div>
+              <div style="font-size:9px;color:var(--t3);margin-top:2px">EMA9 × EMA21</div>
+            </div>
+            <div class="strat-card" data-strat="breakout" onclick="selectStrat(this)">
+              <div style="font-size:18px;margin-bottom:4px">🚀</div>
+              <div style="font-size:11px;font-weight:600">Breakout</div>
+              <div style="font-size:9px;color:var(--t3);margin-top:2px">S/R + Volume</div>
+            </div>
+            <div class="strat-card" data-strat="macd" onclick="selectStrat(this)">
+              <div style="font-size:18px;margin-bottom:4px">📉</div>
+              <div style="font-size:11px;font-weight:600">MACD</div>
+              <div style="font-size:9px;color:var(--t3);margin-top:2px">Crossover histograma</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid g2">
+          <!-- LEFT: Config -->
+          <div class="card">
+            <!-- Common settings -->
+            <div class="card-title">Configuração Geral</div>
+            <div class="form-row g2">
+              <div class="field"><label>Par</label><select id="gb-pair" onchange="calcGrid()"><option>BTC/USDT</option><option>ETH/USDT</option><option>BNB/USDT</option><option>SOL/USDT</option><option>XRP/USDT</option><option>DOGE/USDT</option><option>AVAX/USDT</option></select></div>
+              <div class="field"><label>Capital (USDT)</label><input type="number" id="gb-cap" value="300" oninput="calcGrid()"></div>
+            </div>
+            <div class="form-row g2">
+              <div class="field"><label>Timeframe</label><select id="gb-tf"><option value="1m">1m</option><option value="3m">3m</option><option value="5m">5m</option value="15m" selected><option value="15m" selected>15m</option><option value="30m">30m</option><option value="1h">1h</option><option value="4h">4h</option><option value="1d">1d</option></select></div>
+              <div class="field"><label>Stop Global (USDT)</label><input type="number" id="gb-stopglobal" value="0" placeholder="0 = off"></div>
+            </div>
+
+            <div class="divider"></div>
+
+            <!-- Pattern params -->
+            <div id="sp-pattern">
+              <div class="card-title">Parâmetros — Pattern AI</div>
+              <div class="form-row g2">
+                <div class="field"><label>Confiança mínima</label><select id="pat-conf"><option value="0.6">60%</option><option value="0.65" selected>65%</option><option value="0.70">70%</option><option value="0.75">75%</option><option value="0.80">80%</option></select></div>
+                <div class="field"><label>TP / Risco (R:R)</label><input type="number" id="pat-rr" value="2.0" step="0.5" min="1"></div>
+              </div>
+              <div class="form-row g2">
+                <div class="field"><label>SL × ATR</label><input type="number" id="pat-sl-atr" value="1.5" step="0.5" min="0.5"></div>
+                <div class="field"><label>Exigir volume</label><select id="pat-vol"><option value="true" selected>Sim</option><option value="false">Não</option></select></div>
+              </div>
+              <div class="alert alert-success" style="margin-top:0">
+                <span>🧠</span>
+                <div style="font-size:10px">
+                  <strong>Padrões detectados:</strong> Hammer, Shooting Star, Doji, Marubozu, Engolfamento, Harami, Piercing Line, Morning/Evening Star, 3 Soldados/Corvos, Three Inside, Tweezer, Double Top/Bottom, Head & Shoulders, Triângulo, Flag, Pennant, Wedge.
+                </div>
+              </div>
+            </div>
+
+            <!-- Grid params -->
+            <div id="sp-grid">
+              <div class="card-title">Parâmetros — Grid Bot</div>
+              <div class="form-row g2">
+                <div class="field"><label>Preço Mínimo</label><input type="number" id="gb-min" value="80000" oninput="calcGrid()"></div>
+                <div class="field"><label>Preço Máximo</label><input type="number" id="gb-max" value="90000" oninput="calcGrid()"></div>
+              </div>
+              <div class="slider-wrap">
+                <label>Grades <span id="gb-n-disp">10</span></label>
+                <input type="range" min="3" max="100" value="10" id="gb-n" oninput="calcGrid();document.getElementById('gb-n-disp').textContent=this.value">
+              </div>
+              <div class="field" style="margin-bottom:10px"><label>Stop Loss (%)</label><input type="number" id="gb-sl" value="8" oninput="calcGrid()"></div>
+            </div>
+
+            <!-- DCA params -->
+            <div id="sp-dca" style="display:none">
+              <div class="card-title">Parâmetros — DCA</div>
+              <div class="form-row g2">
+                <div class="field"><label>Queda p/ nova entrada (%)</label><input type="number" id="dca-drop" value="2" step="0.5"></div>
+                <div class="field"><label>Máx. ordens DCA</label><input type="number" id="dca-max" value="5" min="2" max="20"></div>
+              </div>
+              <div class="alert alert-info" style="margin-top:0">
+                <span>ℹ</span>
+                <div style="font-size:10px">Compra a cada <strong id="dca-drop-disp">2</strong>% de queda. Vende quando atingir o mesmo % de ganho acima do preço médio.</div>
+              </div>
+            </div>
+
+            <!-- Scalping params -->
+            <div id="sp-scalping" style="display:none">
+              <div class="card-title">Parâmetros — Scalping RSI</div>
+              <div class="form-row g2">
+                <div class="field"><label>RSI Compra (abaixo de)</label><input type="number" id="scalp-rsi-buy" value="30" min="10" max="45"></div>
+                <div class="field"><label>RSI Venda (acima de)</label><input type="number" id="scalp-rsi-sell" value="70" min="55" max="90"></div>
+              </div>
+              <div class="form-row g2">
+                <div class="field"><label>Take Profit (%)</label><input type="number" id="scalp-tp" value="1.5" step="0.1"></div>
+                <div class="field"><label>Stop Loss (%)</label><input type="number" id="scalp-sl" value="1.0" step="0.1"></div>
+              </div>
+              <div class="alert alert-warn" style="margin-top:0">
+                <span>⚡</span>
+                <div style="font-size:10px">Opera tick a tick (alta frequência). Ideal para períodos de alta volatilidade.</div>
+              </div>
+            </div>
+
+            <!-- Trend params -->
+            <div id="sp-trend" style="display:none">
+              <div class="card-title">Parâmetros — Trend Following</div>
+              <div class="form-row g2">
+                <div class="field"><label>EMA Rápida</label><input type="number" id="trend-fast" value="9" min="3" max="50"></div>
+                <div class="field"><label>EMA Lenta</label><input type="number" id="trend-slow" value="21" min="10" max="200"></div>
+              </div>
+              <div class="form-row g2">
+                <div class="field"><label>Stop Loss (%)</label><input type="number" id="trend-sl" value="2" step="0.1"></div>
+                <div class="field"><label>TP Multiplicador</label><input type="number" id="trend-tp" value="2" step="0.1" title="TP = SL × mult"></div>
+              </div>
+              <div class="alert alert-info" style="margin-top:0">
+                <span>ℹ</span>
+                <div style="font-size:10px">Opera no fechamento de cada vela. Long quando EMA rápida cruza acima da lenta. Short no oposto.</div>
+              </div>
+            </div>
+
+            <!-- Breakout params -->
+            <div id="sp-breakout" style="display:none">
+              <div class="card-title">Parâmetros — Breakout</div>
+              <div class="form-row g2">
+                <div class="field"><label>Lookback (velas)</label><input type="number" id="break-lookback" value="20" min="5" max="100"></div>
+                <div class="field"><label>Confirmação (%)</label><input type="number" id="break-confirm" value="0.3" step="0.1" title="% acima/abaixo do nível de S/R para confirmar rompimento"></div>
+              </div>
+              <div class="field" style="margin-bottom:10px"><label>Stop Loss (%)</label><input type="number" id="break-sl" value="1.5" step="0.1"></div>
+              <div class="alert alert-info" style="margin-top:0">
+                <span>ℹ</span>
+                <div style="font-size:10px">Calcula suporte e resistência das últimas N velas. Entra quando o preço rompe com confirmação de volume.</div>
+              </div>
+            </div>
+
+            <!-- MACD params -->
+            <div id="sp-macd" style="display:none">
+              <div class="card-title">Parâmetros — MACD</div>
+              <div class="form-row g3">
+                <div class="field"><label>Rápida</label><input type="number" id="macd-fast" value="12" min="3" max="50"></div>
+                <div class="field"><label>Lenta</label><input type="number" id="macd-slow" value="26" min="10" max="200"></div>
+                <div class="field"><label>Sinal</label><input type="number" id="macd-sig" value="9" min="3" max="30"></div>
+              </div>
+              <div class="field" style="margin-bottom:10px"><label>Stop Loss (%)</label><input type="number" id="macd-sl" value="1.5" step="0.1"></div>
+              <div class="alert alert-info" style="margin-top:0">
+                <span>ℹ</span>
+                <div style="font-size:10px">Entra Long quando histograma cruza de negativo para positivo. Short no oposto. Opera no fechamento de cada vela.</div>
+              </div>
+            </div>
+
+            <div style="margin-top:14px;display:flex;gap:8px">
+              <button class="btn btn-outline" onclick="calcGrid()">Calcular</button>
+              <button class="btn btn-gold btn-full" onclick="genBotCode()">Gerar .env do Bot</button>
+            </div>
+          </div>
+
+          <!-- RIGHT: Results / Viz -->
+          <div class="card">
+            <div class="card-title" id="strat-result-title">Resultado — Grid Bot</div>
+            <div id="gb-result-pattern" style="display:none">
+              <div class="card-title">Padrões de Velas Japonesas (1-3 velas)</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px">
+                <div class="card-sm"><div style="font-size:9px;color:var(--t3);margin-bottom:3px">REVERSÃO DE ALTA</div><div style="font-size:10px;color:var(--green);line-height:1.8">Hammer · Inverted Hammer · Dragonfly Doji · Engolfamento Alt. · Morning Star · 3 White Soldiers · Piercing Line · Three Inside Up · Tweezer Bottom</div></div>
+                <div class="card-sm"><div style="font-size:9px;color:var(--t3);margin-bottom:3px">REVERSÃO DE BAIXA</div><div style="font-size:10px;color:var(--red);line-height:1.8">Shooting Star · Hanging Man · Gravestone Doji · Engolfamento Bai. · Evening Star · 3 Black Crows · Dark Cloud · Three Inside Down · Tweezer Top</div></div>
+                <div class="card-sm"><div style="font-size:9px;color:var(--t3);margin-bottom:3px">NEUTROS</div><div style="font-size:10px;color:var(--t2);line-height:1.8">Doji · Spinning Top · Marubozu · Harami</div></div>
+                <div class="card-sm"><div style="font-size:9px;color:var(--t3);margin-bottom:3px">PADRÕES DE GRÁFICO</div><div style="font-size:10px;color:var(--gold);line-height:1.8">Double Top/Bottom · Head & Shoulders · Triângulo (3 tipos) · Bull/Bear Flag · Rising/Falling Wedge</div></div>
+              </div>
+              <div class="divider"></div>
+              <div class="card-title">Como a Predição funciona</div>
+              <div style="display:flex;flex-direction:column;gap:5px">
+                <div class="card-sm"><span style="color:var(--gold);font-family:var(--mono);font-size:10px">PASSO 1 </span><span style="font-size:11px;color:var(--t2)">Detecta todos os padrões na vela atual e nas últimas 30 velas</span></div>
+                <div class="card-sm"><span style="color:var(--gold);font-family:var(--mono);font-size:10px">PASSO 2 </span><span style="font-size:11px;color:var(--t2)">Pondera cada sinal pela confiança e verifica volume + momentum</span></div>
+                <div class="card-sm"><span style="color:var(--gold);font-family:var(--mono);font-size:10px">PASSO 3 </span><span style="font-size:11px;color:var(--t2)">Se confiança ≥ threshold e RSI não está em extremo → entra</span></div>
+                <div class="card-sm"><span style="color:var(--gold);font-family:var(--mono);font-size:10px">PASSO 4 </span><span style="font-size:11px;color:var(--t2)">SL = ATR × mult | TP = SL × R:R | Fecha no TP ou SL</span></div>
+              </div>
+            </div>
+
+            <div id="gb-result-grid">
+              <div class="result-box">
+                <div class="result-row"><span class="rk">Intervalo por grade</span><span class="rv" id="gb-interval">—</span></div>
+                <div class="result-row"><span class="rk">Capital por grade</span><span class="rv" id="gb-cpg">—</span></div>
+                <div class="result-row"><span class="rk">Lucro estimado/grade</span><span class="rv green" id="gb-profit">—</span></div>
+                <div class="result-row"><span class="rk">Total de ordens</span><span class="rv" id="gb-orders">—</span></div>
+                <div class="result-row"><span class="rk">Lucro diário estimado</span><span class="rv green" id="gb-daily">—</span></div>
+                <div class="result-row"><span class="rk">ROI mensal estimado</span><span class="rv gold" id="gb-roi">—</span></div>
+                <div class="result-row"><span class="rk">Stop Loss em</span><span class="rv red" id="gb-stopprice">—</span></div>
+              </div>
+              <div class="divider"></div>
+              <div class="card-title">Visualização das Grades</div>
+              <div class="grid-viz-wrap" id="grid-viz" style="height:230px"></div>
+            </div>
+
+            <div id="gb-result-dca" style="display:none">
+              <div class="result-box">
+                <div class="result-row"><span class="rk">Capital por ordem</span><span class="rv" id="dca-cporder">—</span></div>
+                <div class="result-row"><span class="rk">Investimento total</span><span class="rv" id="dca-total">—</span></div>
+                <div class="result-row"><span class="rk">Alvo de saída</span><span class="rv green" id="dca-target">—</span></div>
+                <div class="result-row"><span class="rk">Preço médio (após 3 ordens)</span><span class="rv" id="dca-avg">—</span></div>
+              </div>
+              <div class="divider"></div>
+              <div class="card-title">Como o DCA funciona</div>
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <div class="card-sm"><span style="color:var(--gold);font-family:var(--mono);font-size:10px">PASSO 1 </span><span style="font-size:11px;color:var(--t2)">Primeira compra ao iniciar o bot</span></div>
+                <div class="card-sm"><span style="color:var(--gold);font-family:var(--mono);font-size:10px">PASSO 2 </span><span style="font-size:11px;color:var(--t2)">Nova compra a cada <span id="dca-drop-disp2">2</span>% de queda</span></div>
+                <div class="card-sm"><span style="color:var(--gold);font-family:var(--mono);font-size:10px">PASSO 3 </span><span style="font-size:11px;color:var(--t2)">Vende tudo quando sobe <span id="dca-drop-disp3">2</span>% acima do preço médio</span></div>
+              </div>
+            </div>
+
+            <div id="gb-result-other" style="display:none">
+              <div id="strat-desc" style="font-size:12px;color:var(--t2);line-height:1.7;margin-bottom:14px"></div>
+              <div class="grid g2">
+                <div class="metric"><label>Tipo de entrada</label><div class="val" style="font-size:14px" id="strat-entry-type">—</div></div>
+                <div class="metric"><label>Opera no</label><div class="val" style="font-size:14px" id="strat-operates-on">—</div></div>
+                <div class="metric"><label>Ideal para</label><div class="val" style="font-size:14px" id="strat-ideal">—</div></div>
+                <div class="metric"><label>Risco</label><div class="val" style="font-size:14px" id="strat-risk-level">—</div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- .env output -->
+        <div id="gb-code-wrap" style="display:none;margin-top:10px">
+          <div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+              <div class="card-title" style="margin:0">Configuração gerada — cole no .env do servidor</div>
+              <button class="btn btn-outline" onclick="copyCode('gb-code')">Copiar</button>
+            </div>
+            <div class="code-block"><pre id="gb-code"></pre></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ──────────── CHECKLIST ──────────── -->
+      <div id="panel-checklist" class="panel">
+        <div class="grid g2">
+          <div class="card">
+            <div style="display:flex;align-items:center;gap:16px;margin-bottom:16px">
+              <div class="ring-wrap">
+                <svg width="70" height="70"><circle cx="35" cy="35" r="28" fill="none" stroke="var(--bg3)" stroke-width="5"/><circle id="ring-c" cx="35" cy="35" r="28" fill="none" stroke="var(--gold)" stroke-width="5" stroke-dasharray="175.9" stroke-dashoffset="175.9" style="transition:all 0.4s"/></svg>
+                <div class="ring-center" id="ring-pct">0%</div>
+              </div>
+              <div>
+                <div style="font-size:16px;font-weight:600" id="ring-label">Checklist Diário</div>
+                <div style="font-size:12px;color:var(--t2);margin-top:3px" id="ring-sub">Complete antes de operar</div>
+              </div>
+            </div>
+            <div id="checklist-items">
+              <div class="check-item"><input type="checkbox" class="chk" onchange="updateRing()"><div><div class="check-text">Analisei o gráfico de 4H e 1H</div><div class="check-sub">Identifique tendência, suporte e resistência</div></div></div>
+              <div class="check-item"><input type="checkbox" class="chk" onchange="updateRing()"><div><div class="check-text">Verifiquei o Fear & Greed Index</div><div class="check-sub">Abaixo de 25 = oportunidade; acima de 80 = cuidado</div></div></div>
+              <div class="check-item"><input type="checkbox" class="chk" onchange="updateRing()"><div><div class="check-text">Calculei o tamanho da posição</div><div class="check-sub">Máximo 2% do capital em risco por trade</div></div></div>
+              <div class="check-item"><input type="checkbox" class="chk" onchange="updateRing()"><div><div class="check-text">Stop Loss definido antes de entrar</div><div class="check-sub">Nunca entre sem SL. Nunca mova SL para baixo</div></div></div>
+              <div class="check-item"><input type="checkbox" class="chk" onchange="updateRing()"><div><div class="check-text">Take Profit com R:R mínimo 1:2</div><div class="check-sub">TP deve ser pelo menos 2x o valor arriscado</div></div></div>
+              <div class="check-item"><input type="checkbox" class="chk" onchange="updateRing()"><div><div class="check-text">Verifiquei notícias e calendário macro</div><div class="check-sub">Fed, CPI, liquidações grandes, news BTC</div></div></div>
+              <div class="check-item"><input type="checkbox" class="chk" onchange="updateRing()"><div><div class="check-text">Não estou operando no emocional</div><div class="check-sub">Raiva, euforia ou cansaço = não operar</div></div></div>
+              <div class="check-item"><input type="checkbox" class="chk" onchange="updateRing()"><div><div class="check-text">Revisei os trades de ontem</div><div class="check-sub">Aprenda com erros antes de repetir</div></div></div>
+              <div class="check-item"><input type="checkbox" class="chk" onchange="updateRing()"><div><div class="check-text">Volume confirma o setup</div><div class="check-sub">Rompimento sem volume é sinal falso</div></div></div>
+            </div>
+            <div style="margin-top:12px">
+              <button class="btn btn-outline btn-full" onclick="resetChecklist()">Resetar checklist</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">Regras do Trader Profissional</div>
+            <div style="display:flex;flex-direction:column;gap:8px">
+              <div class="card-sm"><div style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--gold);margin-bottom:4px">01 — Preservação de capital</div><div style="font-size:11px;color:var(--t2)">Seu principal trabalho é não perder dinheiro. Lucro é consequência de disciplina.</div></div>
+              <div class="card-sm"><div style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--gold);margin-bottom:4px">02 — Consistência acima de tudo</div><div style="font-size:11px;color:var(--t2)">5% ao mês consistente supera 50% um mês e -40% outro. Compounding é sua arma.</div></div>
+              <div class="card-sm"><div style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--gold);margin-bottom:4px">03 — A tendência é sua amiga</div><div style="font-size:11px;color:var(--t2)">Nunca opere contra a tendência primária. "The trend is your friend, until the end."</div></div>
+              <div class="card-sm"><div style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--gold);margin-bottom:4px">04 — Qualidade > Quantidade</div><div style="font-size:11px;color:var(--t2)">2-3 setups perfeitos por semana superam 20 trades mediocres. Espere o setup ideal.</div></div>
+              <div class="card-sm"><div style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--gold);margin-bottom:4px">05 — Nunca recupere perdas no mesmo dia</div><div style="font-size:11px;color:var(--t2)">Revenge trading destrói contas. Aceite a perda, feche o terminal, volte amanhã.</div></div>
+              <div class="card-sm"><div style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--gold);margin-bottom:4px">06 — Alavancagem mata iniciantes</div><div style="font-size:11px;color:var(--t2)">Iniciante: máx 5x. Intermediário: máx 20x. Avançado: máx 50x. Com gestão sempre.</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ──────────── JOURNAL ──────────── -->
+      <div id="panel-journal" class="panel">
+        <div class="grid g2">
+          <div class="card">
+            <div class="card-title">Registrar Operação</div>
+            <div class="form-row g2">
+              <div class="field"><label>Par</label><select id="j-pair"><option>BTC/USDT</option><option>ETH/USDT</option><option>BNB/USDT</option><option>SOL/USDT</option><option>XRP/USDT</option><option>DOGE/USDT</option><option>AVAX/USDT</option></select></div>
+              <div class="field"><label>Direção</label><select id="j-dir"><option value="Long">Long</option><option value="Short">Short</option></select></div>
+            </div>
+            <div class="form-row g2">
+              <div class="field"><label>Entrada (USDT)</label><input type="number" id="j-entry" placeholder="83000"></div>
+              <div class="field"><label>Saída (USDT)</label><input type="number" id="j-exit" placeholder="85000"></div>
+            </div>
+            <div class="form-row g2">
+              <div class="field"><label>Tamanho (USDT)</label><input type="number" id="j-size" placeholder="500"></div>
+              <div class="field"><label>Alavancagem</label><select id="j-lev"><option>1x</option><option>2x</option><option>3x</option><option>5x</option><option>10x</option><option>20x</option><option>50x</option></select></div>
+            </div>
+            <div class="field" style="margin-bottom:10px"><label>Motivo da entrada</label><input type="text" id="j-reason" placeholder="Ex: Rompimento de resistência com volume alto..."></div>
+            <div class="field" style="margin-bottom:10px"><label>Resultado</label><select id="j-result"><option value="win">Win</option><option value="loss">Loss</option><option value="be">Break Even</option></select></div>
+            <button class="btn btn-gold btn-full" onclick="addTrade()">Registrar Trade</button>
+
+            <div class="divider"></div>
+            <div class="card-title">Estatísticas gerais</div>
+            <div class="grid g2">
+              <div class="metric"><label>Total trades</label><div class="val" id="st-total">0</div></div>
+              <div class="metric"><label>Win Rate</label><div class="val gold" id="st-wr">—</div></div>
+              <div class="metric"><label>Total PnL</label><div class="val" id="st-pnl">$0</div></div>
+              <div class="metric"><label>Wins / Losses</label><div class="val" id="st-wl">0 / 0</div></div>
+            </div>
+          </div>
+          <div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+              <div class="card-title" style="margin:0">Histórico de Trades</div>
+              <button class="btn btn-outline" style="font-size:10px;padding:5px 10px" onclick="loadTrades()">Atualizar</button>
+            </div>
+            <div id="journal-list" style="max-height:500px;overflow-y:auto"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ──────────── AI EXPERT ──────────── -->
+      <div id="panel-ai" class="panel" style="height:calc(100vh - var(--top) - 2.5rem)">
+        <div class="card chat-wrap" style="padding:0;height:100%">
+          <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px">
+            <div style="width:32px;height:32px;background:var(--gold);border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:#000;flex-shrink:0">IA</div>
+            <div>
+              <div style="font-size:13px;font-weight:600">CryptoEdge — Especialista IA</div>
+              <div style="font-size:10px;font-family:var(--mono);color:var(--t3)">12+ anos em day trade, futuros e gestão de risco</div>
+            </div>
+            <div class="status-indicator" style="margin-left:auto"><div class="status-dot live"></div><span style="font-size:10px">Online</span></div>
+          </div>
+          <div class="chat-messages" id="ai-msgs">
+            <div class="msg bot">Olá! Sou seu especialista em day trade de criptomoedas. Posso te ajudar com estratégias de alavancagem, gestão de risco, análise de setup, configuração de Grid Bot, futuros Binance e muito mais. O que você quer saber hoje?</div>
+          </div>
+          <div class="chat-suggestions" id="ai-sugs">
+            <button class="sug" onclick="askAI('Como usar alavancagem 10x de forma segura com gestão de risco?')">Alavancagem segura</button>
+            <button class="sug" onclick="askAI('Qual a melhor estratégia de day trade para BTC em mercado lateral?')">Estratégia BTC</button>
+            <button class="sug" onclick="askAI('Como calcular o tamanho ideal de posição para não explodir a conta?')">Position sizing</button>
+            <button class="sug" onclick="askAI('Explique como funciona liquidação em futuros e como evitar ser liquidado')">Evitar liquidação</button>
+            <button class="sug" onclick="askAI('Quais indicadores técnicos são mais eficientes para day trade de cripto?')">Indicadores técnicos</button>
+            <button class="sug" onclick="askAI('Como configurar o Grid Bot para obter melhores resultados?')">Otimizar Grid Bot</button>
+          </div>
+          <div class="chat-input-row">
+            <input class="chat-input" id="ai-input" placeholder="Pergunte sobre estratégias, risco, alavancagem, análise técnica..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){sendAI();event.preventDefault()}">
+            <button class="btn btn-gold" onclick="sendAI()">Enviar</button>
+          </div>
+        </div>
+      </div>
+
+
+      <!-- ──────────── BOT CONTROL ──────────── -->
+      <div id="panel-botcontrol" class="panel">
+        <div class="grid g2">
+
+          <!-- Left: Config form -->
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div class="card">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+                <div class="card-title" style="margin:0">Status do Bot</div>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <div class="status-dot" id="bc-dot" style="width:10px;height:10px"></div>
+                  <span style="font-family:var(--mono);font-size:12px" id="bc-status-text">Verificando...</span>
+                </div>
+              </div>
+              <div class="result-box" style="margin-bottom:10px">
+                <div class="result-row"><span class="rk">Processo</span><span class="rv" id="bc-pid">—</span></div>
+                <div class="result-row"><span class="rk">Reinicializações</span><span class="rv" id="bc-restarts">—</span></div>
+                <div class="result-row"><span class="rk">Config salva em</span><span class="rv" id="bc-env-path">.bot.env</span></div>
+                <div class="result-row"><span class="rk">Última análise</span><span class="rv" id="bc-last-analysis" style="color:var(--t3)">—</span></div>
+              </div>
+              <div style="display:flex;gap:8px">
+                <button class="btn btn-green btn-full" id="bc-btn-start" onclick="botStart()">▶ Iniciar Bot</button>
+                <button class="btn btn-red btn-full" id="bc-btn-stop" onclick="botStop()">■ Parar Bot</button>
+                <button class="btn btn-outline" onclick="loadBotStatus()" title="Atualizar">↻</button>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">Configuração Rápida</div>
+              <div class="form-row g2">
+                <div class="field"><label>Par</label>
+                  <select id="bc-symbol">
+                    <option>BTCUSDT</option><option>ETHUSDT</option><option>BNBUSDT</option>
+                    <option>SOLUSDT</option><option>XRPUSDT</option><option>DOGEUSDT</option>
+                  </select>
+                </div>
+                <div class="field"><label>Estratégia</label>
+                  <select id="bc-strategy">
+                    <option value="pattern">🧠 Pattern AI</option>
+                    <option value="grid">📊 Grid Bot</option>
+                    <option value="dca">💰 DCA</option>
+                    <option value="scalping">⚡ Scalping</option>
+                    <option value="trend">📈 Trend</option>
+                    <option value="breakout">🚀 Breakout</option>
+                    <option value="macd">📉 MACD</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-row g2">
+                <div class="field"><label>Capital (USDT)</label><input type="number" id="bc-capital" value="300"></div>
+                <div class="field"><label>Timeframe</label>
+                  <select id="bc-timeframe">
+                    <option value="1m">1m</option><option value="3m">3m</option><option value="5m">5m</option>
+                    <option value="15m" selected>15m</option><option value="30m">30m</option>
+                    <option value="1h">1h</option><option value="4h">4h</option><option value="1d">1d</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-row g2">
+                <div class="field"><label>Stop Global (USDT, 0=off)</label><input type="number" id="bc-stopglobal" value="0"></div>
+                <div class="field"><label>Testnet</label>
+                  <select id="bc-testnet"><option value="true" selected>✅ Testnet (seguro)</option><option value="false">🔴 Real (dinheiro real)</option></select>
+                </div>
+              </div>
+
+              <!-- Strategy-specific params -->
+              <div id="bc-sp-grid">
+                <div class="form-row g2">
+                  <div class="field"><label>Preço Mín</label><input type="number" id="bc-grid-min" value="80000"></div>
+                  <div class="field"><label>Preço Máx</label><input type="number" id="bc-grid-max" value="90000"></div>
+                </div>
+                <div class="form-row g2">
+                  <div class="field"><label>Grades</label><input type="number" id="bc-grid-n" value="10"></div>
+                  <div class="field"><label>Stop Loss %</label><input type="number" id="bc-grid-sl" value="8"></div>
+                </div>
+              </div>
+              <div id="bc-sp-pattern" style="display:none">
+                <div class="form-row g2">
+                  <div class="field"><label>Confiança mín.</label><select id="bc-pat-conf"><option value="0.60">60%</option><option value="0.65" selected>65%</option><option value="0.70">70%</option><option value="0.75">75%</option><option value="0.80">80%</option></select></div>
+                  <div class="field"><label>R:R (TP/SL)</label><input type="number" id="bc-pat-rr" value="2.0" step="0.5"></div>
+                </div>
+                <div class="form-row g2">
+                  <div class="field"><label>SL × ATR</label><input type="number" id="bc-pat-atr" value="1.5" step="0.5"></div>
+                  <div class="field"><label>Volume obrig.</label><select id="bc-pat-vol"><option value="true" selected>Sim</option><option value="false">Não</option></select></div>
+                </div>
+              </div>
+
+              <div class="alert alert-warn" style="margin-top:4px;margin-bottom:10px" id="bc-testnet-warn" style="display:none">
+                <span>⚠</span><span>Testnet OFF — o bot vai operar com dinheiro real!</span>
+              </div>
+
+              <div class="divider"></div>
+              <div class="card-title">Notificações Telegram</div>
+              <div class="form-row g2">
+                <div class="field"><label>Bot Token</label><input type="text" id="bc-tg-token" placeholder="1234567890:AAF..."></div>
+                <div class="field"><label>Chat ID</label><input type="text" id="bc-tg-chatid" placeholder="-100123456789"></div>
+              </div>
+              <div style="display:flex;gap:6px;margin-bottom:10px">
+                <button class="btn btn-outline" style="flex:1;font-size:11px" onclick="telegramTest()">📨 Testar conexão</button>
+              </div>
+              <p style="font-size:10px;color:var(--t3);margin-bottom:10px">
+                1. Crie um bot em @BotFather → obtenha o Token<br>
+                2. Mande qualquer msg pro bot e acesse:<br>
+                <code style="font-size:9px">api.telegram.org/bot{TOKEN}/getUpdates</code><br>
+                3. Copie o <code>chat.id</code> do resultado
+              </p>
+              <div style="display:flex;gap:8px;margin-bottom:8px">
+                <button class="btn btn-outline btn-full" style="font-size:12px" onclick="openAutoAnalysis()">
+                  ⚡ Auto-Analisar e Configurar
+                </button>
+              </div>
+              <button class="btn btn-gold btn-full" onclick="botSaveAndApply()">
+                💾 Salvar config e aplicar ao bot
+              </button>
+            </div>
+          </div>
+
+          <!-- Right: Logs -->
+          <div class="card" style="display:flex;flex-direction:column">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+              <div class="card-title" style="margin:0">Log do Bot (tempo real)</div>
+              <div style="display:flex;gap:6px">
+                <button class="btn btn-outline" style="font-size:10px;padding:4px 10px" onclick="loadBotLogs()">↻ Atualizar</button>
+                <button class="btn btn-outline" style="font-size:10px;padding:4px 10px" onclick="toggleAutoRefresh()" id="bc-auto-btn">Auto OFF</button>
+              </div>
+            </div>
+            <div id="bc-logs" style="flex:1;background:var(--bg0);border:1px solid var(--border);border-radius:var(--r);padding:10px;overflow-y:auto;min-height:400px;max-height:calc(100vh - 250px)">
+              <div style="color:var(--t3);font-size:11px;font-family:var(--mono)">Clique em Atualizar para carregar os logs...</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+
+      <!-- ──────────── BACKTESTING ──────────── -->
+      <div id="panel-backtest" class="panel">
+        <div class="grid g2">
+          <div class="card">
+            <div class="card-title">Configurar Backtest</div>
+            <div class="form-row g2">
+              <div class="field"><label>Par</label>
+                <select id="bt-symbol">
+                  <option>BTCUSDT</option><option>ETHUSDT</option><option>BNBUSDT</option>
+                  <option>SOLUSDT</option><option>XRPUSDT</option><option>ADAUSDT</option>
+                </select>
+              </div>
+              <div class="field"><label>Timeframe</label>
+                <select id="bt-tf">
+                  <option value="1m">1m</option><option value="5m">5m</option>
+                  <option value="15m" selected>15m</option><option value="30m">30m</option>
+                  <option value="1h">1h</option><option value="4h">4h</option><option value="1d">1d</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row g2">
+              <div class="field"><label>Estratégia</label>
+                <select id="bt-strategy" onchange="btStratChange()">
+                  <option value="trend">Trend (EMA Cross)</option>
+                  <option value="macd">MACD</option>
+                  <option value="breakout">Breakout</option>
+                  <option value="scalping">Scalping RSI</option>
+                  <option value="pattern">Pattern AI</option>
+                </select>
+              </div>
+              <div class="field"><label>Velas históricas</label>
+                <select id="bt-limit">
+                  <option value="200">200 velas</option>
+                  <option value="500" selected>500 velas</option>
+                  <option value="1000">1.000 velas</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row g2">
+              <div class="field"><label>Capital inicial</label><input type="number" id="bt-capital" value="300"></div>
+              <div class="field"><label>R:R (TP/SL)</label><input type="number" id="bt-rr" value="2.0" step="0.5"></div>
+            </div>
+
+            <!-- Strategy params -->
+            <div id="bt-sp-trend">
+              <div class="form-row g2">
+                <div class="field"><label>EMA Rápida</label><input type="number" id="bt-ema-fast" value="9"></div>
+                <div class="field"><label>EMA Lenta</label><input type="number" id="bt-ema-slow" value="21"></div>
+              </div>
+            </div>
+            <div id="bt-sp-scalping" style="display:none">
+              <div class="form-row g2">
+                <div class="field"><label>RSI Compra</label><input type="number" id="bt-rsi-buy" value="30"></div>
+                <div class="field"><label>RSI Venda</label><input type="number" id="bt-rsi-sell" value="70"></div>
+              </div>
+            </div>
+            <div id="bt-sp-pattern" style="display:none">
+              <div class="field" style="margin-bottom:10px"><label>Confiança mínima</label>
+                <select id="bt-min-conf"><option value="0.60">60%</option><option value="0.65" selected>65%</option><option value="0.70">70%</option></select>
+              </div>
+            </div>
+            <div id="bt-sp-breakout" style="display:none">
+              <div class="field" style="margin-bottom:10px"><label>Lookback (velas S/R)</label><input type="number" id="bt-lookback" value="20"></div>
+            </div>
+
+            <button class="btn btn-gold btn-full" id="bt-run-btn" onclick="runBacktest()">
+              ▶ Executar Backtest
+            </button>
+            <div id="bt-progress" style="display:none;margin-top:10px">
+              <div style="background:var(--bg2);border-radius:4px;overflow:hidden;height:4px">
+                <div id="bt-progress-bar" style="height:100%;background:var(--gold);width:0%;transition:width 0.3s"></div>
+              </div>
+              <div style="font-size:10px;color:var(--t3);font-family:var(--mono);margin-top:6px" id="bt-progress-text">Buscando dados da Binance...</div>
+            </div>
+          </div>
+
+          <!-- Results -->
+          <div class="card" id="bt-results-card">
+            <div class="card-title">Resultados</div>
+            <div id="bt-results-empty" style="color:var(--t3);font-size:12px;text-align:center;padding:40px 0">
+              Configure e execute um backtest para ver os resultados.
+            </div>
+            <div id="bt-results" style="display:none">
+              <div class="grid g3" style="margin-bottom:12px" id="bt-metrics"></div>
+              <div class="divider"></div>
+              <div class="card-title">Curva de Capital</div>
+              <canvas id="bt-equity-chart" height="120" style="margin-bottom:12px"></canvas>
+              <div class="divider"></div>
+              <div class="card-title">Últimos Trades</div>
+              <div class="table-wrap" style="max-height:220px;overflow-y:auto">
+                <table><thead><tr><th>Data</th><th>Dir.</th><th>Entrada</th><th>Saída</th><th>PnL</th><th>Motivo</th></tr></thead>
+                <tbody id="bt-trade-list"></tbody></table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ──────────── PNL CHART ──────────── -->
+      <div id="panel-pnlchart" class="panel">
+        <div class="grid g4" style="margin-bottom:12px" id="pnl-metrics"></div>
+        <div class="card" style="margin-bottom:10px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+            <div class="card-title" style="margin:0">PnL Acumulado</div>
+            <div style="display:flex;gap:4px;flex-wrap:wrap">
+              <button class="btn btn-outline pnl-range-btn active-filter" data-range="week" onclick="loadPnLChart('week',this)" style="font-size:10px;padding:5px 10px">7d</button>
+              <button class="btn btn-outline pnl-range-btn" data-range="month" onclick="loadPnLChart('month',this)" style="font-size:10px;padding:5px 10px">30d</button>
+              <button class="btn btn-outline pnl-range-btn" data-range="all" onclick="loadPnLChart('all',this)" style="font-size:10px;padding:5px 10px">Tudo</button>
+              <button class="btn btn-outline" onclick="exportReport('excel')" style="font-size:10px;padding:5px 10px;color:var(--green)" title="Exportar Excel (.xlsx)">📊 Excel</button>
+              <button class="btn btn-outline" onclick="exportReport('pdf')"   style="font-size:10px;padding:5px 10px;color:var(--red)"   title="Exportar PDF">📄 PDF</button>
+              <button class="btn btn-outline" onclick="exportReport('csv')"   style="font-size:10px;padding:5px 10px" title="Exportar CSV">📥 CSV</button>
+            </div>
+          </div>
+          <canvas id="pnl-cumulative-chart" height="100"></canvas>
+        </div>
+        <div class="card">
+          <div class="card-title" style="margin-bottom:12px">PnL Diário</div>
+          <canvas id="pnl-daily-chart" height="80"></canvas>
+        </div>
+      </div>
+
+
+      <!-- ──────────── ALERTAS ──────────── -->
+      <div id="panel-alerts" class="panel">
+        <div class="grid g2">
+          <div class="card">
+            <div class="card-title">Novo Alerta de Preço</div>
+            <div class="form-row g2">
+              <div class="field"><label>Moeda</label>
+                <select id="al-symbol" style="font-family:var(--mono)">
+                </select>
+              </div>
+              <div class="field"><label>Condição</label>
+                <select id="al-condition">
+                  <option value="above">Preço acima de ▲</option>
+                  <option value="below">Preço abaixo de ▼</option>
+                  <option value="change_up">Alta em % (24h) acima de</option>
+                  <option value="change_down">Queda em % (24h) abaixo de</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row g2">
+              <div class="field"><label>Valor</label><input type="number" id="al-price" placeholder="Ex: 75000" step="0.01"></div>
+              <div class="field"><label>Nota (opcional)</label><input type="text" id="al-note" placeholder="Ex: Suporte rompido"></div>
+            </div>
+            <button class="btn btn-gold btn-full" onclick="createAlert()">🔔 Criar Alerta</button>
+
+            <div class="divider"></div>
+            <div class="card-title">Alertas Ativos</div>
+            <div id="alerts-list">
+              <div style="color:var(--t3);font-size:13px;text-align:center;padding:20px">Nenhum alerta criado</div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">Como funcionam os alertas</div>
+            <div style="display:flex;flex-direction:column;gap:8px">
+              <div class="card-sm"><span style="color:var(--gold);font-size:13px">📡 Tempo real</span><div style="font-size:12px;color:var(--t2);margin-top:4px">Os alertas são verificados a cada atualização de preço via WebSocket. Resposta instantânea.</div></div>
+              <div class="card-sm"><span style="color:var(--gold);font-size:13px">🔔 Notificação</span><div style="font-size:12px;color:var(--t2);margin-top:4px">Aparece como toast na tela. Se Telegram estiver configurado, envia mensagem também.</div></div>
+              <div class="card-sm"><span style="color:var(--gold);font-size:13px">⭐ Favoritas primeiro</span><div style="font-size:12px;color:var(--t2);margin-top:4px">Crie alertas para suas moedas da Watchlist para monitorar oportunidades.</div></div>
+            </div>
+            <div class="divider"></div>
+            <div class="card-title">Alertas Disparados</div>
+            <div id="alerts-triggered" style="max-height:300px;overflow-y:auto">
+              <div style="color:var(--t3);font-size:13px;text-align:center;padding:20px">Nenhum alerta disparado</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ──────────── SCANNER ──────────── -->
+      <div id="panel-scanner" class="panel">
+        <div class="card" style="margin-bottom:10px">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <div class="card-title" style="margin:0">Scanner de Padrões ao Vivo</div>
+            <select id="sc-timeframe" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:6px 10px;font-family:var(--mono);font-size:12px;color:var(--t1);outline:none">
+              <option value="5m">5m</option><option value="15m" selected>15m</option>
+              <option value="30m">30m</option><option value="1h">1h</option><option value="4h">4h</option>
+            </select>
+            <div class="field" style="margin:0;min-width:180px">
+              <select id="sc-preset" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:6px 10px;font-family:var(--mono);font-size:12px;color:var(--t1);outline:none">
+                <option value="top10">Top 10 (mais rápido)</option>
+                <option value="top20">Top 20</option>
+                <option value="defi">DeFi</option>
+                <option value="meme">Meme Coins</option>
+                <option value="watchlist">Minha Watchlist</option>
+                <option value="all">Todas (lento)</option>
+              </select>
+            </div>
+            <button class="btn btn-gold" id="sc-btn" onclick="runScanner()">🔍 Escanear</button>
+            <span id="sc-status" style="font-size:12px;color:var(--t3);font-family:var(--mono)"></span>
+          </div>
+        </div>
+
+        <!-- Scanner results -->
+        <div id="sc-results">
+          <div class="card">
+            <div id="sc-empty" style="text-align:center;padding:40px;color:var(--t3);font-size:13px">
+              Selecione o timeframe e clique em Escanear para detectar padrões em tempo real.
+            </div>
+            <div id="sc-grid" style="display:none">
+              <div class="grid g4" id="sc-summary" style="margin-bottom:12px"></div>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>#</th><th>Par</th><th>Preço</th><th>24h %</th><th>Tendência</th><th>Padrão</th><th>Sinal</th><th>Confiança</th><th>Alvo</th><th>Ação</th></tr></thead>
+                  <tbody id="sc-table"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+
+      <!-- ──────────── ANALYSIS AI ──────────── -->
+      <div id="panel-analysisai" class="panel">
+        <!-- Header -->
+        <div class="card" style="padding:12px 16px;margin-bottom:12px">
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+            <div style="font-size:16px;font-weight:700;color:var(--gold)">⚡ Analysis AI Engine</div>
+            <div style="display:flex;gap:0;background:var(--bg3);border-radius:var(--r);padding:3px">
+              <button id="ai-tab-analyze" class="btn" onclick="switchAITab('analyze')" style="font-size:12px;padding:5px 14px;background:var(--gold);color:#000;border-radius:4px">Analisar</button>
+              <button id="ai-tab-history" class="btn" onclick="switchAITab('history')" style="font-size:12px;padding:5px 14px;background:transparent;color:var(--t2);border-radius:4px">📊 Histórico</button>
+            </div>
+            <select id="ai-symbol" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:7px 12px;font-family:var(--mono);font-size:13px;color:var(--t1);outline:none;min-width:130px"></select>
+            <select id="ai-tf" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:7px 10px;font-family:var(--mono);font-size:12px;color:var(--t1);outline:none">
+              <option value="15m">15m</option><option value="30m">30m</option>
+              <option value="1h" selected>1h</option><option value="4h">4h</option><option value="1d">1d</option>
+            </select>
+            <button class="btn btn-gold" id="ai-run-btn" onclick="runAnalysisAI()">🔍 Analisar</button>
+            <div id="ai-status" style="font-size:12px;color:var(--t3);font-family:var(--mono)"></div>
+          </div>
+        </div>
+
+        <div id="ai-loading" style="display:none;text-align:center;padding:40px">
+          <div style="display:inline-flex;flex-direction:column;align-items:center;gap:16px">
+            <div style="width:40px;height:40px;border:3px solid var(--border);border-top-color:var(--gold);border-radius:50%;animation:spin 0.8s linear infinite"></div>
+            <div id="ai-step" style="font-size:13px;color:var(--t2);font-family:var(--mono)">Coletando dados...</div>
+            <div style="display:flex;flex-direction:column;gap:6px;width:280px" id="ai-steps-list">
+              <div class="ai-step-item" data-step="data">⏳ Coletando Dados</div>
+              <div class="ai-step-item" data-step="tech">⏳ Análise Técnica</div>
+              <div class="ai-step-item" data-step="harmonic">⏳ Padrões Harmônicos</div>
+              <div class="ai-step-item" data-step="smc">⏳ Smart Money Concept</div>
+              <div class="ai-step-item" data-step="ob">⏳ Order Blocks & FVG</div>
+              <div class="ai-step-item" data-step="strategy">⏳ Gerando Estratégia</div>
+            </div>
+          </div>
+        </div>
+
+        <div id="ai-results" style="display:none">
+
+          <!-- Trading Suggestion — generated dynamically -->
+          <div id="ai-suggestion" style="display:none;margin-bottom:12px"></div>
+
+          <!-- Realtime chart with entry/exit markers -->
+          <div class="card" style="margin-bottom:12px;padding:12px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+              <div class="card-title" style="margin:0">📊 Gráfico em Tempo Real — Entradas & Saídas</div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div class="status-dot live" style="width:7px;height:7px"></div>
+                <span style="font-size:11px;color:var(--green);font-family:var(--mono)">Ao vivo</span>
+                <button onclick="toggleAIChart()" id="ai-chart-toggle" style="font-size:11px;padding:4px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--t2);cursor:pointer">Expandir</button>
+              </div>
+            </div>
+            <div id="ai-realtime-chart" style="height:320px;background:var(--bg0);border-radius:6px;overflow:hidden;position:relative">
+              <div id="ai-chart-placeholder" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;color:var(--t3);pointer-events:none">
+                <div style="font-size:24px">📈</div>
+                <div style="font-size:12px;font-family:var(--mono)">Clique em Analisar para carregar o gráfico</div>
+              </div>
+            </div>
+            <!-- Chart markers legend -->
+            <div id="ai-chart-legend" style="display:none;flex-wrap:wrap;gap:12px;margin-top:8px;font-size:11px">
+              <div style="display:flex;align-items:center;gap:5px"><div style="width:10px;height:10px;background:#3FB950;border-radius:50%"></div><span>Entrada sugerida</span></div>
+              <div style="display:flex;align-items:center;gap:5px"><div style="width:10px;height:10px;background:#F85149;border-radius:50%"></div><span>Stop Loss</span></div>
+              <div style="display:flex;align-items:center;gap:5px"><div style="width:10px;height:10px;background:#58A6FF;border-radius:50%"></div><span>TP1</span></div>
+              <div style="display:flex;align-items:center;gap:5px"><div style="width:10px;height:10px;background:#F0B90B;border-radius:50%"></div><span>TP2</span></div>
+              <div style="display:flex;align-items:center;gap:5px"><div style="width:10px;height:10px;background:#a371f7;border-radius:50%"></div><span>TP3</span></div>
+              <div style="display:flex;align-items:center;gap:5px"><div style="width:12px;height:2px;background:rgba(240,185,11,0.6);"></div><span>Order Block</span></div>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px">
+
+            <!-- Technical Summary -->
+            <div class="card">
+              <div class="card-title">Análise Técnica</div>
+              <div style="text-align:center;margin-bottom:12px">
+                <!-- Gauge -->
+                <div id="gauge-wrap" style="position:relative;display:inline-block">
+                  <svg width="200" height="110" viewBox="0 0 200 110" id="gauge-svg">
+                    <!-- Background arc -->
+                    <path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="var(--bg3)" stroke-width="16" stroke-linecap="round"/>
+                    <!-- Colored arc -->
+                    <path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="url(#gauge-gradient)" stroke-width="16" stroke-linecap="round" id="gauge-arc"/>
+                    <defs>
+                      <linearGradient id="gauge-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <stop offset="0%"   stop-color="#F85149"/>
+                        <stop offset="40%"  stop-color="#D29922"/>
+                        <stop offset="60%"  stop-color="#D29922"/>
+                        <stop offset="100%" stop-color="#3FB950"/>
+                      </linearGradient>
+                    </defs>
+                    <!-- Needle -->
+                    <line id="gauge-needle" x1="100" y1="100" x2="100" y2="28" stroke="var(--t1)" stroke-width="2.5" stroke-linecap="round" transform="rotate(0,100,100)"/>
+                    <circle cx="100" cy="100" r="5" fill="var(--t1)"/>
+                    <!-- Labels -->
+                    <text x="14" y="108" fill="var(--red)" font-size="9" font-family="monospace">Baixa</text>
+                    <text x="75" y="24" fill="var(--t3)" font-size="9" font-family="monospace" text-anchor="middle">Neutro</text>
+                    <text x="174" y="108" fill="var(--green)" font-size="9" font-family="monospace" text-anchor="end">Alta</text>
+                  </svg>
+                  <div style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);text-align:center">
+                    <div id="gauge-label" style="font-size:14px;font-weight:700;color:var(--t1)">—</div>
+                    <div id="gauge-score" style="font-size:11px;color:var(--t3);font-family:var(--mono)"></div>
+                  </div>
+                </div>
+              </div>
+              <div style="display:flex;justify-content:space-around;font-family:var(--mono);font-size:12px">
+                <div style="text-align:center"><div class="val green" style="font-size:18px" id="ts-buys">—</div><div style="color:var(--t3);font-size:10px">Compra</div></div>
+                <div style="text-align:center"><div class="val" style="font-size:18px" id="ts-neuts">—</div><div style="color:var(--t3);font-size:10px">Neutro</div></div>
+                <div style="text-align:center"><div class="val red" style="font-size:18px" id="ts-sells">—</div><div style="color:var(--t3);font-size:10px">Venda</div></div>
+              </div>
+              <div class="divider"></div>
+              <div id="ts-signals" style="max-height:180px;overflow-y:auto"></div>
+            </div>
+
+            <!-- Harmonics -->
+            <div class="card">
+              <div class="card-title">Padrões Harmônicos</div>
+              <div id="harmonics-list">
+                <div style="color:var(--t3);font-size:12px;text-align:center;padding:20px">Analisando...</div>
+              </div>
+              <div class="divider"></div>
+              <div class="card-title">Padrões de Vela</div>
+              <div id="candle-patterns-list"></div>
+            </div>
+
+            <!-- SMC + OB + FVG -->
+            <div class="card">
+              <div class="card-title">Smart Money Concept</div>
+              <div id="smc-content" style="margin-bottom:12px"></div>
+              <div class="card-title">Order Blocks</div>
+              <div id="ob-list" style="max-height:160px;overflow-y:auto;margin-bottom:10px"></div>
+              <div class="card-title">Fair Value Gaps</div>
+              <div id="fvg-list"></div>
+            </div>
+          </div>
+
+          </div><!-- close grid -->
+          <!-- Key indicators strip -->
+          <div class="card">
+            <div class="card-title">Indicadores Chave</div>
+            <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px" id="indicators-strip"></div>
+          </div>
+
+          <!-- Legend & Tips -->
+          <div class="card" style="margin-top:0">
+            <div class="card-title" style="margin-bottom:12px">📖 Legenda & Dicas de Trading</div>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
+
+              <!-- Gauge -->
+              <div class="card-sm" style="padding:12px">
+                <div style="font-size:12px;font-weight:600;color:var(--gold);margin-bottom:8px">🎯 Gauge de Tendência</div>
+                <div style="font-size:11px;color:var(--t2);display:flex;flex-direction:column;gap:5px">
+                  <div><span style="color:var(--green);font-weight:600">Forte Alta (+40)</span> — Maioria dos indicadores aponta compra. Bom para longs.</div>
+                  <div><span style="color:var(--green)">Alta (+15 a +40)</span> — Tendência de alta moderada. Confirme com volume.</div>
+                  <div><span style="color:var(--t2)">Neutro (-15 a +15)</span> — Mercado indeciso. Evite entradas agressivas.</div>
+                  <div><span style="color:var(--red)">Baixa (-40 a -15)</span> — Pressão vendedora. Prefira shorts ou aguarde.</div>
+                  <div><span style="color:var(--red);font-weight:600">Forte Baixa (-40)</span> — Sinal claro de venda. Cuidado com longs.</div>
+                </div>
+              </div>
+
+              <!-- SMC -->
+              <div class="card-sm" style="padding:12px">
+                <div style="font-size:12px;font-weight:600;color:var(--gold);margin-bottom:8px">🧠 Smart Money Concept</div>
+                <div style="font-size:11px;color:var(--t2);display:flex;flex-direction:column;gap:5px">
+                  <div><span style="color:var(--green);font-weight:600">HH (Higher High)</span> — Topo mais alto que o anterior. Estrutura altista.</div>
+                  <div><span style="color:var(--green);font-weight:600">HL (Higher Low)</span> — Fundo mais alto. Confirma tendência de alta.</div>
+                  <div><span style="color:var(--red);font-weight:600">LH (Lower High)</span> — Topo mais baixo. Sinal de enfraquecimento.</div>
+                  <div><span style="color:var(--red);font-weight:600">LL (Lower Low)</span> — Fundo mais baixo. Estrutura baixista confirmada.</div>
+                  <div><span style="color:var(--gold)">HH + HL juntos</span> = Tendência altista saudável → favorece longs.</div>
+                </div>
+              </div>
+
+              <!-- Order Blocks -->
+              <div class="card-sm" style="padding:12px">
+                <div style="font-size:12px;font-weight:600;color:var(--gold);margin-bottom:8px">📦 Order Blocks</div>
+                <div style="font-size:11px;color:var(--t2);display:flex;flex-direction:column;gap:5px">
+                  <div><span style="color:var(--green);font-weight:600">Bullish OB</span> — Zona de acumulação institucional. Preço tende a respeitá-la como suporte.</div>
+                  <div><span style="color:var(--red);font-weight:600">Bearish OB</span> — Zona de distribuição institucional. Funciona como resistência.</div>
+                  <div><span style="color:var(--gold)">Força %</span> — Quanto maior, mais significativo o bloco. Prefira blocos acima de 5%.</div>
+                  <div style="margin-top:4px;padding:6px;background:var(--bg3);border-radius:4px">💡 <em>Entre long quando o preço testa um Bullish OB após tendência de alta.</em></div>
+                </div>
+              </div>
+
+              <!-- FVG -->
+              <div class="card-sm" style="padding:12px">
+                <div style="font-size:12px;font-weight:600;color:var(--gold);margin-bottom:8px">🔲 Fair Value Gaps (FVG)</div>
+                <div style="font-size:11px;color:var(--t2);display:flex;flex-direction:column;gap:5px">
+                  <div><span style="color:var(--green);font-weight:600">Bullish FVG</span> — Lacuna de alta (imbalance). O preço frequentemente volta para "fechar" este gap.</div>
+                  <div><span style="color:var(--red);font-weight:600">Bearish FVG</span> — Lacuna de baixa. Zona onde vendedores podem reaparecer.</div>
+                  <div><span style="color:var(--gold)">Tamanho %</span> — FVGs maiores têm mais probabilidade de serem preenchidos.</div>
+                  <div style="margin-top:4px;padding:6px;background:var(--bg3);border-radius:4px">💡 <em>Use FVG como zonas de entrada: compre no Bullish FVG, venda no Bearish FVG.</em></div>
+                </div>
+              </div>
+
+              <!-- Harmonics -->
+              <div class="card-sm" style="padding:12px">
+                <div style="font-size:12px;font-weight:600;color:var(--gold);margin-bottom:8px">🦋 Padrões Harmônicos</div>
+                <div style="font-size:11px;color:var(--t2);display:flex;flex-direction:column;gap:5px">
+                  <div><span style="font-weight:600">Gartley</span> — Padrão clássico com XD=0.786. Confiável e frequente.</div>
+                  <div><span style="font-weight:600">Bat</span> — Retração profunda XD=0.886. Alta taxa de acerto.</div>
+                  <div><span style="font-weight:600">Crab</span> — Extensão extrema XD=1.618. Alvo de reversão preciso.</div>
+                  <div><span style="font-weight:600">Cypher</span> — Padrão raro mas muito preciso quando confirmado.</div>
+                  <div><span style="color:var(--gold)">PRZ</span> — Zona de Reversão Potencial = onde aguardar a entrada.</div>
+                </div>
+              </div>
+
+              <!-- Indicators -->
+              <div class="card-sm" style="padding:12px">
+                <div style="font-size:12px;font-weight:600;color:var(--gold);margin-bottom:8px">📊 Indicadores Rápidos</div>
+                <div style="font-size:11px;color:var(--t2);display:flex;flex-direction:column;gap:5px">
+                  <div><span style="color:var(--green)">RSI &lt; 30</span> = Sobrevenda → provável reversão para cima.</div>
+                  <div><span style="color:var(--red)">RSI &gt; 70</span> = Sobrecompra → atenção para realização.</div>
+                  <div><span style="color:var(--green)">MACD Hist +</span> = Momentum de alta crescendo.</div>
+                  <div><span style="color:var(--gold)">ADX &gt; 25</span> = Tendência forte (qualquer direção).</div>
+                  <div><span style="color:var(--green)">Preço &gt; VWAP</span> = Domínio dos compradores no dia.</div>
+                  <div><span style="color:var(--gold)">BB %</span> = 0% = no suporte, 100% = na resistência.</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Strategy tips -->
+            <div class="divider"></div>
+            <div style="font-size:12px;font-weight:600;color:var(--gold);margin-bottom:10px">⚡ Como usar o Analysis AI para operar</div>
+            <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px">
+              <div style="background:rgba(63,185,80,0.06);border:1px solid rgba(63,185,80,0.2);border-radius:8px;padding:12px">
+                <div style="font-size:12px;font-weight:600;color:var(--green);margin-bottom:6px">✅ Confluência para LONG</div>
+                <div style="font-size:11px;color:var(--t2);line-height:1.7">
+                  1. Gauge &gt; +15 (Alta ou Forte Alta)<br>
+                  2. SMC: HH + HL presentes (estrutura altista)<br>
+                  3. Preço em cima de Bullish Order Block<br>
+                  4. RSI entre 40-60 (não sobrecomprado)<br>
+                  5. VWAP abaixo do preço atual<br>
+                  6. Padrão harmônico Bullish detectado (PRZ)
+                </div>
+              </div>
+              <div style="background:rgba(248,81,73,0.06);border:1px solid rgba(248,81,73,0.2);border-radius:8px;padding:12px">
+                <div style="font-size:12px;font-weight:600;color:var(--red);margin-bottom:6px">❌ Confluência para SHORT</div>
+                <div style="font-size:11px;color:var(--t2);line-height:1.7">
+                  1. Gauge &lt; -15 (Baixa ou Forte Baixa)<br>
+                  2. SMC: LH + LL presentes (estrutura baixista)<br>
+                  3. Preço em cima de Bearish Order Block<br>
+                  4. RSI &gt; 65 (sobrecomprado)<br>
+                  5. VWAP acima do preço atual<br>
+                  6. Padrão harmônico Bearish detectado (PRZ)
+                </div>
+              </div>
+            </div>
+            <div style="margin-top:10px;padding:10px 14px;background:var(--golddim);border:1px solid var(--gold);border-radius:8px;font-size:12px;color:var(--t1)">
+              ⚠️ <strong>Lembre-se:</strong> Nenhum indicador é 100% preciso. Use o Analysis AI como ferramenta de apoio à decisão, sempre com Stop Loss definido antes de entrar. Mínimo de 3-4 confluências positivas antes de operar.
+            </div>
+          </div>
+        </div>
+      </div>
+
+
+      <!-- ──────────── PERFIL DO USUÁRIO ──────────── -->
+      <div id="panel-profile" class="panel">
+        <!-- Admin quick access bar (shown only for admin) -->
+        <div id="prof-admin-bar" style="display:none;background:rgba(240,185,11,0.08);border:1px solid rgba(240,185,11,0.3);border-radius:10px;padding:12px 16px;margin-bottom:12px;display:flex;align-items:center;gap:12px">
+          <span style="font-size:20px">⚙️</span>
+          <div>
+            <div style="font-size:13px;font-weight:700;color:var(--gold)">Você é Administrador</div>
+            <div style="font-size:11px;color:var(--t3)">Acesse o painel de administração para gerenciar usuários e configurações</div>
+          </div>
+          <button onclick="goToAdmin()" class="btn btn-gold" style="margin-left:auto;font-size:12px;padding:8px 16px">Ir para Admin →</button>
+        </div>
+        <div class="grid g2">
+          <!-- Left: Profile info -->
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div class="card">
+              <div class="card-title">Informações da Conta</div>
+              <div class="result-box" style="margin-bottom:12px">
+                <div class="result-row"><span class="rk">Usuário</span><span class="rv" id="prof-username">—</span></div>
+                <div class="result-row"><span class="rk">E-mail</span><span class="rv" id="prof-email">—</span></div>
+                <div class="result-row"><span class="rk">Plano</span><span class="rv" id="prof-plan">—</span></div>
+                <div class="result-row"><span class="rk">Função</span><span class="rv" id="prof-role">—</span></div>
+                <div class="result-row"><span class="rk">Membro desde</span><span class="rv" id="prof-created">—</span></div>
+                <div class="result-row"><span class="rk">Último acesso</span><span class="rv" id="prof-lastlogin">—</span></div>
+              </div>
+              <div class="field" style="margin-bottom:10px">
+                <label>Atualizar E-mail</label>
+                <input type="email" id="prof-email-input" placeholder="novo@email.com">
+              </div>
+              <button class="btn btn-outline btn-full" onclick="saveProfileEmail()">Salvar e-mail</button>
+            </div>
+
+            <div class="card">
+              <div class="card-title">Alterar Senha</div>
+              <div class="field" style="margin-bottom:8px">
+                <label>Senha Atual</label>
+                <input type="password" id="prof-curr-pass" placeholder="Senha atual">
+              </div>
+              <div class="field" style="margin-bottom:10px">
+                <label>Nova Senha</label>
+                <input type="password" id="prof-new-pass" placeholder="Mínimo 6 caracteres" oninput="checkPasswordStrength(this.value)">
+              </div>
+              <button class="btn btn-outline btn-full" onclick="changePassword()">Alterar Senha</button>
+            </div>
+          </div>
+
+          <!-- Right: API Keys -->
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div class="card">
+              <div class="card-title">🔑 Minhas Chaves de API</div>
+              <div style="background:rgba(240,185,11,0.06);border:1px solid rgba(240,185,11,0.2);border-radius:8px;padding:12px;margin-bottom:14px;font-size:12px;color:var(--t2);line-height:1.6">
+                ℹ️ Suas chaves ficam armazenadas <strong>apenas no seu servidor</strong> e nunca são expostas ao frontend. Configure aqui para usar o bot e a IA Expert com sua própria conta.
+              </div>
+
+              <div class="card-title" style="font-size:11px;margin-bottom:8px">Binance API</div>
+              <div class="field" style="margin-bottom:8px">
+                <label>API Key</label>
+                <input type="text" id="key-binance-key" placeholder="Sua Binance API Key" style="font-family:var(--mono);font-size:12px">
+              </div>
+              <div class="field" style="margin-bottom:10px">
+                <label>Secret Key</label>
+                <input type="password" id="key-binance-secret" placeholder="Sua Binance Secret Key" style="font-family:var(--mono);font-size:12px">
+              </div>
+              <div style="font-size:11px;color:var(--t3);margin-bottom:14px">
+                📌 Obtenha em: <a href="https://www.binance.com/en/my/settings/api-management" target="_blank" style="color:var(--gold)">binance.com/api-management</a>
+              </div>
+
+              <div class="card-title" style="font-size:11px;margin-bottom:8px">Telegram Bot</div>
+              <div class="field" style="margin-bottom:8px">
+                <label>Bot Token</label>
+                <input type="text" id="key-tg-token" placeholder="1234567890:AAF..." style="font-family:var(--mono);font-size:12px">
+              </div>
+              <div class="field" style="margin-bottom:14px">
+                <label>Chat ID</label>
+                <input type="text" id="key-tg-chatid" placeholder="-100123456789" style="font-family:var(--mono);font-size:12px">
+              </div>
+
+              <button class="btn btn-gold btn-full" onclick="saveApiKeys()">💾 Salvar Chaves</button>
+              <div id="prof-keys-status" style="font-size:12px;color:var(--t3);text-align:center;margin-top:8px"></div>
+            </div>
+
+            <div class="card" id="prof-keys-status-card">
+              <div class="card-title">Status das Integrações</div>
+              <div id="prof-integrations" style="display:flex;flex-direction:column;gap:6px">
+                <div class="result-row"><span class="rk">Binance API</span><span class="rv" id="int-binance">—</span></div>
+                <div class="result-row"><span class="rk">Telegram</span><span class="rv" id="int-telegram">—</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ──────────── ADMIN PANEL ──────────── -->
+      <div id="panel-admin" class="panel">
+
+        <!-- Stats strip -->
+        <div class="grid g4" id="adm-stats" style="margin-bottom:14px">
+          <div class="metric"><label>👥 Usuários</label><div class="val" id="adm-s-users" style="font-size:22px">—</div></div>
+          <div class="metric"><label>✅ Ativos</label><div class="val green" id="adm-s-active" style="font-size:22px">—</div></div>
+          <div class="metric"><label>👑 Admins</label><div class="val gold" id="adm-s-admins" style="font-size:22px">—</div></div>
+          <div class="metric"><label>📊 Trades</label><div class="val" id="adm-s-trades" style="font-size:22px">—</div></div>
+        </div>
+
+        <!-- Admin tabs -->
+        <div style="display:flex;gap:4px;margin-bottom:14px;background:var(--bg2);border-radius:8px;padding:4px;border:1px solid var(--border);width:fit-content">
+          <button id="adm-tab-users"    onclick="switchAdminTab('users')"    style="font-size:12px;font-weight:700;padding:8px 18px;border:none;border-radius:6px;cursor:pointer;background:var(--gold);color:#000">👥 Usuários</button>
+          <button id="adm-tab-invites"  onclick="switchAdminTab('invites')"  style="font-size:12px;padding:8px 18px;border:none;border-radius:6px;cursor:pointer;background:transparent;color:var(--t2)">🎟️ Convites</button>
+          <button id="adm-tab-platform" onclick="switchAdminTab('platform')" style="font-size:12px;padding:8px 18px;border:none;border-radius:6px;cursor:pointer;background:transparent;color:var(--t2)">⚙️ Plataforma</button>
+        </div>
+
+        <!-- USERS TAB -->
+        <div id="adm-panel-users">
+          <div class="card">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+              <div class="card-title" style="margin:0">👥 Usuários Cadastrados</div>
+              <button class="btn btn-outline" style="font-size:11px" onclick="loadAdminUsers()">↻ Atualizar</button>
+            </div>
+            <div class="table-wrap" style="overflow-x:auto">
+              <table style="min-width:700px">
+                <thead><tr><th>Usuário</th><th>E-mail</th><th>Plano</th><th>Função</th><th>Status</th><th>Cadastro</th><th>Último acesso</th><th>Ações</th></tr></thead>
+                <tbody id="adm-users-table"><tr><td colspan="8" style="text-align:center;color:var(--t3);padding:30px">Carregando...</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- INVITES TAB -->
+        <div id="adm-panel-invites" style="display:none">
+          <div class="grid g2" style="margin-bottom:14px">
+            <div class="card">
+              <div class="card-title">🎟️ Gerar Código de Convite</div>
+              <div class="grid g2" style="margin-bottom:10px">
+                <div class="field"><label>Plano</label>
+                  <select id="inv-plan" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:8px;width:100%;color:var(--t1)">
+                    <option value="basic">🟡 Basic</option><option value="pro">🟠 Pro</option><option value="vip">🔴 VIP</option>
+                  </select>
+                </div>
+                <div class="field"><label>Usos máximos</label><input type="number" id="inv-max-uses" value="1" min="1" max="100"></div>
+              </div>
+              <div class="field" style="margin-bottom:12px"><label>Expirar em (dias)</label><input type="number" id="inv-expires" value="30" min="1"></div>
+              <button class="btn btn-gold btn-full" onclick="generateInvite()">🎟️ Gerar Código</button>
+              <div id="inv-result" style="display:none;margin-top:12px;background:rgba(240,185,11,0.08);border:1px solid rgba(240,185,11,0.3);border-radius:8px;padding:16px;text-align:center">
+                <div style="font-size:11px;color:var(--t3);margin-bottom:6px">Código gerado:</div>
+                <div id="inv-code-display" style="font-family:var(--mono);font-size:28px;font-weight:700;color:var(--gold);letter-spacing:6px;margin-bottom:10px"></div>
+                <button onclick="copyInviteCode()" style="background:var(--gold);border:none;border-radius:6px;color:#000;padding:8px 20px;cursor:pointer;font-size:13px;font-weight:700">📋 Copiar</button>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-title">ℹ️ Como funciona</div>
+              <div style="display:flex;flex-direction:column;gap:10px;font-size:13px;color:var(--t2)">
+                <div style="display:flex;gap:10px"><span style="width:22px;height:22px;background:var(--gold);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#000;flex-shrink:0">1</span><span>Gere um código com plano desejado</span></div>
+                <div style="display:flex;gap:10px"><span style="width:22px;height:22px;background:var(--gold);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#000;flex-shrink:0">2</span><span>Envie ao cliente por WhatsApp ou e-mail</span></div>
+                <div style="display:flex;gap:10px"><span style="width:22px;height:22px;background:var(--gold);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#000;flex-shrink:0">3</span><span>Cliente clica em "Criar conta" e informa o código</span></div>
+                <div style="display:flex;gap:10px"><span style="width:22px;height:22px;background:var(--gold);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#000;flex-shrink:0">4</span><span>Conta criada automaticamente com o plano configurado</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+              <div class="card-title" style="margin:0">Códigos Gerados</div>
+              <button class="btn btn-outline" style="font-size:11px" onclick="loadAdminInvites()">↻ Atualizar</button>
+            </div>
+            <div class="table-wrap" style="overflow-x:auto">
+              <table style="min-width:600px">
+                <thead><tr><th>Código</th><th>Plano</th><th>Usos</th><th>Máx.</th><th>Usado por</th><th>Expira</th><th>Criado</th><th>Ação</th></tr></thead>
+                <tbody id="adm-invites-table"><tr><td colspan="8" style="text-align:center;color:var(--t3);padding:24px">Nenhum código</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- PLATFORM TAB -->
+        <div id="adm-panel-platform" style="display:none">
+          <div class="grid g2">
+            <div class="card">
+              <div class="card-title">⚙️ Configurações Gerais</div>
+              <div class="field" style="margin-bottom:14px"><label>Nome da Plataforma</label><input type="text" id="plat-name" placeholder="CryptoEdge Pro"></div>
+              <div class="field" style="margin-bottom:14px">
+                <label>Modo de Cadastro</label>
+                <select id="plat-reg-mode" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:10px;width:100%;color:var(--t1)">
+                  <option value="invite">🎟️ Somente com convite (recomendado)</option>
+                  <option value="open">🌐 Aberto para todos</option>
+                  <option value="closed">🔒 Fechado — sem novos cadastros</option>
+                </select>
+              </div>
+              <div class="field" style="margin-bottom:16px"><label>Limite máximo de usuários</label><input type="number" id="plat-max-users" placeholder="100" min="1"></div>
+              <button class="btn btn-gold btn-full" onclick="savePlatformSettings()">💾 Salvar Configurações</button>
+            </div>
+            <div class="card">
+              <div class="card-title">🤖 IA Expert — Chave do Servidor</div>
+              <p style="font-size:13px;color:var(--t2);margin-bottom:12px">Configurada no servidor e compartilhada com todos os usuários automaticamente.</p>
+              <div style="background:var(--bg0);border:1px solid var(--border);border-radius:8px;padding:14px;font-family:var(--mono);font-size:12px;margin-bottom:12px">
+                <div style="color:var(--t3);font-size:10px;margin-bottom:6px;text-transform:uppercase">Arquivo .env</div>
+                <div style="color:var(--gold)">LAOZHANG_API_KEY=sk-sua-chave</div>
+              </div>
+              <div style="font-size:12px;color:var(--t3)">📌 Obtenha em: <a href="https://laozhang.ai" target="_blank" style="color:var(--gold)">laozhang.ai</a> — Modelo: <code>qwen3-30b-a3b</code></div>
+              <div class="divider"></div>
+              <div class="card-title" style="font-size:12px;margin-bottom:8px">📊 Estatísticas</div>
+              <div id="adm-plat-stats"></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+    </div><!-- /content -->
+  </div><!-- /main -->
+</div><!-- /app -->
+
+
+<!-- TradingView — async load with fallback -->
+<script>
+(function() {
+  var s = document.createElement('script');
+  s.src = 'https://s3.tradingview.com/tv.js';
+  s.async = true;
+  s.onload = function() {
+    window._tvReady = true;
+    // Call initTradingView if app.js already loaded it
+    if (typeof initTradingView === 'function') initTradingView();
+  };
+  s.onerror = function() {
+    var d = document.getElementById('tradingview-widget');
+    if (d) d.innerHTML = '<div style="height:320px;display:flex;align-items:center;justify-content:center;color:var(--t3);font-size:12px;font-family:var(--mono)">TradingView indisponível — verifique sua conexão</div>';
+  };
+  document.head.appendChild(s);
+})();
+</script>
+<script src="/js/app.js"></script>
+</body>
+</html>

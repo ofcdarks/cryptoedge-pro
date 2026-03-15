@@ -1,0 +1,56 @@
+version: '3.9'
+
+services:
+  # ── Web App ────────────────────────────────────────────────────────────────
+  web:
+    build: .
+    container_name: cryptoedge-web
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DB_PATH=/data/data.db
+      - LAOZHANG_API_KEY=${LAOZHANG_API_KEY}
+      - LAOZHANG_BASE_URL=${LAOZHANG_BASE_URL:-https://api.laozhang.ai/v1}
+      - AI_MODEL=${AI_MODEL:-qwen3-30b-a3b}
+    volumes:
+      - cryptoedge-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.cryptoedge.rule=Host(`${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.cryptoedge.entrypoints=websecure"
+      - "traefik.http.routers.cryptoedge.tls.certresolver=letsencrypt"
+
+  # ── Grid Bot (opcional — roda o bot em separado) ───────────────────────────
+  bot:
+    build: .
+    container_name: cryptoedge-bot
+    restart: unless-stopped
+    command: ["python3", "bot/gridbot.py"]
+    environment:
+      - BINANCE_API_KEY=${BINANCE_API_KEY}
+      - BINANCE_SECRET_KEY=${BINANCE_SECRET_KEY}
+      - BOT_SYMBOL=${BOT_SYMBOL:-BTCUSDT}
+      - BOT_CAPITAL=${BOT_CAPITAL:-300}
+      - BOT_PRICE_MIN=${BOT_PRICE_MIN:-80000}
+      - BOT_PRICE_MAX=${BOT_PRICE_MAX:-90000}
+      - BOT_NUM_GRIDS=${BOT_NUM_GRIDS:-10}
+      - BOT_STOP_LOSS=${BOT_STOP_LOSS:-73600}
+      - BOT_TESTNET=${BOT_TESTNET:-true}
+      - BOT_INTERVAL=${BOT_INTERVAL:-30}
+    volumes:
+      - cryptoedge-data:/data
+    profiles:
+      - bot   # só sobe com: docker compose --profile bot up
+
+volumes:
+  cryptoedge-data:
+    driver: local
