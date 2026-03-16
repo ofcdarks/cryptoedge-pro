@@ -721,331 +721,81 @@ app.post('/api/bot/config', requireAuth, (req, res) => {
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
-// ─── Bot Process Manager (PM2 com fallback para spawn nativo) ─────────────────
-// Em Docker/EasyPanel PM2 não está disponível — usa spawn nativo do Node.js
-// ─── Bot Process Manager ──────────────────────────────────────────────────────
-// Usa spawn nativo do Node.js com auto-restart embutido.
-// PM2 é opcional (melhora logging) mas NÃO é o gerenciador principal.
-// Isso evita o problema de orphan processes e SIGTERM prematuro.
+// ─── Bot Manager ──────────────────────────────────────────────────────────────
+const BOT_LOG_FILE = path.join(__dirname, 'gridbot.log');
+let _botLogs = [];
 
-let _botProcess    = null;
-let _botLogs       = [];
-let _botRestarts   = 0;
-let _botStartTime  = null;
-let _botShouldRun  = false;  // flag: usuário quer o bot rodando
-let _botRestartTimer = null;
-const MAX_BOT_RESTARTS = 10;
-const BOT_RESTART_DELAY = 10000; // 10s entre reinícios do processo
-
-function _appendBotLog(line) {
-  const ts = new Date().toLocaleString('pt-BR');
-  const entry = `[${ts}] ${line}`;
-  _botLogs.push(entry);
-  if (_botLogs.length > 600) _botLogs = _botLogs.slice(-400);
-  try { fs.appendFileSync(path.join(__dirname, 'gridbot.log'), entry + '\n'); } catch {}
+function _blog(line) {
+  const e = '['+new Date().toLocaleString('pt-BR')+'] '+line;
+  _botLogs.push(e);
+  if (_botLogs.length > 500) _botLogs = _botLogs.slice(-300);
+  try { fs.appendFileSync(BOT_LOG_FILE, e+'\n'); } catch {}
 }
 
-function _loadEnvFile(envPath) {
-  const env = { ...process.env };
-  if (fs.existsSync(envPath)) {
-    fs.readFileSync(envPath, 'utf8').split('\n').forEach(line => {
-      const m = line.match(/^([^#=\s]+)\s*=\s*(.*)$/);
-      if (m) env[m[1].trim()] = m[2].trim().replace(/^["']|["']$/g, '');
-    });
-  }
+function _loadEnv(p) {
+  const env = {...process.env};
+  try { fs.readFileSync(p,'utf8').split('\n').forEach(l=>{const m=l.match(/^([^#=\s]+)\s*=\s*(.*)$/);if(m)env[m[1].trim()]=m[2].trim().replace(/^["']|["']$/g,'');}); } catch {}
   return env;
 }
 
-function _botIsRunning() {
-  if (_botProcess && !_botProcess.killed) {
-    try { process.kill(_botProcess.pid, 0); return true; } catch {}
-  }
-  return false;
+function _botPid() {
+  try { const o=execSync('pgrep -f gridbot.py 2>/dev/null | head -1',{encoding:'utf8',timeout:2000,stdio:['pipe','pipe','pipe']});const p=parseInt(o.trim());return isNaN(p)?null:p; } catch { return null; }
 }
 
-function _isPythonBotRunning() {
-  try {
-    const out = execSync("pgrep -f gridbot.py 2>/dev/null || true", { encoding:'utf8', timeout:2000, stdio:['pipe','pipe','pipe'] });
-    return out.trim().length > 0;
-  } catch { return false; }
-}
-
-function _getPythonBotPid() {
-  try {
-    const out = execSync("pgrep -f gridbot.py 2>/dev/null | head -1", { encoding:'utf8', timeout:2000, stdio:['pipe','pipe','pipe'] });
-    return out.trim() || null;
-  } catch { return null; }
-}
-
-function _tryFindPM2() {
-  const cmds = process.platform === 'win32'
-    ? ['pm2'] : ['pm2', '/usr/local/bin/pm2', '/usr/bin/pm2', (process.env.HOME||'')+'/.npm-global/bin/pm2'];
-  for (const cmd of cmds) {
-    try { execSync(cmd + ' --version', { encoding:'utf8', timeout:2000, stdio:'pipe' }); return cmd; }
-    catch {}
-  }
-  return null;
-}
-
-let _cachedBotEnv = null;
-const BOT_PID_FILE = path.join(process.env.DB_PATH || '/data', 'bot.pid');
-
-// ─── Lê PID do arquivo ────────────────────────────────────────────────────────
-function _readBotPid() {
-  try {
-    const p = parseInt(fs.readFileSync(BOT_PID_FILE, 'utf8').trim());
-    return isNaN(p) ? null : p;
-  } catch { return null; }
-}
-
-function _writeBotPid(pid) {
-  try { fs.writeFileSync(BOT_PID_FILE, String(pid), 'utf8'); } catch {}
-}
-
-function _clearBotPid() {
-  try { fs.unlinkSync(BOT_PID_FILE); } catch {}
-}
-
-// ─── Verifica se processo com PID está vivo ───────────────────────────────────
-function _isPidAlive(pid) {
-  if (!pid) return false;
-  try { process.kill(pid, 0); return true; } catch { return false; }
-}
-
-// ─── Spawn DETACHED — sobrevive a reinicializações do Node/EasyPanel ─────────
-// detached:true = processo Python em process group próprio
-// Node recebe SIGTERM do EasyPanel mas Python continua rodando
-function _spawnBot(botEnv) {
-  if (botEnv) _cachedBotEnv = botEnv;
-  botEnv = _cachedBotEnv;
-
-  const pyInterp  = process.platform === 'win32' ? 'python' : 'python3';
-  const botScript = path.join(__dirname, 'bot', 'gridbot.py');
-  const logFile   = path.join(__dirname, 'gridbot.log');
-
-  // Escreve logs diretamente no arquivo (stdio pipe não funciona com detached)
-  let outFd, errFd;
-  try {
-    outFd = fs.openSync(logFile, 'a');
-    errFd = fs.openSync(logFile, 'a');
-  } catch {
-    outFd = 'ignore';
-    errFd = 'ignore';
-  }
-
-  // Spawn Python diretamente com detached:true
-  // Node.js chama setsid() internamente → Python fica em session própria
-  // Python escreve seu próprio PID via BOT_PID_FILE → tracking confiável
-  const proc = spawn(pyInterp, [botScript], {
-    env:      botEnv,
-    cwd:      __dirname,
-    detached: true,   // nova sessão de processo (setsid interno do Node)
-    stdio:    ['ignore', outFd, errFd],
-  });
-
-  proc.unref(); // Node não espera Python terminar
-
-  // Fecha file descriptors no pai (filho já herdou)
-  try { if (typeof outFd === 'number') fs.closeSync(outFd); } catch {}
-  try { if (typeof errFd === 'number') fs.closeSync(errFd); } catch {}
-
-  _botProcess   = proc;
-  _botStartTime = Date.now();
-  // NÃO escrevemos proc.pid pois com detached o PID pode ser do wrapper
-  // Python escreve seu próprio PID em BOT_PID_FILE via os.getpid()
-  // Aguardamos Python escrever (até 5s)
-  _appendBotLog('🚀 Bot iniciado — aguardando Python escrever PID...');
-  let pidWaitAttempts = 0;
-  const pidWaitInterval = setInterval(() => {
-    pidWaitAttempts++;
-    const savedPid = _readBotPid();
-    if (savedPid && _isPidAlive(savedPid)) {
-      _appendBotLog('✅ Bot PID registrado: ' + savedPid);
-      clearInterval(pidWaitInterval);
-    } else if (pidWaitAttempts >= 10) {
-      clearInterval(pidWaitInterval);
-      _appendBotLog('⚠ PID não registrado após 5s — usando proc.pid=' + proc.pid);
-      _writeBotPid(proc.pid);
-    }
-  }, 500);
-
-  // Monitora saída sem bloquear (proc.on funciona mesmo com detached)
-  proc.on('exit', (code, sig) => {
-    _appendBotLog(`🛑 Bot encerrado (código=${code}, sinal=${sig})`);
-    _botProcess = null;
-    _clearBotPid();
-
-    if (_botShouldRun && code !== 2) {
-      if (_botRestarts >= MAX_BOT_RESTARTS) {
-        _appendBotLog(`❌ Máximo de ${MAX_BOT_RESTARTS} reinícios atingido.`);
-        _botShouldRun = false;
-        return;
-      }
-      _botRestarts++;
-      _appendBotLog(`🔄 Reiniciando em ${BOT_RESTART_DELAY/1000}s... (${_botRestarts}/${MAX_BOT_RESTARTS})`);
-      _botRestartTimer = setTimeout(() => {
-        if (_botShouldRun) _spawnBot(_cachedBotEnv);
-      }, BOT_RESTART_DELAY);
-    }
-  });
-
-  proc.on('error', err => {
-    _appendBotLog('❌ Erro: ' + err.message);
-    _botProcess = null;
-    _clearBotPid();
-  });
+async function _killAll() {
+  try { execSync('pkill -SIGTERM -f gridbot.py 2>/dev/null || true',{timeout:3000}); } catch {}
+  await new Promise(r=>setTimeout(r,2000));
+  try { execSync('pkill -SIGKILL -f gridbot.py 2>/dev/null || true',{timeout:2000}); } catch {}
+  await new Promise(r=>setTimeout(r,500));
 }
 
 app.get('/api/bot/status', requireAuth, (req, res) => {
-  // Fonte 1: PID file (sobrevive reinicializações do Node)
-  const savedPid   = _readBotPid();
-  const pidAlive   = savedPid ? _isPidAlive(savedPid) : false;
-  // Fonte 2: referência spawn em memória
-  const spawnAlive = _botIsRunning();
-  // Fonte 3: pgrep — detecta bot iniciado por versões anteriores sem PID file
-  let pgrepPid = null;
-  if (!pidAlive && !spawnAlive) {
-    try {
-      const out = execSync('pgrep -f gridbot.py 2>/dev/null | head -1', { encoding:'utf8', timeout:2000, stdio:['pipe','pipe','pipe'] });
-      const p = parseInt(out.trim());
-      if (!isNaN(p)) { pgrepPid = p; _writeBotPid(p); } // adota o processo existente
-    } catch {}
-  }
-
-  const running = pidAlive || spawnAlive || !!pgrepPid;
-  const pid     = running ? (savedPid || pgrepPid || _botProcess?.pid)?.toString() : null;
-
-  // Limpa PID file se processo não existe mais
-  if (savedPid && !pidAlive && !spawnAlive && !pgrepPid) {
-    _clearBotPid();
-    if (_botProcess) { _botProcess = null; }
-  }
-
-  // Uptime
-  let uptime = null;
-  if (running && _botStartTime) {
-    const s = Math.round((Date.now() - _botStartTime) / 1000);
-    uptime = s < 60 ? s+'s' : Math.floor(s/60)+'m '+(s%60)+'s';
-  }
-
-  res.json({
-    running,
-    status:     running ? 'online' : 'stopped',
-    pid,
-    restarts:   _botRestarts,
-    pm2_found:  false,
-    mode:       'native (detached)',
-    uptime,
-    should_run: _botShouldRun,
-  });
+  const pid = _botPid();
+  res.json({running:pid!==null,status:pid?'online':'stopped',pid:pid?String(pid):null,mode:'nativo',pm2_found:false});
 });
 
 app.post('/api/bot/start', requireAuth, async (req, res) => {
   try {
-    // Busca chaves Binance do DB
-    const user = db.get('SELECT binance_key, binance_secret, binance_secret_enc FROM users WHERE username=?', [req.user]);
-    const binanceKey    = user?.binance_key || '';
-    const binanceSecret = user?.binance_secret_enc
-      ? decryptSecret(user.binance_secret_enc)
-      : (user?.binance_secret || '');
+    const user = db.get('SELECT binance_key,binance_secret,binance_secret_enc FROM users WHERE username=?',[req.user]);
+    const apiKey = user?.binance_key||'';
+    const secret = user?.binance_secret_enc?decryptSecret(user.binance_secret_enc):(user?.binance_secret||'');
+    if (!apiKey||!secret) return res.status(400).json({ok:false,error:'Configure suas chaves Binance em Meu Perfil antes de iniciar o bot.'});
 
-    if (!binanceKey || !binanceSecret) {
-      return res.status(400).json({
-        ok: false,
-        error: 'Configure suas chaves Binance API em Meu Perfil antes de iniciar o bot.'
-      });
-    }
+    await _killAll();
 
-    // Monta ambiente completo
-    const botEnv = _loadEnvFile(path.resolve(BOT_ENV_PATH));
-    botEnv['BINANCE_API_KEY']    = binanceKey;
-    botEnv['BINANCE_SECRET_KEY'] = binanceSecret;
-    botEnv['PATH']           = botEnv['PATH']   || process.env.PATH   || '/usr/local/bin:/usr/bin:/bin';
-    botEnv['HOME']           = botEnv['HOME']   || process.env.HOME   || '/root';
-    botEnv['PYTHONUNBUFFERED']   = '1';
-    botEnv['BOT_PID_FILE'] = BOT_PID_FILE;
+    const env = _loadEnv(path.resolve(BOT_ENV_PATH));
+    env['BINANCE_API_KEY']    = apiKey;
+    env['BINANCE_SECRET_KEY'] = secret;
+    env['PYTHONUNBUFFERED']   = '1';
+    env['PATH'] = env['PATH']||process.env.PATH||'/usr/local/bin:/usr/bin:/bin';
+    env['HOME'] = env['HOME']||process.env.HOME||'/root';
 
-    // ── 1. Para PM2 se existir (versões anteriores podiam ter deixado PM2 rodando) ─
-    const pm2 = _tryFindPM2();
-    if (pm2) {
-      try { execSync(pm2 + ' stop cryptoedge-bot --silent 2>/dev/null', { timeout:4000 }); } catch {}
-      try { execSync(pm2 + ' delete cryptoedge-bot --silent 2>/dev/null', { timeout:4000 }); } catch {}
-      await new Promise(r => setTimeout(r, 1000)); // aguarda PM2 terminar
-    }
+    const botScript    = path.join(__dirname,'bot','gridbot.py');
+    const launchScript = path.join(__dirname,'bot','.launch.sh');
+    const envExports   = Object.entries(env).filter(([k])=>/^[A-Z0-9_]+$/.test(k)).map(([k,v])=>`export ${k}=${JSON.stringify(String(v))}`).join('\n');
 
-    // ── 2. Cancela restart timer e para spawn nativo se rodando ──────────────
-    if (_botRestartTimer) { clearTimeout(_botRestartTimer); _botRestartTimer = null; }
-    _botShouldRun = false;
-    if (_botIsRunning()) {
-      _botProcess.kill('SIGTERM');
-      await new Promise(r => setTimeout(r, 2000));
-    }
+    fs.writeFileSync(launchScript,`#!/bin/sh\n${envExports}\ncd ${JSON.stringify(__dirname)}\nexec python3 ${JSON.stringify(botScript)}\n`,{mode:0o755});
 
-    // ── 3. Garante que não sobrou NENHUM gridbot.py (espera terminar) ─────────
-    // NÃO usa pkill antes de verificar — espera o processo encerrar limpo
-    let killAttempts = 0;
-    while (killAttempts < 5) {
-      try {
-        const pidOut = execSync("pgrep -f gridbot.py 2>/dev/null | head -1", { encoding:'utf8', timeout:1500, stdio:['pipe','pipe','pipe'] });
-        if (!pidOut.trim()) break; // nenhum processo rodando — ok
-        execSync("pkill -SIGTERM -f gridbot.py 2>/dev/null || true", { timeout:2000 });
-        await new Promise(r => setTimeout(r, 1000));
-        killAttempts++;
-      } catch { break; }
-    }
-    // SIGKILL como último recurso
-    try { execSync("pkill -SIGKILL -f gridbot.py 2>/dev/null || true", { timeout:2000 }); } catch {}
-    await new Promise(r => setTimeout(r, 500)); // pequeno buffer antes de spawnar
+    execSync(`setsid nohup sh ${launchScript} >> ${BOT_LOG_FILE} 2>&1 &`,{timeout:5000});
 
-    // ── 4. Limpa estado e inicia novo processo ────────────────────────────────
-    _botProcess   = null;
-    _botRestarts  = 0;
-    _botShouldRun = true;
-    _spawnBot(botEnv);
+    let pid=null;
+    for (let i=0;i<10;i++) { await new Promise(r=>setTimeout(r,500)); pid=_botPid(); if(pid) break; }
+    if (!pid) return res.status(500).json({ok:false,error:'Bot não iniciou em 5s. Verifique logs.'});
 
-    res.json({ ok: true, message: 'Bot iniciado (modo nativo)', mode: 'native', pid: _botProcess?.pid });
-  } catch(e) {
-    res.status(500).json({ ok: false, error: 'Erro ao iniciar bot: ' + e.message.slice(0,300) });
-  }
+    _blog('🚀 Bot iniciado (PID '+pid+')');
+    res.json({ok:true,message:'Bot iniciado',pid:String(pid)});
+  } catch(e) { res.status(500).json({ok:false,error:'Erro: '+e.message.slice(0,200)}); }
 });
 
-app.post('/api/bot/stop', requireAuth, (req, res) => {
-  _botShouldRun = false;
-  if (_botRestartTimer) { clearTimeout(_botRestartTimer); _botRestartTimer = null; }
-
-  // Mata via PID file (processo detached)
-  const savedPid = _readBotPid();
-  if (savedPid && _isPidAlive(savedPid)) {
-    try { process.kill(savedPid, 'SIGTERM'); } catch {}
-  }
-
-  // Mata referência spawn se existir
-  if (_botIsRunning()) {
-    try { _botProcess.kill('SIGTERM'); } catch {}
-  }
-
-  // pkill como último recurso
-  try { execSync("pkill -f gridbot.py 2>/dev/null || true", { timeout:3000 }); } catch {}
-
-  _appendBotLog('🛑 Bot parado pelo usuário');
-  setTimeout(() => {
-    _botProcess  = null;
-    _botStartTime = null;
-    _clearBotPid();
-  }, 3000);
-
-  res.json({ ok: true, message: 'Bot parado' });
+app.post('/api/bot/stop', requireAuth, async (req, res) => {
+  _blog('🛑 Bot parado pelo usuário');
+  await _killAll();
+  res.json({ok:true,message:'Bot parado'});
 });
 
 app.get('/api/bot/logs', requireAuth, (req, res) => {
-  try {
-    const logFile = path.join(__dirname, 'gridbot.log');
-    if (fs.existsSync(logFile)) {
-      const lines = fs.readFileSync(logFile, 'utf8').trim().split('\n').filter(Boolean).slice(-100);
-      if (lines.length) return res.json({ ok: true, lines, source: 'file' });
-    }
-  } catch {}
-  res.json({ ok: true, lines: _botLogs.slice(-100), source: 'memory' });
+  try { if(fs.existsSync(BOT_LOG_FILE)){const l=fs.readFileSync(BOT_LOG_FILE,'utf8').trim().split('\n').filter(Boolean).slice(-100);if(l.length) return res.json({ok:true,lines:l});} } catch {}
+  res.json({ok:true,lines:_botLogs.slice(-100)});
 });
 
 // ─── Backtesting ──────────────────────────────────────────────────────────────
