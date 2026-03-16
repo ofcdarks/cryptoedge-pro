@@ -3768,6 +3768,8 @@ async function runAnalysisAI() {
     if (status) status.textContent = (p ? p.base : sym.replace('USDT','')) + '/USDT ' + tf + ' — análise concluída ✅';
 
     renderAnalysisResults(data);
+    // Build automatic setup score checklist
+    buildSetupScore(data);
     // Realtime chart with markers
     const sym2 = document.getElementById('ai-symbol')?.value || 'BTCUSDT';
     const tf2  = document.getElementById('ai-tf')?.value     || '1h';
@@ -5167,6 +5169,294 @@ async function loadRealBalance() {
     if (subEl) subEl.textContent = '❌ Erro de conexão';
     console.error('[Balance]', e.message);
   }
+}
+
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FIND BEST OPPORTUNITIES — scan top pairs and rank by probability
+// ─────────────────────────────────────────────────────────────────────────────
+async function findBestOpportunities() {
+  const status = document.getElementById('sc-status');
+  const btn    = document.querySelector('[onclick="findBestOpportunities()"]');
+  if (btn) { btn.textContent = '⏳ Analisando...'; btn.disabled = true; }
+  if (status) status.textContent = 'Analisando os top 20 pares...';
+
+  // Switch to scanner panel if not already there
+  document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  const nav = document.querySelector('[data-panel="scanner"]');
+  const pan = document.getElementById('panel-scanner');
+  if (nav) nav.classList.add('active');
+  if (pan) pan.classList.add('active');
+  document.querySelector('.content')?.scrollTo(0,0);
+
+  const TOP_PAIRS = [
+    'BTCUSDT','ETHUSDT','BNBUSDT','SOLUSDT','XRPUSDT',
+    'ADAUSDT','AVAXUSDT','DOGEUSDT','DOTUSDT','LINKUSDT',
+    'MATICUSDT','UNIUSDT','ARBUSDT','OPUSDT','FETUSDT',
+    'LDOUSDT','INJUSDT','SUIUSDT','TIAUSDT','SEIUSDT'
+  ];
+
+  const tf = document.getElementById('sc-timeframe')?.value || '1h';
+  const results = [];
+  let done = 0;
+
+  await Promise.allSettled(TOP_PAIRS.map(async sym => {
+    try {
+      const klines = await fetchKlines(sym, tf, 100);
+      const ind    = computeIndicators(klines);
+      const pred   = predictNext(klines, ind);
+      const ticker = await fetch('/api/binance/price?symbol=' + sym)
+                       .then(r => r.json()).catch(() => ({}));
+      const price  = parseFloat(ticker.lastPrice || ticker.price || klines.at(-1)?.[4] || 0);
+      const chgPct = parseFloat(ticker.priceChangePercent || 0);
+
+      // Score formula: confidence + RSI health + SMC + no extremes
+      const conf    = (pred?.confidence || 0) * 100;
+      const rsi     = ind.rsi14 || 50;
+      const rsiOk   = rsi >= 35 && rsi <= 65; // healthy zone
+      const dir     = pred?.direction;
+      const smcUp   = ind.smcBias === 'bullish';
+      const smcDn   = ind.smcBias === 'bearish';
+
+      // Only score non-neutral signals
+      if (!dir || dir === 'neutral') { done++; return; }
+
+      // R:R estimation
+      const atr  = ind.atr || price * 0.01;
+      const sl   = atr * 1.5;
+      const tp1  = atr * 2;
+      const rr   = tp1 / sl;
+
+      // Composite score (0-100)
+      let score = conf * 0.4;                    // 40% from confidence
+      if (rsiOk)  score += 20;                   // 20% RSI in healthy zone
+      if (rr >= 2) score += 20;                  // 20% good R:R
+      if (dir === 'up' && smcUp) score += 20;    // 20% SMC confirms
+      if (dir === 'down' && smcDn) score += 20;
+
+      results.push({
+        sym, price, chgPct, conf, rsi, rr: rr.toFixed(1),
+        dir, score: Math.round(score), atr,
+        sl: dir==='up' ? price-sl : price+sl,
+        tp1: dir==='up' ? price+tp1 : price-tp1,
+        indicators: ind, prediction: pred
+      });
+    } catch(e) {}
+    done++;
+    if (status) status.textContent = 'Analisando... ' + done + '/' + TOP_PAIRS.length;
+  }));
+
+  // Sort by score DESC
+  results.sort((a,b) => b.score - a.score);
+
+  if (btn) { btn.textContent = '⚡ Melhores Oportunidades'; btn.disabled = false; }
+  if (status) status.textContent = results.length + ' oportunidades encontradas';
+
+  // Display in scanner table
+  const emptyEl = document.getElementById('sc-empty');
+  const gridEl  = document.getElementById('sc-grid');
+  if (emptyEl) emptyEl.style.display = 'none';
+  if (gridEl)  gridEl.style.display  = 'block';
+
+  // Summary cards
+  const longs  = results.filter(r => r.dir === 'up').length;
+  const shorts = results.filter(r => r.dir === 'down').length;
+  const best   = results[0];
+  const sumEl  = document.getElementById('sc-summary');
+  if (sumEl) sumEl.innerHTML =
+    '<div class="metric"><label>Oportunidades</label><div class="val">' + results.length + '</div></div>' +
+    '<div class="metric"><label>🟢 Long</label><div class="val green">' + longs + '</div></div>' +
+    '<div class="metric"><label>🔴 Short</label><div class="val red">' + shorts + '</div></div>' +
+    '<div class="metric"><label>⭐ Melhor</label><div class="val gold">' + (best?.sym.replace('USDT','') || '—') + '</div></div>';
+
+  // Table
+  const tbody = document.getElementById('sc-table');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  results.slice(0,15).forEach((r, i) => {
+    const dirLabel = r.dir === 'up' ? '🟢 LONG' : '🔴 SHORT';
+    const dirColor = r.dir === 'up' ? 'var(--green)' : 'var(--red)';
+    const scoreColor = r.score >= 70 ? 'var(--green)' : r.score >= 50 ? 'var(--gold)' : 'var(--t3)';
+    const rsiColor   = r.rsi >= 35 && r.rsi <= 65 ? 'var(--green)' : r.rsi > 70 || r.rsi < 30 ? 'var(--red)' : 'var(--gold)';
+    const tr = document.createElement('tr');
+    if (i === 0) tr.style.background = 'rgba(240,185,11,0.05)';
+    tr.innerHTML =
+      '<td style="font-weight:700;color:var(--gold)">' + (i+1) + '</td>' +
+      '<td style="font-weight:700;font-family:var(--mono)">' + r.sym.replace('USDT','') + '/USDT</td>' +
+      '<td style="font-family:var(--mono);color:var(--green)">$' + r.price.toLocaleString('pt-BR',{minimumFractionDigits:2}) + '</td>' +
+      '<td style="color:' + (r.chgPct>=0?'var(--green)':'var(--red)') + ';font-family:var(--mono)">' + (r.chgPct>=0?'+':'') + r.chgPct.toFixed(2) + '%</td>' +
+      '<td style="color:' + dirColor + ';font-weight:700">' + dirLabel + '</td>' +
+      '<td style="font-family:var(--mono)">' + r.conf.toFixed(0) + '%</td>' +
+      '<td style="color:' + scoreColor + ';font-weight:700;font-family:var(--mono)">' + r.score + '/100</td>' +
+      '<td style="color:' + rsiColor + ';font-family:var(--mono)">' + r.rsi.toFixed(0) + '</td>' +
+      '<td style="font-family:var(--mono)">1:' + r.rr + '</td>' +
+      '<td>' +
+        '<button data-sym="' + r.sym + '" onclick="switchToAnalysis(this.dataset.sym)" style="font-size:10px;padding:4px 8px;background:var(--gold);border:none;border-radius:4px;color:#000;cursor:pointer;font-weight:700">⚡ Analisar</button>' +
+      '</td>';
+    tbody.appendChild(tr);
+  });
+}
+
+function switchToAnalysis(sym) {
+  // Navigate to Analysis AI with this symbol
+  document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  const nav = document.querySelector('[data-panel="analysisai"]');
+  const pan = document.getElementById('panel-analysisai');
+  if (nav) nav.classList.add('active');
+  if (pan) pan.classList.add('active');
+  document.querySelector('.content')?.scrollTo(0,0);
+  const symSel = document.getElementById('ai-symbol');
+  if (symSel) symSel.value = sym;
+  buildAnalysisSymbolSelector();
+  // Auto-run analysis
+  setTimeout(() => {
+    const runBtn = document.getElementById('ai-run-btn');
+    if (runBtn) runBtn.click();
+  }, 300);
+}
+
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SETUP SCORE — Automatic checklist after every analysis
+// ─────────────────────────────────────────────────────────────────────────────
+function buildSetupScore(data) {
+  const card    = document.getElementById('ai-setup-score');
+  const checks  = document.getElementById('setup-checks');
+  const verdict = document.getElementById('setup-verdict');
+  const rec     = document.getElementById('setup-recommendation');
+  if (!card || !checks) return;
+
+  const ind  = data.indicators || {};
+  const sg   = generateTradingSuggestion(data);
+  const dir  = sg?.direction || 'flat';
+  const isLong  = dir === 'long';
+  const isShort = dir === 'short';
+  const rsi     = ind.rsi14 || 50;
+  const macdH   = ind.macdHist || 0;
+  const adx     = ind.adx || 0;
+  const vwap    = ind.vwap || 0;
+  const price   = data.price || 0;
+  const smcBias = data.smc_bias || '';
+  const techScore = data.tech_score || 0;
+  const conf    = sg?.conf || 0;
+  const rr      = sg ? (sg.tp1 - price) / Math.abs(price - sg.slPrice) : 0;
+
+  // Define checks
+  const checkList = [
+    {
+      label: 'Gauge técnico forte',
+      ok:    Math.abs(techScore) >= 30,
+      detail: `Score: ${techScore > 0 ? '+' : ''}${techScore}${Math.abs(techScore)>=30?' ✓':' (min. ±30)'}`,
+      weight: 15
+    },
+    {
+      label: 'RSI em zona saudável',
+      ok:    rsi >= 35 && rsi <= 68,
+      detail: `RSI: ${rsi.toFixed(1)}${rsi>=35&&rsi<=68?' ✓':rsi>70?' (sobrecomprado ⚠️)':' (sobrevendido ⚠️)'}`,
+      weight: 15
+    },
+    {
+      label: 'MACD confirma direção',
+      ok:    (isLong && macdH > 0) || (isShort && macdH < 0) || (!isLong && !isShort),
+      detail: `Histograma: ${macdH > 0 ? '+' : ''}${macdH.toFixed(2)}`,
+      weight: 10
+    },
+    {
+      label: 'ADX — tendência forte',
+      ok:    adx >= 20,
+      detail: `ADX: ${adx.toFixed(1)}${adx>=25?' (forte ✓)':adx>=20?' (moderado)':' (fraco ⚠️)'}`,
+      weight: 10
+    },
+    {
+      label: 'VWAP confirma posição',
+      ok:    (isLong && price > vwap) || (isShort && price < vwap) || !vwap,
+      detail: `Preço ${price > vwap ? 'acima' : 'abaixo'} do VWAP (${vwap > 0 ? '$'+vwap.toLocaleString('pt-BR',{minimumFractionDigits:2}) : '—'})`,
+      weight: 10
+    },
+    {
+      label: 'SMC estrutura alinhada',
+      ok:    (isLong && smcBias?.toLowerCase().includes('alta')) ||
+             (isShort && smcBias?.toLowerCase().includes('baixa')) ||
+             smcBias?.toLowerCase().includes('altista') ||
+             smcBias?.toLowerCase().includes('baixista') && isShort,
+      detail: `Viés SMC: ${smcBias || '—'}`,
+      weight: 15
+    },
+    {
+      label: 'Confiança do sinal ≥65%',
+      ok:    conf >= 65,
+      detail: `Confiança: ${conf}%${conf>=65?' ✓':' (min. 65%)'}`,
+      weight: 10
+    },
+    {
+      label: 'R:R mínimo 1:2',
+      ok:    sg && Math.abs(rr) >= 2,
+      detail: `R:R: 1:${Math.abs(rr).toFixed(1)}${Math.abs(rr)>=2?' ✓':' (min. 1:2)'}`,
+      weight: 15
+    },
+  ];
+
+  // Calculate score
+  let totalScore = 0;
+  let passCount  = 0;
+  checkList.forEach(c => { if (c.ok) { totalScore += c.weight; passCount++; } });
+
+  // Render checks
+  checks.innerHTML = '';
+  checkList.forEach(c => {
+    const div = document.createElement('div');
+    div.style.cssText = 'display:flex;align-items:flex-start;gap:8px;padding:7px 10px;border-radius:6px;background:' +
+      (c.ok ? 'rgba(63,185,80,0.07)' : 'rgba(248,81,73,0.07)') + ';border:1px solid ' +
+      (c.ok ? 'rgba(63,185,80,0.2)' : 'rgba(248,81,73,0.15)');
+    div.innerHTML =
+      '<span style="font-size:16px;flex-shrink:0;margin-top:-1px">' + (c.ok ? '✅' : '❌') + '</span>' +
+      '<div>' +
+        '<div style="font-size:12px;font-weight:600;color:' + (c.ok ? 'var(--green)' : 'var(--red)') + '">' + c.label + '</div>' +
+        '<div style="font-size:10px;color:var(--t3);margin-top:1px">' + c.detail + '</div>' +
+      '</div>';
+    checks.appendChild(div);
+  });
+
+  // Verdict badge
+  const verdictConfig =
+    totalScore >= 80 ? { txt:'⚡ SETUP IDEAL — ENTRAR!',   bg:'#3FB950', color:'#000' } :
+    totalScore >= 60 ? { txt:'⚠️ SETUP MODERADO — CUIDADO', bg:'#F0B90B', color:'#000' } :
+    totalScore >= 40 ? { txt:'🟡 SETUP FRACO — AGUARDAR',   bg:'rgba(240,185,11,0.2)', color:'#F0B90B' } :
+                       { txt:'🔴 NÃO ENTRAR — SETUP RUIM',  bg:'rgba(248,81,73,0.15)', color:'#F85149' };
+
+  verdict.textContent   = verdictConfig.txt + '  (' + totalScore + '/100)';
+  verdict.style.background = verdictConfig.bg;
+  verdict.style.color       = verdictConfig.color;
+  verdict.style.border      = '1px solid ' + verdictConfig.bg;
+
+  // Recommendation box
+  if (rec) {
+    rec.style.display = 'block';
+    const missing = checkList.filter(c => !c.ok).map(c => c.label);
+    if (totalScore >= 80) {
+      rec.style.background = 'rgba(63,185,80,0.08)';
+      rec.style.border     = '1px solid rgba(63,185,80,0.3)';
+      rec.style.color      = 'var(--green)';
+      rec.innerHTML = '✅ <strong>' + passCount + '/8 critérios atendidos.</strong> Setup com alta probabilidade. Use o Stop Loss de $' +
+        (sg?.slPrice ? sg.slPrice.toLocaleString('pt-BR',{minimumFractionDigits:2}) : '—') + ' e realize parcial no TP1.';
+    } else {
+      rec.style.background = 'rgba(248,81,73,0.06)';
+      rec.style.border     = '1px solid rgba(248,81,73,0.2)';
+      rec.style.color      = 'var(--t2)';
+      rec.innerHTML = '⏳ <strong>' + passCount + '/8 critérios atendidos.</strong> Aguarde: ' +
+        missing.slice(0,2).map(m => '<em>' + m + '</em>').join(', ') +
+        (missing.length > 2 ? ' +' + (missing.length-2) + ' outros.' : '.');
+    }
+  }
+
+  card.style.display = 'block';
+  
+  // Scroll to setup score
+  setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 200);
 }
 
 

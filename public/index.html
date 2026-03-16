@@ -1414,6 +1414,7 @@
               </select>
             </div>
             <button class="btn btn-gold" id="sc-btn" onclick="runScanner()">🔍 Escanear</button>
+            <button class="btn" onclick="findBestOpportunities()" style="background:rgba(240,185,11,0.15);border:1px solid rgba(240,185,11,0.5);color:var(--gold);font-size:12px;font-weight:700" title="Analisa os top 20 pares e mostra os melhores setups">⚡ Melhores Oportunidades</button>
             <span id="sc-status" style="font-size:12px;color:var(--t3);font-family:var(--mono)"></span>
           </div>
         </div>
@@ -1428,7 +1429,7 @@
               <div class="grid g4" id="sc-summary" style="margin-bottom:12px"></div>
               <div class="table-wrap">
                 <table>
-                  <thead><tr><th>#</th><th>Par</th><th>Preço</th><th>24h %</th><th>Tendência</th><th>Padrão</th><th>Sinal</th><th>Confiança</th><th>Alvo</th><th>Ação</th></tr></thead>
+                  <thead><tr><th>#</th><th>Par</th><th>Preço</th><th>24h %</th><th>Sinal</th><th>Conf.</th><th>Score</th><th>RSI</th><th>R:R</th><th>Ação</th></tr></thead>
                   <tbody id="sc-table"></tbody>
                 </table>
               </div>
@@ -1477,6 +1478,18 @@
 
           <!-- Trading Suggestion — generated dynamically -->
           <div id="ai-suggestion" style="display:none;margin-bottom:12px"></div>
+
+          <!-- ── Setup Score Card ── -->
+          <div id="ai-setup-score" style="display:none;margin-bottom:12px">
+            <div class="card" style="padding:14px 16px">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+                <div style="font-size:14px;font-weight:700;color:var(--t1)">🎯 Checklist de Confluências</div>
+                <div id="setup-verdict" style="padding:6px 16px;border-radius:20px;font-size:13px;font-weight:700">—</div>
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px" id="setup-checks"></div>
+              <div id="setup-recommendation" style="margin-top:10px;padding:10px 14px;border-radius:8px;font-size:13px;display:none"></div>
+            </div>
+          </div>
 
           <!-- Realtime chart with entry/exit markers -->
           <div class="card" style="margin-bottom:12px;padding:12px">
