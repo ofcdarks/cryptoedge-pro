@@ -534,20 +534,24 @@ app.get('/api/binance/balance', requireAuth, async (req, res) => {
       : (user?.binance_secret || process.env.BINANCE_SECRET_KEY || '');
     if (!secret) return res.json({ ok: false, error: 'Binance Secret não configurado', simulated: true, balance: 500 });
 
-    // Sync timestamp with Binance server to avoid "Timestamp for this request" error
+    // Sync timestamp — obtém serverTime da Binance para evitar "Timestamp ahead/behind"
     let ts = Date.now();
     try {
-      const timeR = await axios.get('https://api.binance.com/api/v3/time', { timeout: 3000 });
+      const timeR = await axios.get('https://api.binance.com/api/v3/time', { timeout: 4000 });
       ts = timeR.data.serverTime || ts;
     } catch {}
 
-    const mkSig = (params) => crypto.createHmac('sha256', secret).update(params).digest('hex');
-    const sigF   = mkSig(`timestamp=${ts}&recvWindow=10000`);
+    // Assina a query string EXATA que será enviada (ordem importa para HMAC)
+    const mkSig = (qs) => crypto.createHmac('sha256', secret).update(qs).digest('hex');
+    const mkQS  = (extra='') => {
+      const base = `timestamp=${ts}&recvWindow=15000${extra ? '&'+extra : ''}`;
+      return base + '&signature=' + mkSig(base);
+    };
     let totalUSDT = 0, walletData = [], source = 'futures';
 
     try {
-      const rF = await axios.get('https://fapi.binance.com/fapi/v2/balance', {
-        params: { timestamp: ts, recvWindow: 10000, signature: sigF }, headers: { 'X-MBX-APIKEY': binanceKey }, timeout: 8000
+      const rF = await axios.get('https://fapi.binance.com/fapi/v2/balance?' + mkQS(), {
+        headers: { 'X-MBX-APIKEY': binanceKey }, timeout: 8000
       });
       const futuresBalances = rF.data.filter(b => parseFloat(b.balance) > 0);
       totalUSDT = futuresBalances.reduce((s,b) => s + parseFloat(b.balance), 0);
@@ -557,9 +561,10 @@ app.get('/api/binance/balance', requireAuth, async (req, res) => {
       }));
     } catch {
       source = 'spot';
-      const sigS = mkSig(`timestamp=${ts}&recvWindow=10000`);
-      const rS = await axios.get('https://api.binance.com/api/v3/account', {
-        params: { timestamp: ts, recvWindow: 10000, signature: sigS }, headers: { 'X-MBX-APIKEY': binanceKey }, timeout: 8000
+      // Re-sync timestamp para o spot (o tempo passou desde a tentativa futures)
+      try { const tr=await axios.get('https://api.binance.com/api/v3/time',{timeout:3000}); ts=tr.data.serverTime||ts; } catch {}
+      const rS = await axios.get('https://api.binance.com/api/v3/account?' + mkQS(), {
+        headers: { 'X-MBX-APIKEY': binanceKey }, timeout: 8000
       });
       const spotBalances = rS.data.balances.filter(b => parseFloat(b.free) + parseFloat(b.locked) > 0);
       walletData = spotBalances.map(b => ({
@@ -761,22 +766,23 @@ async function _killAll() {
   await new Promise(r=>setTimeout(r,500));
 }
 
-// Detecta qual comando de detached-spawn funciona neste SO/container
-function _spawnDetached(launchScript) {
-  // Tenta setsid (Alpine busybox ou util-linux)
-  // Fallback: subshell + nohup (funciona em qualquer sh POSIX)
-  const cmds = [
-    `setsid nohup sh ${launchScript} >> ${BOT_LOG_FILE} 2>&1 &`,
-    `(nohup sh ${launchScript} >> ${BOT_LOG_FILE} 2>&1 &)`,
-    `nohup sh ${launchScript} >> ${BOT_LOG_FILE} 2>&1 &`,
-  ];
-  for (const cmd of cmds) {
-    try {
-      execSync(cmd, {timeout:5000, stdio:['pipe','pipe','pipe']});
-      return true;
-    } catch { /* tenta o próximo */ }
-  }
-  return false;
+// Lança Python totalmente desacoplado do Node (spawn nativo com detached:true)
+// detached:true → novo process group (setsid interno do Node)
+// unref()       → Node não espera o filho e não o inclui em seu process group
+// Isso garante que o Python sobrevive a SIGTERM enviado ao Node/container
+function _spawnDetached(env, botScript) {
+  let fd;
+  try { fd = fs.openSync(BOT_LOG_FILE, 'a'); } catch { fd = 'ignore'; }
+  const child = spawn('python3', [botScript], {
+    detached: true,
+    stdio:    ['ignore', fd, fd],
+    env:      env,
+    cwd:      __dirname,
+  });
+  child.unref(); // Node não aguarda e não sinaliza este processo
+  if (typeof fd === 'number') { try { fs.closeSync(fd); } catch {} }
+  _blog(`🔧 spawn detached PID=${child.pid}`);
+  return child.pid;
 }
 
 // Persiste/limpa flag de autostart no DB de configurações
@@ -822,19 +828,9 @@ app.post('/api/bot/start', requireAuth, async (req, res) => {
     env['PATH'] = env['PATH']||process.env.PATH||'/usr/local/bin:/usr/bin:/bin';
     env['HOME'] = env['HOME']||process.env.HOME||'/root';
 
-    // ── Escreve script de lançamento com todas as variáveis exportadas ────────
-    const botScript    = path.join(__dirname,'bot','gridbot.py');
-    const launchScript = path.join(__dirname,'bot','.launch.sh');
-    const envExports   = Object.entries(env)
-      .filter(([k])=>/^[A-Z][A-Z0-9_]*$/.test(k))
-      .map(([k,v])=>`export ${k}=${JSON.stringify(String(v))}`)
-      .join('\n');
-    fs.writeFileSync(launchScript,
-      `#!/bin/sh\n${envExports}\ncd ${JSON.stringify(__dirname)}\nexec python3 ${JSON.stringify(botScript)}\n`,
-      {mode:0o755});
-
-    // ── Lança Python desacoplado do Node (sobrevive a SIGTERM no Node) ────────
-    _spawnDetached(launchScript);
+    // ── Lança Python com spawn nativo Node (detached:true + unref) ─────────────
+    const botScript = path.join(__dirname,'bot','gridbot.py');
+    _spawnDetached(env, botScript);
 
     // ── Aguarda até 8 s pelo PID ──────────────────────────────────────────────
     let pid = null;

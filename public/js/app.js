@@ -1979,7 +1979,7 @@ async function loadBotStatus() {
     if (rst) rst.textContent = d.restarts !== undefined ? d.restarts : '—';
     // Show mode badge
     const modeEl = document.getElementById('bc-mode');
-    if (modeEl) { modeEl.textContent = d.should_run && !running ? 'Reiniciando...' : 'Nativo (auto-restart)'; modeEl.style.color = 'var(--blue)'; }
+    if (modeEl) { modeEl.textContent = d.starting ? '⏳ Iniciando...' : (running ? 'Nativo (detached)' : 'Parado'); modeEl.style.color = running ? 'var(--green)' : 'var(--blue)'; }
   } catch(e) {}
 }
 
