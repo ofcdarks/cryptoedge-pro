@@ -714,73 +714,169 @@ app.post('/api/bot/config', requireAuth, (req, res) => {
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
-app.get('/api/bot/status', requireAuth, (req, res) => {
-  const isWin = process.platform === 'win32';
-  const pm2Cmds = isWin
-    ? ['pm2 jlist','npx pm2 jlist']
-    : ['pm2 jlist','npx pm2 jlist',(process.env.HOME||'')+'/.npm-global/bin/pm2 jlist','/usr/local/bin/pm2 jlist','/usr/bin/pm2 jlist'];
-  for (const cmd of pm2Cmds) {
-    try {
-      const out  = execSync(cmd, { encoding:'utf8', timeout:5000, stdio:['pipe','pipe','pipe'] });
-      const raw  = (out||'').trim();
-      const jsonStart = raw.lastIndexOf('[');
-      const jsonStr   = jsonStart >= 0 ? raw.slice(jsonStart) : raw;
-      let list = []; try { list = JSON.parse(jsonStr||'[]'); } catch { list = []; }
-      const bot = Array.isArray(list) ? list.find(p => p.name === 'cryptoedge-bot') : null;
-      if (bot) return res.json({ running: bot.pm2_env?.status==='online', status: bot.pm2_env?.status, pid: bot.pid, restarts: bot.pm2_env?.restart_time, pm2_found: true });
-      return res.json({ running: false, status: 'stopped', pid: null, pm2_found: true });
-    } catch { continue; }
+// ─── Bot Process Manager (PM2 com fallback para spawn nativo) ─────────────────
+// Em Docker/EasyPanel PM2 não está disponível — usa spawn nativo do Node.js
+let _botProcess = null;  // referência ao processo filho quando rodando sem PM2
+let _botLogs    = [];    // buffer de logs em memória (sem PM2)
+let _botRestarts= 0;
+let _botStartTime = null;
+
+function _tryFindPM2() {
+  const cmds = process.platform === 'win32'
+    ? ['pm2'] : ['pm2', '/usr/local/bin/pm2', '/usr/bin/pm2',
+                  (process.env.HOME||'')+'/.npm-global/bin/pm2'];
+  for (const cmd of cmds) {
+    try { execSync(cmd + ' --version', { encoding:'utf8', timeout:2000, stdio:'pipe' }); return cmd; }
+    catch {}
   }
-  res.json({ running: false, status: 'pm2_not_found', pid: null, pm2_found: false });
+  return null;
+}
+
+function _botIsRunning() {
+  if (_botProcess && !_botProcess.killed) {
+    try { process.kill(_botProcess.pid, 0); return true; } catch {}
+  }
+  return false;
+}
+
+function _loadEnvFile(envPath) {
+  const env = { ...process.env };
+  if (fs.existsSync(envPath)) {
+    fs.readFileSync(envPath, 'utf8').split('\n').forEach(line => {
+      const m = line.match(/^([^#=\s]+)\s*=\s*(.*)$/);
+      if (m) env[m[1].trim()] = m[2].trim().replace(/^["']|["']$/g, '');
+    });
+  }
+  return env;
+}
+
+function _appendBotLog(line) {
+  const ts = new Date().toLocaleString('pt-BR');
+  _botLogs.push(`[${ts}] ${line}`);
+  if (_botLogs.length > 500) _botLogs = _botLogs.slice(-300);
+  // Also write to file
+  try {
+    const logFile = path.join(__dirname, 'gridbot.log');
+    fs.appendFileSync(logFile, `[${ts}] ${line}\n`);
+  } catch {}
+}
+
+app.get('/api/bot/status', requireAuth, (req, res) => {
+  // 1. Try PM2 first
+  const pm2 = _tryFindPM2();
+  if (pm2) {
+    try {
+      const out = execSync(pm2 + ' jlist', { encoding:'utf8', timeout:5000, stdio:['pipe','pipe','pipe'] });
+      const raw = (out||'').trim();
+      const jsonStart = raw.lastIndexOf('[');
+      let list = [];
+      try { list = JSON.parse(jsonStart >= 0 ? raw.slice(jsonStart) : raw); } catch {}
+      const bot = Array.isArray(list) ? list.find(p => p.name === 'cryptoedge-bot') : null;
+      if (bot) return res.json({ running: bot.pm2_env?.status==='online', status: bot.pm2_env?.status, pid: bot.pid, restarts: bot.pm2_env?.restart_time, pm2_found: true, mode: 'pm2' });
+      return res.json({ running: false, status: 'stopped', pid: null, pm2_found: true, mode: 'pm2' });
+    } catch {}
+  }
+  // 2. Fallback: spawn nativo
+  const running = _botIsRunning();
+  res.json({
+    running,
+    status:    running ? 'online' : 'stopped',
+    pid:       running ? _botProcess?.pid : null,
+    restarts:  _botRestarts,
+    pm2_found: false,
+    mode:      'native',
+    uptime:    running && _botStartTime ? Math.round((Date.now()-_botStartTime)/1000)+'s' : null,
+  });
 });
 
 app.post('/api/bot/start', requireAuth, (req, res) => {
   try {
-    const isWin    = process.platform === 'win32';
-    const pyInterp = isWin ? 'python' : 'python3';
+    if (_botIsRunning()) return res.json({ ok: true, message: 'Bot já está rodando' });
+
+    const pyInterp = process.platform === 'win32' ? 'python' : 'python3';
     const botScript= path.join(__dirname, 'bot', 'gridbot.py');
     const envFile  = path.resolve(BOT_ENV_PATH);
-    const pm2Paths = isWin ? ['pm2','npx pm2'] : ['pm2','npx pm2',(process.env.HOME||'')+'/.npm-global/bin/pm2','/usr/local/bin/pm2','/usr/bin/pm2'];
-    const scriptExt= isWin ? '.bat' : '.sh';
-    const launcher = path.join(__dirname, 'bot', 'start_bot' + scriptExt);
-    if (isWin) {
-      fs.writeFileSync(launcher, `@echo off\ncd /d "${__dirname}"\nfor /f "tokens=1,* delims==" %%a in (${envFile}) do (if not "%%a"=="" if not "%%a:~0,1%"=="#" set "%%a=%%b")\npython "${botScript}"\r\n`, 'utf8');
-    } else {
-      fs.writeFileSync(launcher, `#!/bin/sh\ncd "${__dirname}"\n[ -f "${envFile}" ] && export $(grep -v "^#" "${envFile}" | xargs)\n"${pyInterp}" "${botScript}"\n`, { encoding:'utf8', mode:0o755 });
-    }
-    let started = false, lastErr = '';
-    for (const pm2 of pm2Paths) {
+    const botEnv   = _loadEnvFile(envFile);
+
+    // 1. Tenta PM2
+    const pm2 = _tryFindPM2();
+    if (pm2) {
+      const launcher = path.join(__dirname, 'bot', 'start_bot.sh');
+      fs.writeFileSync(launcher,
+        `#!/bin/sh\ncd "${__dirname}"\n[ -f "${envFile}" ] && export $(grep -v "^#" "${envFile}" | xargs 2>/dev/null)\n"${pyInterp}" "${botScript}"\n`,
+        { encoding:'utf8', mode:0o755 });
       try {
-        const startCmd = isWin ? `${pm2} start "${launcher}" --name cryptoedge-bot` : `${pm2} start "${launcher}" --name cryptoedge-bot --interpreter bash`;
-        execSync(startCmd, { encoding:'utf8', timeout:10000, cwd: __dirname });
-        started = true; break;
-      } catch(e2) { lastErr = e2.message; }
+        execSync(`${pm2} start "${launcher}" --name cryptoedge-bot --interpreter bash`, { encoding:'utf8', timeout:10000, cwd:__dirname });
+        return res.json({ ok: true, message: 'Bot iniciado via PM2', mode: 'pm2' });
+      } catch(pm2Err) {
+        // PM2 falhou — usa spawn
+        console.warn('[Bot] PM2 falhou, usando spawn nativo:', pm2Err.message.slice(0,100));
+      }
     }
-    if (!started) throw new Error('PM2 falhou: ' + lastErr.slice(0,200));
-    res.json({ ok: true, message: 'Bot iniciado com PM2' });
-  } catch(e) { res.status(500).json({ ok: false, error: 'Erro ao iniciar: ' + e.message.slice(0,300) }); }
+
+    // 2. Fallback: spawn nativo (funciona em Docker sem PM2)
+    _botProcess = spawn(pyInterp, [botScript], {
+      env:      botEnv,
+      cwd:      __dirname,
+      detached: false,
+      stdio:    ['ignore', 'pipe', 'pipe'],
+    });
+    _botStartTime = Date.now();
+    _appendBotLog('🚀 Bot iniciado (PID ' + _botProcess.pid + ')');
+
+    _botProcess.stdout.on('data', d => String(d).split('\n').filter(Boolean).forEach(_appendBotLog));
+    _botProcess.stderr.on('data', d => String(d).split('\n').filter(Boolean).forEach(l => _appendBotLog('⚠ '+l)));
+    _botProcess.on('exit', (code, sig) => {
+      _appendBotLog(`🛑 Bot encerrado (código ${code}, sinal ${sig})`);
+      _botProcess = null;
+    });
+    _botProcess.on('error', err => {
+      _appendBotLog('❌ Erro: ' + err.message);
+      _botProcess = null;
+    });
+
+    res.json({ ok: true, message: 'Bot iniciado (modo nativo, sem PM2)', mode: 'native', pid: _botProcess.pid });
+  } catch(e) {
+    res.status(500).json({ ok: false, error: 'Erro ao iniciar bot: ' + e.message.slice(0,300) });
+  }
 });
 
 app.post('/api/bot/stop', requireAuth, (req, res) => {
-  try {
-    const pm2Paths = process.platform==='win32' ? ['pm2','npx pm2'] : ['pm2','npx pm2',(process.env.HOME||'')+'/.npm-global/bin/pm2','/usr/local/bin/pm2'];
-    let stopped = false, lastErr = '';
-    for (const pm2 of pm2Paths) {
-      try { execSync(`${pm2} stop cryptoedge-bot 2>&1`, { encoding:'utf8', timeout:5000 }); stopped=true; break; }
-      catch(e2) { lastErr = e2.message; }
+  // 1. Tenta PM2
+  const pm2 = _tryFindPM2();
+  if (pm2) {
+    try {
+      execSync(`${pm2} stop cryptoedge-bot`, { encoding:'utf8', timeout:5000 });
+      return res.json({ ok: true, message: 'Bot parado via PM2' });
+    } catch {}
+  }
+  // 2. Mata processo nativo
+  if (_botIsRunning()) {
+    try {
+      _botProcess.kill('SIGTERM');
+      setTimeout(() => { try { if (_botIsRunning()) _botProcess.kill('SIGKILL'); } catch {} }, 5000);
+      _appendBotLog('🛑 Bot parado pelo usuário');
+      res.json({ ok: true, message: 'Bot parado' });
+    } catch(e) {
+      res.status(500).json({ ok: false, error: e.message });
     }
-    if (!stopped) throw new Error(lastErr);
-    res.json({ ok: true, message: 'Bot parado' });
-  } catch(e) { res.status(500).json({ ok: false, error: e.message.slice(0,200) }); }
+  } else {
+    res.json({ ok: true, message: 'Bot já estava parado' });
+  }
 });
 
 app.get('/api/bot/logs', requireAuth, (req, res) => {
+  // 1. Tenta log file
   try {
     const logFile = path.join(__dirname, 'gridbot.log');
-    if (!fs.existsSync(logFile)) return res.json({ ok: true, lines: [] });
-    const content = fs.readFileSync(logFile, 'utf8');
-    res.json({ ok: true, lines: content.trim().split('\n').slice(-80) });
-  } catch(e) { res.json({ ok: false, lines: [`Erro: ${e.message}`] }); }
+    if (fs.existsSync(logFile)) {
+      const content = fs.readFileSync(logFile, 'utf8');
+      const lines   = content.trim().split('\n').filter(Boolean).slice(-100);
+      if (lines.length) return res.json({ ok: true, lines, source: 'file' });
+    }
+  } catch {}
+  // 2. Fallback: buffer em memória
+  res.json({ ok: true, lines: _botLogs.slice(-100), source: 'memory' });
 });
 
 // ─── Backtesting ──────────────────────────────────────────────────────────────

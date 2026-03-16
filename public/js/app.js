@@ -1931,20 +1931,30 @@ async function loadBotStatus() {
     const txt  = document.getElementById('bc-status-text');
     const badge = document.getElementById('bot-status-badge');
     const running  = d.running;
-    const pm2Found = d.pm2_found !== false; // true unless explicitly false
+    const mode     = d.mode || 'pm2';  // 'pm2' | 'native'
     let statusText;
-    if (running)                       statusText = '🟢 Rodando';
-    else if (!pm2Found)                statusText = '⚪ PM2 não encontrado — verifique a instalação';
-    else if (d.status === 'stopped')   statusText = '🔴 Parado';
-    else if (d.status === 'errored')   statusText = '⚠️ Erro no processo';
-    else                               statusText = '🔴 Parado';
+    if (running) {
+      const uptime = d.uptime ? ` · ${d.uptime}` : '';
+      statusText = mode === 'native'
+        ? `🟢 Rodando (modo nativo${uptime})`
+        : `🟢 Rodando via PM2${uptime}`;
+    } else if (d.status === 'errored') {
+      statusText = '⚠️ Erro no processo — verifique os logs';
+    } else {
+      statusText = mode === 'native'
+        ? '🔴 Parado (pronto para iniciar)'
+        : (d.pm2_found ? '🔴 Parado' : '🔴 Parado (PM2 não encontrado — modo nativo disponível)');
+    }
     if (dot)  { dot.className = 'status-dot ' + (running ? 'live' : 'idle'); }
     if (txt)  { txt.textContent = statusText; }
-    if (badge){ badge.textContent = running ? 'ON' : 'OFF'; badge.style.background = running ? 'var(--green)' : ''; }
+    if (badge){ badge.textContent = running ? 'ON' : 'OFF'; badge.style.background = running ? 'var(--green)' : ''; badge.style.fontWeight = '700'; }
     const pid = document.getElementById('bc-pid');
     const rst = document.getElementById('bc-restarts');
     if (pid) pid.textContent = d.pid || '—';
     if (rst) rst.textContent = d.restarts !== undefined ? d.restarts : '—';
+    // Show mode badge
+    const modeEl = document.getElementById('bc-mode');
+    if (modeEl) { modeEl.textContent = mode === 'pm2' ? 'PM2' : 'Nativo'; modeEl.style.color = mode === 'pm2' ? 'var(--green)' : 'var(--blue)'; }
   } catch(e) {}
 }
 
