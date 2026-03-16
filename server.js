@@ -522,11 +522,16 @@ app.get('/api/binance/price', async (req, res) => {
 app.get('/api/binance/balance', requireAuth, async (req, res) => {
   try {
     const user = db.get('SELECT binance_key, binance_secret, binance_secret_enc FROM users WHERE username=?', [req.user]);
-    if (!user?.binance_key)
+
+    // Usa chaves do perfil; cai para variáveis de ambiente do EasyPanel como fallback
+    const binanceKey = user?.binance_key || process.env.BINANCE_API_KEY || '';
+    if (!binanceKey)
       return res.json({ ok: false, error: 'Binance API Key não configurada em Meu Perfil', simulated: true, balance: 500 });
 
-    // FIX: decrypt secret
-    const secret = user.binance_secret_enc ? decryptSecret(user.binance_secret_enc) : user.binance_secret;
+    // Decrypt secret — fallback para env var se perfil não tiver
+    const secret = user?.binance_secret_enc
+      ? (decryptSecret(user.binance_secret_enc) || process.env.BINANCE_SECRET_KEY || '')
+      : (user?.binance_secret || process.env.BINANCE_SECRET_KEY || '');
     if (!secret) return res.json({ ok: false, error: 'Binance Secret não configurado', simulated: true, balance: 500 });
 
     // Sync timestamp with Binance server to avoid "Timestamp for this request" error
@@ -542,7 +547,7 @@ app.get('/api/binance/balance', requireAuth, async (req, res) => {
 
     try {
       const rF = await axios.get('https://fapi.binance.com/fapi/v2/balance', {
-        params: { timestamp: ts, recvWindow: 10000, signature: sigF }, headers: { 'X-MBX-APIKEY': user.binance_key }, timeout: 8000
+        params: { timestamp: ts, recvWindow: 10000, signature: sigF }, headers: { 'X-MBX-APIKEY': binanceKey }, timeout: 8000
       });
       const futuresBalances = rF.data.filter(b => parseFloat(b.balance) > 0);
       totalUSDT = futuresBalances.reduce((s,b) => s + parseFloat(b.balance), 0);
@@ -554,7 +559,7 @@ app.get('/api/binance/balance', requireAuth, async (req, res) => {
       source = 'spot';
       const sigS = mkSig(`timestamp=${ts}&recvWindow=10000`);
       const rS = await axios.get('https://api.binance.com/api/v3/account', {
-        params: { timestamp: ts, recvWindow: 10000, signature: sigS }, headers: { 'X-MBX-APIKEY': user.binance_key }, timeout: 8000
+        params: { timestamp: ts, recvWindow: 10000, signature: sigS }, headers: { 'X-MBX-APIKEY': binanceKey }, timeout: 8000
       });
       const spotBalances = rS.data.balances.filter(b => parseFloat(b.free) + parseFloat(b.locked) > 0);
       walletData = spotBalances.map(b => ({
@@ -722,8 +727,10 @@ app.post('/api/bot/config', requireAuth, (req, res) => {
 });
 
 // ─── Bot Manager ──────────────────────────────────────────────────────────────
-const BOT_LOG_FILE = path.join(__dirname, 'gridbot.log');
-let _botLogs = [];
+const BOT_LOG_FILE  = path.join(__dirname, 'gridbot.log');
+const BOT_STATE_KEY = 'bot_autostart';   // chave no DB para persistir estado
+let _botLogs   = [];
+let _botStarting = false;  // mutex: evita duplo-start simultâneo
 
 function _blog(line) {
   const e = '['+new Date().toLocaleString('pt-BR')+'] '+line;
@@ -739,7 +746,12 @@ function _loadEnv(p) {
 }
 
 function _botPid() {
-  try { const o=execSync('pgrep -f gridbot.py 2>/dev/null | head -1',{encoding:'utf8',timeout:2000,stdio:['pipe','pipe','pipe']});const p=parseInt(o.trim());return isNaN(p)?null:p; } catch { return null; }
+  try {
+    const o = execSync('pgrep -f gridbot.py 2>/dev/null | head -1',
+      {encoding:'utf8',timeout:2000,stdio:['pipe','pipe','pipe']});
+    const p = parseInt(o.trim());
+    return isNaN(p) ? null : p;
+  } catch { return null; }
 }
 
 async function _killAll() {
@@ -749,20 +761,60 @@ async function _killAll() {
   await new Promise(r=>setTimeout(r,500));
 }
 
+// Detecta qual comando de detached-spawn funciona neste SO/container
+function _spawnDetached(launchScript) {
+  // Tenta setsid (Alpine busybox ou util-linux)
+  // Fallback: subshell + nohup (funciona em qualquer sh POSIX)
+  const cmds = [
+    `setsid nohup sh ${launchScript} >> ${BOT_LOG_FILE} 2>&1 &`,
+    `(nohup sh ${launchScript} >> ${BOT_LOG_FILE} 2>&1 &)`,
+    `nohup sh ${launchScript} >> ${BOT_LOG_FILE} 2>&1 &`,
+  ];
+  for (const cmd of cmds) {
+    try {
+      execSync(cmd, {timeout:5000, stdio:['pipe','pipe','pipe']});
+      return true;
+    } catch { /* tenta o próximo */ }
+  }
+  return false;
+}
+
+// Persiste/limpa flag de autostart no DB de configurações
+function _setBotAutostart(on) {
+  try { db.run('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)',[BOT_STATE_KEY, on?'1':'0']); } catch {}
+}
+function _getBotAutostart() {
+  try { const r = db.get('SELECT value FROM settings WHERE key=?',[BOT_STATE_KEY]); return r?.value==='1'; } catch { return false; }
+}
+
 app.get('/api/bot/status', requireAuth, (req, res) => {
   const pid = _botPid();
-  res.json({running:pid!==null,status:pid?'online':'stopped',pid:pid?String(pid):null,mode:'nativo',pm2_found:false});
+  res.json({
+    running:   pid!==null,
+    status:    pid ? 'online' : 'stopped',
+    pid:       pid ? String(pid) : null,
+    mode:      'nativo',
+    pm2_found: false,
+    starting:  _botStarting,
+  });
 });
 
 app.post('/api/bot/start', requireAuth, async (req, res) => {
+  if (_botStarting) return res.status(429).json({ok:false,error:'Bot já está iniciando, aguarde.'});
+  _botStarting = true;
   try {
-    const user = db.get('SELECT binance_key,binance_secret,binance_secret_enc FROM users WHERE username=?',[req.user]);
-    const apiKey = user?.binance_key||'';
-    const secret = user?.binance_secret_enc?decryptSecret(user.binance_secret_enc):(user?.binance_secret||'');
-    if (!apiKey||!secret) return res.status(400).json({ok:false,error:'Configure suas chaves Binance em Meu Perfil antes de iniciar o bot.'});
+    // ── Busca chaves do perfil; cai para variáveis de ambiente como fallback ──
+    const user    = db.get('SELECT binance_key,binance_secret,binance_secret_enc FROM users WHERE username=?',[req.user]);
+    const apiKey  = user?.binance_key || process.env.BINANCE_API_KEY || '';
+    const secret  = user?.binance_secret_enc
+      ? (decryptSecret(user.binance_secret_enc) || process.env.BINANCE_SECRET_KEY || '')
+      : (user?.binance_secret || process.env.BINANCE_SECRET_KEY || '');
+    if (!apiKey||!secret)
+      return res.status(400).json({ok:false,error:'Configure suas chaves Binance em Meu Perfil antes de iniciar o bot.'});
 
     await _killAll();
 
+    // ── Monta ambiente completo ───────────────────────────────────────────────
     const env = _loadEnv(path.resolve(BOT_ENV_PATH));
     env['BINANCE_API_KEY']    = apiKey;
     env['BINANCE_SECRET_KEY'] = secret;
@@ -770,31 +822,49 @@ app.post('/api/bot/start', requireAuth, async (req, res) => {
     env['PATH'] = env['PATH']||process.env.PATH||'/usr/local/bin:/usr/bin:/bin';
     env['HOME'] = env['HOME']||process.env.HOME||'/root';
 
+    // ── Escreve script de lançamento com todas as variáveis exportadas ────────
     const botScript    = path.join(__dirname,'bot','gridbot.py');
     const launchScript = path.join(__dirname,'bot','.launch.sh');
-    const envExports   = Object.entries(env).filter(([k])=>/^[A-Z0-9_]+$/.test(k)).map(([k,v])=>`export ${k}=${JSON.stringify(String(v))}`).join('\n');
+    const envExports   = Object.entries(env)
+      .filter(([k])=>/^[A-Z][A-Z0-9_]*$/.test(k))
+      .map(([k,v])=>`export ${k}=${JSON.stringify(String(v))}`)
+      .join('\n');
+    fs.writeFileSync(launchScript,
+      `#!/bin/sh\n${envExports}\ncd ${JSON.stringify(__dirname)}\nexec python3 ${JSON.stringify(botScript)}\n`,
+      {mode:0o755});
 
-    fs.writeFileSync(launchScript,`#!/bin/sh\n${envExports}\ncd ${JSON.stringify(__dirname)}\nexec python3 ${JSON.stringify(botScript)}\n`,{mode:0o755});
+    // ── Lança Python desacoplado do Node (sobrevive a SIGTERM no Node) ────────
+    _spawnDetached(launchScript);
 
-    execSync(`setsid nohup sh ${launchScript} >> ${BOT_LOG_FILE} 2>&1 &`,{timeout:5000});
-
-    let pid=null;
-    for (let i=0;i<10;i++) { await new Promise(r=>setTimeout(r,500)); pid=_botPid(); if(pid) break; }
-    if (!pid) return res.status(500).json({ok:false,error:'Bot não iniciou em 5s. Verifique logs.'});
+    // ── Aguarda até 8 s pelo PID ──────────────────────────────────────────────
+    let pid = null;
+    for (let i=0;i<16;i++) { await new Promise(r=>setTimeout(r,500)); pid=_botPid(); if(pid) break; }
+    if (!pid) return res.status(500).json({ok:false,error:'Bot não iniciou em 8s. Verifique logs para erros Python.'});
 
     _blog('🚀 Bot iniciado (PID '+pid+')');
+    _setBotAutostart(true);  // persiste: Node deve reiniciar o bot se restartar
     res.json({ok:true,message:'Bot iniciado',pid:String(pid)});
-  } catch(e) { res.status(500).json({ok:false,error:'Erro: '+e.message.slice(0,200)}); }
+  } catch(e) {
+    res.status(500).json({ok:false,error:'Erro: '+e.message.slice(0,200)});
+  } finally {
+    _botStarting = false;
+  }
 });
 
 app.post('/api/bot/stop', requireAuth, async (req, res) => {
   _blog('🛑 Bot parado pelo usuário');
+  _setBotAutostart(false);  // cancela autostart
   await _killAll();
   res.json({ok:true,message:'Bot parado'});
 });
 
 app.get('/api/bot/logs', requireAuth, (req, res) => {
-  try { if(fs.existsSync(BOT_LOG_FILE)){const l=fs.readFileSync(BOT_LOG_FILE,'utf8').trim().split('\n').filter(Boolean).slice(-100);if(l.length) return res.json({ok:true,lines:l});} } catch {}
+  try {
+    if (fs.existsSync(BOT_LOG_FILE)) {
+      const l = fs.readFileSync(BOT_LOG_FILE,'utf8').trim().split('\n').filter(Boolean).slice(-100);
+      if (l.length) return res.json({ok:true,lines:l});
+    }
+  } catch {}
   res.json({ok:true,lines:_botLogs.slice(-100)});
 });
 
