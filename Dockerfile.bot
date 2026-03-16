@@ -15,4 +15,7 @@ RUN mkdir -p /data
 
 ENV PYTHONUNBUFFERED=1
 
+# No HEALTHCHECK — bot is a long-running process, not a web server
+# Docker will restart it if the process dies (handled by EasyPanel restart policy)
+
 CMD ["python3", "-u", "bot/gridbot.py"]
