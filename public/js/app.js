@@ -5205,20 +5205,23 @@ async function findBestOpportunities() {
   await Promise.allSettled(TOP_PAIRS.map(async sym => {
     try {
       const klines = await fetchKlines(sym, tf, 100);
-      const ind    = computeIndicators(klines);
-      const pred   = predictNext(klines, ind);
-      const ticker = await fetch('/api/binance/price?symbol=' + sym)
-                       .then(r => r.json()).catch(() => ({}));
-      const price  = parseFloat(ticker.lastPrice || ticker.price || klines.at(-1)?.[4] || 0);
-      const chgPct = parseFloat(ticker.priceChangePercent || 0);
+      const analysisData = runAnalysisEngine(klines);
+      const pred   = analysisData.prediction || {};
+      const ind    = analysisData.indicators || {};
+      const ts     = analysisData.tech_summary || {};
+      const smcObj = analysisData.smc || {};
+      const sg     = generateTradingSuggestion(analysisData);
+      const price  = analysisData.price || 0;
+      const chgPct = analysisData.change_pct || 0;
 
-      // Score formula: confidence + RSI health + SMC + no extremes
+      // Score formula
       const conf    = (pred?.confidence || 0) * 100;
-      const rsi     = ind.rsi14 || 50;
-      const rsiOk   = rsi >= 35 && rsi <= 65; // healthy zone
-      const dir     = pred?.direction;
-      const smcUp   = ind.smcBias === 'bullish';
-      const smcDn   = ind.smcBias === 'bearish';
+      const rsi     = ind.rsi  || 50;
+      const rsiOk   = rsi >= 35 && rsi <= 65;
+      const dir     = sg?.direction || pred?.direction;
+      const smcBias = smcObj.bias || '';
+      const smcUp   = smcBias.toLowerCase().includes('alta') || smcBias.toLowerCase().includes('bull');
+      const smcDn   = smcBias.toLowerCase().includes('baixa') || smcBias.toLowerCase().includes('bear');
 
       // Only score non-neutral signals
       if (!dir || dir === 'neutral') { done++; return; }
@@ -5227,20 +5230,21 @@ async function findBestOpportunities() {
       const atr  = ind.atr || price * 0.01;
       const sl   = atr * 1.5;
       const tp1  = atr * 2;
-      const rr   = tp1 / sl;
+      const rr   = tp1 / Math.max(sl, 0.001);
 
       // Composite score (0-100)
       let score = conf * 0.4;                    // 40% from confidence
       if (rsiOk)  score += 20;                   // 20% RSI in healthy zone
       if (rr >= 2) score += 20;                  // 20% good R:R
-      if (dir === 'up' && smcUp) score += 20;    // 20% SMC confirms
-      if (dir === 'down' && smcDn) score += 20;
+      if ((dir === 'up' || dir === 'long') && smcUp) score += 20;
+      if ((dir === 'down' || dir === 'short') && smcDn) score += 20;
 
+      const isLng = dir==='up'||dir==='long';
       results.push({
         sym, price, chgPct, conf, rsi, rr: rr.toFixed(1),
         dir, score: Math.round(score), atr,
-        sl: dir==='up' ? price-sl : price+sl,
-        tp1: dir==='up' ? price+tp1 : price-tp1,
+        sl:  isLng ? price-sl : price+sl,
+        tp1: isLng ? price+tp1 : price-tp1,
         indicators: ind, prediction: pred
       });
     } catch(e) {}
@@ -5330,20 +5334,22 @@ function buildSetupScore(data) {
   const rec     = document.getElementById('setup-recommendation');
   if (!card || !checks) return;
 
-  const ind  = data.indicators || {};
-  const sg   = generateTradingSuggestion(data);
-  const dir  = sg?.direction || 'flat';
+  const ind     = data.indicators   || {};
+  const ts      = data.tech_summary || {};
+  const smcObj  = data.smc          || {};
+  const sg      = generateTradingSuggestion(data);
+  const dir     = sg?.direction || 'flat';
   const isLong  = dir === 'long';
   const isShort = dir === 'short';
-  const rsi     = ind.rsi14 || 50;
-  const macdH   = ind.macdHist || 0;
-  const adx     = ind.adx || 0;
-  const vwap    = ind.vwap || 0;
-  const price   = data.price || 0;
-  const smcBias = data.smc_bias || '';
-  const techScore = data.tech_score || 0;
-  const conf    = sg?.conf || 0;
-  const rr      = sg ? (sg.tp1 - price) / Math.abs(price - sg.slPrice) : 0;
+  const rsi     = ind.rsi       || 50;
+  const macdH   = ind.macd_hist || 0;
+  const adx     = ind.adx       || 0;
+  const vwap    = ind.vwap      || 0;
+  const price   = data.price    || 0;
+  const smcBias = smcObj.bias   || '';
+  const techScore = ts.score    || 0;
+  const conf    = sg?.conf      || 0;
+  const rr      = sg && sg.slPrice && sg.tp1 ? Math.abs(sg.tp1 - price) / Math.max(0.01, Math.abs(price - sg.slPrice)) : 0;
 
   // Define checks
   const checkList = [
