@@ -93,9 +93,9 @@ state = {
 }
 
 def handle_exit(sig, frame):
-    log.info("Encerrando...")
+    log.info("Sinal de encerramento recebido — finalizando graciosamente...")
     state['running'] = False
-    sys.exit(0)
+    # Don't sys.exit() - let the main loop finish cleanly
 
 signal.signal(signal.SIGTERM, handle_exit)
 signal.signal(signal.SIGINT, handle_exit)
@@ -558,13 +558,19 @@ def main():
         log.info(f"  📡 WebSocket KLINE [{TIMEFRAME}] — delay <100ms")
         twm.start_kline_socket(callback=on_kline, symbol=SYMBOL, interval=TIMEFRAME)
 
+    log.info("  ✅ WebSocket conectado — monitorando velas...")
     try:
         while state['running']:
             time.sleep(1)
+            # Watchdog: if twm is not alive, restart
+            if not twm.is_alive():
+                log.warning("  ⚠️ WebSocket desconectado — reconectando...")
+                break
     except KeyboardInterrupt:
         pass
     finally:
-        twm.stop()
+        try: twm.stop()
+        except: pass
         wr = state['wins']/max(1,state['wins']+state['losses'])*100
         log.info(f"\n{'═'*62}")
         log.info(f"  Resultado final: PnL ${state['pnl']:+.2f} | "
@@ -572,4 +578,27 @@ def main():
         log.info(f"{'═'*62}")
 
 if __name__=='__main__':
-    main()
+    MAX_RETRIES = 999  # keep retrying forever
+    retry_count = 0
+    retry_delay = 10   # seconds between retries
+    
+    while retry_count < MAX_RETRIES:
+        try:
+            state['running'] = True  # Reset running flag on each attempt
+            main()
+        except KeyboardInterrupt:
+            log.info("Interrompido pelo usuário.")
+            break
+        except Exception as e:
+            retry_count += 1
+            log.error(f"Erro inesperado (tentativa {retry_count}): {e}")
+            log.info(f"Reconectando em {retry_delay}s...")
+            time.sleep(retry_delay)
+            retry_delay = min(retry_delay * 1.5, 120)  # backoff up to 2 min
+        else:
+            # main() returned normally - check if we should restart
+            if state.get('running') == False:
+                log.info("Bot encerrado. Reiniciando em 5s...")
+                time.sleep(5)
+                continue
+            break
