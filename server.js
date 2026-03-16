@@ -785,12 +785,12 @@ function _spawnDetached(env, botScript) {
   return child.pid;
 }
 
-// Persiste/limpa flag de autostart no DB de configurações
+// Persiste flag de autostart na tabela platform_settings (key TEXT PK, value TEXT)
 function _setBotAutostart(on) {
-  try { db.run('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)',[BOT_STATE_KEY, on?'1':'0']); } catch {}
+  try { db.run('INSERT OR REPLACE INTO platform_settings(key,value) VALUES(?,?)',[BOT_STATE_KEY, on?'1':'0']); } catch {}
 }
 function _getBotAutostart() {
-  try { const r = db.get('SELECT value FROM settings WHERE key=?',[BOT_STATE_KEY]); return r?.value==='1'; } catch { return false; }
+  try { const r = db.get('SELECT value FROM platform_settings WHERE key=?',[BOT_STATE_KEY]); return r?.value==='1'; } catch { return false; }
 }
 
 app.get('/api/bot/status', requireAuth, (req, res) => {
@@ -810,7 +810,7 @@ app.post('/api/bot/start', requireAuth, async (req, res) => {
   _botStarting = true;
   try {
     // ── Busca chaves do perfil; cai para variáveis de ambiente como fallback ──
-    const user    = db.get('SELECT binance_key,binance_secret,binance_secret_enc FROM users WHERE username=?',[req.user]);
+    const user    = db.get('SELECT binance_key,binance_secret,binance_secret_enc,telegram_token,telegram_chatid FROM users WHERE username=?',[req.user]);
     const apiKey  = user?.binance_key || process.env.BINANCE_API_KEY || '';
     const secret  = user?.binance_secret_enc
       ? (decryptSecret(user.binance_secret_enc) || process.env.BINANCE_SECRET_KEY || '')
@@ -827,6 +827,15 @@ app.post('/api/bot/start', requireAuth, async (req, res) => {
     env['PYTHONUNBUFFERED']   = '1';
     env['PATH'] = env['PATH']||process.env.PATH||'/usr/local/bin:/usr/bin:/bin';
     env['HOME'] = env['HOME']||process.env.HOME||'/root';
+
+    // Telegram: perfil do usuário tem prioridade sobre env vars do EasyPanel
+    const tgToken  = user?.telegram_token  || process.env.TELEGRAM_TOKEN  || '';
+    const tgChatId = user?.telegram_chatid || process.env.TELEGRAM_CHAT_ID || '';
+    if (tgToken)  env['TELEGRAM_TOKEN']   = tgToken;
+    if (tgChatId) env['TELEGRAM_CHAT_ID'] = tgChatId;
+    env['APP_URL'] = process.env.APP_URL || `http://localhost:${process.env.PORT||3000}`;
+    // Modo de trade: 'manual' (padrão) ou 'auto'
+    env['BOT_TRADE_MODE'] = process.env.BOT_TRADE_MODE || 'manual';
 
     // ── Lança Python com spawn nativo Node (detached:true + unref) ─────────────
     const botScript = path.join(__dirname,'bot','gridbot.py');
@@ -909,13 +918,18 @@ app.get('/api/pnl/chart', requireAuth, (req, res) => {
 
 // ─── Telegram Test ─────────────────────────────────────────────────────────────
 app.post('/api/telegram/test', requireAuth, async (req, res) => {
-  const token  = process.env.TELEGRAM_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
-  if (!token || !chatId) return res.status(400).json({ ok: false, error: 'Configure TELEGRAM_TOKEN e TELEGRAM_CHAT_ID no .env' });
+  // Lê do perfil do usuário primeiro; cai para env var do EasyPanel
+  const user   = db.get('SELECT telegram_token, telegram_chatid FROM users WHERE username=?', [req.user]);
+  const token  = user?.telegram_token  || process.env.TELEGRAM_TOKEN  || '';
+  const chatId = user?.telegram_chatid || process.env.TELEGRAM_CHAT_ID || '';
+  if (!token || !chatId)
+    return res.status(400).json({ ok: false, error: 'Configure o Bot Token e Chat ID em Meu Perfil → Notificações Telegram' });
   try {
     const r = await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
-      chat_id: chatId, text: '✅ <b>CryptoEdge Pro</b> — Telegram conectado!', parse_mode:'HTML'
-    }, { timeout:8000 });
+      chat_id: chatId,
+      text: '✅ <b>CryptoEdge Pro</b> — Telegram conectado com sucesso!\n\nVocê receberá notificações de trades aqui.',
+      parse_mode: 'HTML'
+    }, { timeout: 8000 });
     res.json({ ok: r.data.ok });
   } catch(e) { res.status(500).json({ ok: false, error: e.response?.data?.description || e.message }); }
 });

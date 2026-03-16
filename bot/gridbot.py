@@ -12,7 +12,31 @@ from binance.enums import *
 # python-binance v1+ uses REST polling — no BinanceSocketManager needed
 from dotenv import load_dotenv
 from patterns import Candle, PatternResult, Signal, run_all
-from telegram_notify import notify_start, notify_entry, notify_exit, notify_stop_loss_global, notify_error
+from telegram_notify import (notify_start, notify_entry, notify_exit, notify_stop,
+                              notify_stop_loss_global, notify_error, notify_signal,
+                              request_entry_confirmation_v2)
+# ─── Live State Notifier ───────────────────────────────────────────────────────
+# Envia eventos ao servidor Node para atualizar o Live Trading em tempo real
+_APP_URL  = os.environ.get('APP_URL', 'http://localhost:' + os.environ.get('PORT','3000'))
+_BOT_TOKEN = os.environ.get('BOT_WEBHOOK_TOKEN', '')
+
+def _live_event(etype, data=None):
+    """Notifica o servidor Node de eventos do bot (posição, sinal, candle)."""
+    try:
+        import urllib.request, json as _json
+        payload = _json.dumps({'type': etype, 'data': data or {}}).encode()
+        req = urllib.request.Request(
+            f'{_APP_URL}/api/live/event',
+            data=payload,
+            headers={'Content-Type': 'application/json',
+                     'X-Bot-Token': _BOT_TOKEN},
+            method='POST'
+        )
+        urllib.request.urlopen(req, timeout=2)
+    except Exception:
+        pass  # Não fatal — bot continua mesmo se servidor não responder
+
+
 
 load_dotenv()
 load_dotenv('.bot.env', override=True)  # frontend config takes priority
@@ -39,6 +63,7 @@ CAPITAL    = float(os.environ.get('BOT_CAPITAL',    '300'))
 STOP_LOSS  = float(os.environ.get('BOT_STOP_LOSS',  '0'))
 TIMEFRAME  = os.environ.get('BOT_TIMEFRAME', '15m')
 STRATEGY   = os.environ.get('BOT_STRATEGY', 'pattern')
+TRADE_MODE = os.environ.get('BOT_TRADE_MODE', 'manual')  # 'manual' ou 'auto'
 
 # Pattern engine thresholds
 MIN_CONFIDENCE   = float(os.environ.get('BOT_MIN_CONF',   '0.65'))
@@ -176,13 +201,19 @@ def open_long(price, qty, sl, tp, reason=''):
     log.info(f"  🟢 LONG {qty:.6f} @ ${price:,.2f} | SL ${sl:,.2f} | TP ${tp:,.2f} | {reason}")
     place_order(SIDE_BUY, qty)
     state['position'] = {'side':'BUY','entry':price,'qty':qty,'sl':sl,'tp':tp}
-    notify_entry('BUY', SYMBOL, price, qty, sl, tp, reason)
+    pats = [p.name for p in state.get('all_patterns', [])[:3]]
+    conf = state.get('last_prediction', {}).get('confidence', 0)
+    notify_entry('BUY', SYMBOL, price, qty, sl, tp, reason, confidence=conf, patterns=pats)
+    _live_event('position_open', {'side':'BUY','pair':SYMBOL,'entry':price,'sl':sl,'tp':tp,'qty':qty,'reason':reason})
 
 def open_short(price, qty, sl, tp, reason=''):
     log.info(f"  🔴 SHORT {qty:.6f} @ ${price:,.2f} | SL ${sl:,.2f} | TP ${tp:,.2f} | {reason}")
     place_order(SIDE_SELL, qty)
     state['position'] = {'side':'SELL','entry':price,'qty':qty,'sl':sl,'tp':tp}
-    notify_entry('SELL', SYMBOL, price, qty, sl, tp, reason)
+    pats = [p.name for p in state.get('all_patterns', [])[:3]]
+    conf = state.get('last_prediction', {}).get('confidence', 0)
+    notify_entry('SELL', SYMBOL, price, qty, sl, tp, reason, confidence=conf, patterns=pats)
+    _live_event('position_open', {'side':'SELL','pair':SYMBOL,'entry':price,'sl':sl,'tp':tp,'qty':qty,'reason':reason})
 
 def close_position(current_price, reason=''):
     pos = state['position']
@@ -198,7 +229,9 @@ def close_position(current_price, reason=''):
     if pnl >= 0: state['wins'] += 1
     else:        state['losses'] += 1
     log.info(f"  💵 PnL trade: ${pnl:+.2f} | Acumulado: ${state['pnl']:+.2f}")
-    notify_exit(pos['side'], SYMBOL, pos['entry'], current_price, pnl, reason)
+    notify_exit(pos['side'], SYMBOL, pos['entry'], current_price, pnl, reason,
+                wins=state['wins'], losses=state['losses'], total_pnl=state['pnl'])
+    _live_event('position_close', {'pair':SYMBOL,'side':pos['side'],'entry':pos['entry'],'exit':current_price,'pnl':pnl,'reason':reason})
     state['position'] = None
 
 def check_sl_tp(price):
@@ -250,6 +283,14 @@ def pattern_engine_on_candle(close, candle_obj):
     for r in prediction.get('reasoning', [])[:4]:
         log.info(f"  │  {r}")
     log.info(f"  └{'─'*50}")
+    # Notifica Live Trading com o sinal detectado
+    if conf_ >= MIN_CONFIDENCE:
+        top_pat_names = [p.name for p in patterns[:2]] if patterns else []
+        _live_event('signal', {
+            'direction': dir_, 'confidence': round(conf_*100),
+            'pair': SYMBOL, 'pattern': ', '.join(top_pat_names) if top_pat_names else 'sem padrão',
+            'alvo': f'{tgt_:+.1f}%'
+        })
 
     # SL/TP dinâmico baseado no ATR
     atr_val   = atr(state['raw_highs'], state['raw_lows'], state['raw_closes'])
@@ -288,18 +329,42 @@ def pattern_engine_on_candle(close, candle_obj):
     rsi_ok_short = rsi_val > 28
 
     if high_conf_bull and vol_ok and rsi_ok_long:
-        top_pat = patterns[0]
-        open_long(close, qty,
-                  sl=close - sl_dist,
-                  tp=close + tp_dist,
-                  reason=f"{top_pat.name} | RSI {rsi_val:.0f} | conf {conf_:.0%}")
+        top_pat   = patterns[0]
+        pat_names = [p.name for p in patterns[:3]]
+        sl_price  = close - sl_dist
+        tp_price  = close + tp_dist
+        reason_str = f"{top_pat.name} | RSI {rsi_val:.0f} | conf {conf_:.0%}"
+        if TRADE_MODE == 'manual':
+            confirmed = request_entry_confirmation_v2(
+                SYMBOL, 'BUY', close, sl_price, tp_price,
+                conf_, pat_names, rsi_val, timeout_sec=60)
+            if confirmed:
+                open_long(close, qty, sl=sl_price, tp=tp_price, reason=reason_str)
+            else:
+                log.info('  🖐 Entrada LONG cancelada pelo usuário (modo manual)')
+        else:
+            notify_signal(SYMBOL, 'up', conf_, patterns=pat_names,
+                          reason=f'RSI {rsi_val:.0f} | Entrando LONG...')
+            open_long(close, qty, sl=sl_price, tp=tp_price, reason=reason_str)
 
     elif high_conf_bear and vol_ok and rsi_ok_short:
-        top_pat = patterns[0]
-        open_short(close, qty,
-                   sl=close + sl_dist,
-                   tp=close - tp_dist,
-                   reason=f"{top_pat.name} | RSI {rsi_val:.0f} | conf {conf_:.0%}")
+        top_pat   = patterns[0]
+        pat_names = [p.name for p in patterns[:3]]
+        sl_price  = close + sl_dist
+        tp_price  = close - tp_dist
+        reason_str = f"{top_pat.name} | RSI {rsi_val:.0f} | conf {conf_:.0%}"
+        if TRADE_MODE == 'manual':
+            confirmed = request_entry_confirmation_v2(
+                SYMBOL, 'SELL', close, sl_price, tp_price,
+                conf_, pat_names, rsi_val, timeout_sec=60)
+            if confirmed:
+                open_short(close, qty, sl=sl_price, tp=tp_price, reason=reason_str)
+            else:
+                log.info('  🖐 Entrada SHORT cancelada pelo usuário (modo manual)')
+        else:
+            notify_signal(SYMBOL, 'down', conf_, patterns=pat_names,
+                          reason=f'RSI {rsi_val:.0f} | Entrando SHORT...')
+            open_short(close, qty, sl=sl_price, tp=tp_price, reason=reason_str)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -617,6 +682,7 @@ def main():
     log.info(f"  Resultado final: PnL ${state['pnl']:+.2f} | "
              f"W:{state['wins']} L:{state['losses']} WR:{wr:.0f}%")
     log.info(f"{'═'*62}")
+    notify_stop(SYMBOL, state['pnl'], state['wins'], state['losses'])
     # Limpa PID file ao encerrar (se foi criado)
     pid_file = os.environ.get('BOT_PID_FILE', '')
     if pid_file:
