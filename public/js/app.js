@@ -430,12 +430,26 @@ document.querySelectorAll('.nav-item').forEach(item => {
     item.classList.add('active');
     const panel = el('panel-' + item.dataset.panel);
     if (panel) panel.classList.add('active');
+    // Para polling do bot ao sair do painel
+    if (item.dataset.panel !== 'botcontrol' && _botAutoRefresh) {
+      clearInterval(_botAutoRefresh); _botAutoRefresh = null;
+      const autoBtn = document.getElementById('bc-auto-btn');
+      if (autoBtn) autoBtn.textContent = 'Auto OFF';
+    }
     if (item.dataset.panel === 'dashboard') { loadTrades(); loadFearGreed(); }
     if (item.dataset.panel === 'calculator') { calcLev(); }
     if (item.dataset.panel === 'risk') { calcRisk(); }
     if (item.dataset.panel === 'gridbot') { calcGrid(); }
     if (item.dataset.panel === 'journal')     { loadTrades(); loadStats(); }
-    if (item.dataset.panel === 'botcontrol')  { loadBotStatus(); loadBotLogs(); loadBotConfig(); checkBotKeysWarning(); }
+    if (item.dataset.panel === 'botcontrol')  {
+      loadBotStatus(); loadBotLogs(); loadBotConfig(); checkBotKeysWarning();
+      // Auto-inicia o polling de status ao abrir o painel
+      if (!_botAutoRefresh) {
+        _botAutoRefresh = setInterval(() => { loadBotLogs(); loadBotStatus(); }, 10000);
+        const btn = document.getElementById('bc-auto-btn');
+        if (btn) btn.textContent = 'Auto ON ⚡';
+      }
+    }
     if (item.dataset.panel === 'analysisai')  { buildAnalysisSymbolSelector(); switchAITab('analyze'); }
     if (item.dataset.panel === 'profile')      { loadProfile(); }
     if (item.dataset.panel === 'admin')        { loadAdminPanel(); switchAdminTab('users'); }
@@ -1945,7 +1959,10 @@ async function loadBotStatus() {
         ? '🔴 Parado (pronto para iniciar)'
         : (d.pm2_found ? '🔴 Parado' : '🔴 Parado (PM2 não encontrado — modo nativo disponível)');
     }
-    if (dot)  { dot.className = 'status-dot ' + (running ? 'live' : 'idle'); }
+    if (dot)  {
+      dot.className = 'status-dot ' + (running ? 'live' : 'idle');
+      dot.style.background = running ? '' : (d.status === 'errored' ? 'var(--red)' : '');
+    }
     if (txt)  { txt.textContent = statusText; }
     if (badge){ badge.textContent = running ? 'ON' : 'OFF'; badge.style.background = running ? 'var(--green)' : ''; badge.style.fontWeight = '700'; }
     const pid = document.getElementById('bc-pid');
@@ -1999,7 +2016,7 @@ function toggleAutoRefresh() {
     _botAutoRefresh = null;
     if (btn) btn.textContent = 'Auto OFF';
   } else {
-    _botAutoRefresh = setInterval(() => { loadBotLogs(); loadBotStatus(); }, 3000);
+    _botAutoRefresh = setInterval(() => { loadBotLogs(); loadBotStatus(); }, 10000);
     if (btn) btn.textContent = 'Auto ON ⚡';
     loadBotLogs();
   }

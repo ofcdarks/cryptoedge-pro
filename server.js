@@ -855,7 +855,7 @@ app.post('/api/bot/start', requireAuth, async (req, res) => {
         try { execSync(pm2 + ' stop cryptoedge-bot --silent', { timeout:3000, stdio:'ignore' }); } catch {}
         try { execSync(pm2 + ' delete cryptoedge-bot --silent', { timeout:3000, stdio:'ignore' }); } catch {}
         execSync(
-          pm2 + ' start "' + launcherJs + '" --name cryptoedge-bot --max-restarts 3 --restart-delay 10000',
+          pm2 + ' start "' + launcherJs + '" --name cryptoedge-bot --max-restarts 5 --restart-delay 30000 --stop-exit-codes 2',
           { encoding:'utf8', timeout:10000, cwd:__dirname }
         );
         _appendBotLog('🚀 Bot iniciado via PM2');
