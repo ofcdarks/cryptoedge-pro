@@ -15,6 +15,7 @@ from patterns import Candle, PatternResult, Signal, run_all
 from telegram_notify import (notify_start, notify_entry, notify_exit, notify_stop,
                               notify_stop_loss_global, notify_error, notify_signal,
                               request_entry_confirmation_v2)
+import multi_scanner
 # ─── Live State Notifier ───────────────────────────────────────────────────────
 # Envia eventos ao servidor Node para atualizar o Live Trading em tempo real
 _APP_URL  = os.environ.get('APP_URL', 'http://localhost:' + os.environ.get('PORT','3000'))
@@ -64,6 +65,12 @@ STOP_LOSS  = float(os.environ.get('BOT_STOP_LOSS',  '0'))
 TIMEFRAME  = os.environ.get('BOT_TIMEFRAME', '15m')
 STRATEGY   = os.environ.get('BOT_STRATEGY', 'pattern')
 TRADE_MODE = os.environ.get('BOT_TRADE_MODE', 'manual')  # 'manual' ou 'auto'
+
+# Multi-par scanner
+SCAN_ENABLED  = os.environ.get('BOT_SCAN_ENABLED', 'true').lower() == 'true'
+SCAN_PAIRS_RAW = os.environ.get('BOT_SCAN_PAIRS', '')   # CSV ex: 'BTCUSDT,ETHUSDT,SOLUSDT'
+SCAN_INTERVAL  = int(os.environ.get('BOT_SCAN_INTERVAL', '300'))  # segundos entre scans
+SCAN_MIN_CONF  = float(os.environ.get('BOT_SCAN_MIN_CONF', '0.68'))  # confiança mínima
 
 # Pattern engine thresholds
 MIN_CONFIDENCE   = float(os.environ.get('BOT_MIN_CONF',   '0.65'))
@@ -179,16 +186,48 @@ def trend_direction_from_ema():
 # HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 
+_sym_info_cache = {}   # cache para evitar chamada API a cada vela
+
 def get_sym_info():
+    global _sym_info_cache
+    if _sym_info_cache:
+        return _sym_info_cache
     info = client.get_symbol_info(SYMBOL)
     lot  = next(f for f in info['filters'] if f['filterType']=='LOT_SIZE')
-    return {'min_qty': float(lot['minQty']), 'step': float(lot['stepSize'])}
+    prc  = next((f for f in info['filters'] if f['filterType']=='PRICE_FILTER'), {})
+    _sym_info_cache = {
+        'min_qty':  float(lot['minQty']),
+        'max_qty':  float(lot['maxQty']),
+        'step':     float(lot['stepSize']),
+        'min_notional': 10.0,  # Binance Spot mínimo ~$10
+    }
+    log.info(f"  SymInfo: minQty={_sym_info_cache['min_qty']} step={_sym_info_cache['step']}")
+    return _sym_info_cache
 
 def round_step(v, step):
     prec = len(str(step).rstrip('0').split('.')[-1]) if '.' in str(step) else 0
     return round(float(Decimal(str(v))//Decimal(str(step))*Decimal(str(step))), prec)
 
+def safe_qty(capital: float, price: float) -> float:
+    """Calcula qty válida para a Binance: respeita minQty, stepSize e notional mínimo."""
+    if price <= 0: return 0
+    info = get_sym_info()
+    qty  = round_step(capital / price * 0.95, info['step'])
+    # Garante notional mínimo (qty * price >= $10)
+    min_notional_qty = round_step(info['min_notional'] / price * 1.05, info['step'])
+    qty = max(qty, min_notional_qty)
+    if qty < info['min_qty']:
+        log.warning(f"  ⚠ qty={qty} < minQty={info['min_qty']} — capital ${capital:.2f} insuficiente para {SYMBOL}")
+        return 0
+    if qty > info['max_qty']:
+        qty = round_step(info['max_qty'], info['step'])
+    return qty
+
 def place_order(side, qty, price=None, otype=ORDER_TYPE_MARKET):
+    info = get_sym_info()
+    if qty <= 0 or qty < info['min_qty']:
+        log.error(f"  ❌ Ordem bloqueada: qty={qty} inválida (min={info['min_qty']})")
+        return None
     if TESTNET:
         log.info(f"  [TESTNET] {side} {qty:.6f} @ {'MARKET' if not price else f'${price:,.2f}'}")
         return {'orderId': 0, 'side': side, 'executedQty': qty}
@@ -296,8 +335,8 @@ def pattern_engine_on_candle(close, candle_obj):
     atr_val   = atr(state['raw_highs'], state['raw_lows'], state['raw_closes'])
     sl_dist   = max(atr_val * SL_ATR_MULT, close * 0.01)
     tp_dist   = sl_dist * TP_RR
-    info      = get_sym_info()
-    qty       = round_step(CAPITAL / close * 0.95, info['step'])
+    qty = safe_qty(CAPITAL, close)
+    if qty <= 0: return
 
     # Verifica posição aberta
     check_sl_tp(close)
@@ -437,8 +476,8 @@ def scalping_on_tick(price):
     check_sl_tp(price)
     if len(state['tick_closes'])<15 or state['position']: return
     r=rsi(state['tick_closes'],14)
-    info=get_sym_info(); qty=round_step(CAPITAL/price,info['step'])
-    if qty<info['min_qty']: return
+    qty=safe_qty(CAPITAL, price)
+    if qty<=0: return
     if r<SCALP_RSI_BUY:
         sl=price*(1-SCALP_SL_PCT/100); tp=price*(1+SCALP_TP_PCT/100)
         open_long(price,qty,sl,tp,f"RSI {r:.0f}")
@@ -454,7 +493,8 @@ def trend_on_candle(close):
     sl_d=max(a*1.5,close*0.02); tp_d=sl_d*2
     check_sl_tp(close)
     if state['position']: return
-    info=get_sym_info(); qty=round_step(CAPITAL/close*0.95,info['step'])
+    qty=safe_qty(CAPITAL, close)
+    if qty<=0: return
     if ef>es*1.001 and r<65:
         open_long(close,qty,close-sl_d,close+tp_d,f"EMA{TREND_FAST}>{TREND_SLOW} RSI{r:.0f}")
     elif ef<es*0.999 and r>35:
@@ -466,7 +506,8 @@ def macd_on_candle(close):
     r=rsi(state['raw_closes']); a=atr(state['raw_highs'],state['raw_lows'],state['raw_closes'])
     sl_d=max(a*1.5,close*0.015); prev=state['macd_prev_hist']
     check_sl_tp(close)
-    info=get_sym_info(); qty=round_step(CAPITAL/close*0.95,info['step'])
+    qty=safe_qty(CAPITAL, close)
+    if qty<=0: return
     if not state['position']:
         if prev<0 and hist>0 and r<65:
             open_long(close,qty,close-sl_d,close+sl_d*2,f"MACD cross↑ RSI{r:.0f}")
@@ -484,7 +525,8 @@ def breakout_on_candle(close):
     sl_d=max(a*2,close*0.015)
     check_sl_tp(close)
     if state['position']: return
-    info=get_sym_info(); qty=round_step(CAPITAL/close*0.95,info['step'])
+    qty=safe_qty(CAPITAL, close)
+    if qty<=0: return
     vol_ok=last_v>avg_v*1.2 if avg_v else True
     if close>res*(1+0.003) and vol_ok:
         open_long(close,qty,close-sl_d,close+sl_d*2,f"Break resistência ${res:,.0f}")
@@ -628,6 +670,54 @@ def main():
                  f"SL={SL_ATR_MULT}×ATR | TP={TP_RR}×SL | Volume: {REQUIRE_VOLUME}")
     log.info(f"{'═'*62}\n")
 
+    # ── Multi-par Scanner ────────────────────────────────────────────────
+    if SCAN_ENABLED:
+        scan_pairs = [p.strip() for p in SCAN_PAIRS_RAW.split(',') if p.strip()] or None
+        def _on_scan_signal(sig):
+            sym  = sig['symbol']
+            dir_ = sig['direction']
+            conf = sig['confidence']
+            pats = sig['patterns']
+            price = sig['price']
+            rsi   = sig.get('rsi', 0)
+            tgt   = sig.get('target_pct', 0)
+            icon  = '🔼' if dir_ == 'up' else '🔽'
+            # Notifica via Telegram com botão de entrada
+            if TRADE_MODE == 'manual':
+                # Calcula SL/TP estimados para o sinal do scanner
+                sl_pct = 0.015
+                tp_pct = sl_pct * float(os.environ.get('BOT_TP_RR', '2.0'))
+                sl_est = price * (1 - sl_pct) if dir_ == 'up' else price * (1 + sl_pct)
+                tp_est = price * (1 + tp_pct) if dir_ == 'up' else price * (1 - tp_pct)
+                side   = 'BUY' if dir_ == 'up' else 'SELL'
+                confirmed = request_entry_confirmation_v2(
+                    sym, side, price, sl_est, tp_est, conf, pats, rsi, timeout_sec=90)
+                if confirmed:
+                    log.info(f'  ✅ Scanner: usuário confirmou entrada em {sym}')
+                    # Se o par coincide com o par principal, usa open_long/short
+                    if sym == SYMBOL and not state['position']:
+                        qty = round_step(CAPITAL / price * 0.95, get_sym_info()['step'])
+                        if dir_ == 'up': open_long(price, qty, sl_est, tp_est, ', '.join(pats))
+                        else:            open_short(price, qty, sl_est, tp_est, ', '.join(pats))
+                    else:
+                        log.info(f'  ℹ️ {sym} ≠ {SYMBOL} ou posição aberta — sinal registrado apenas')
+            else:
+                notify_signal(sym, dir_, conf, patterns=pats,
+                              reason=f'RSI {rsi:.0f} | alvo {tgt:+.1f}%')
+            # Notifica live state
+            _live_event('signal', {'direction': dir_, 'confidence': round(conf*100),
+                                   'pair': sym, 'pattern': ', '.join(pats[:2]),
+                                   'alvo': f'{tgt:+.1f}%'})
+
+        multi_scanner.start(
+            api_key, secret_key, _on_scan_signal,
+            pairs=scan_pairs, timeframe=TIMEFRAME,
+            min_conf=SCAN_MIN_CONF, interval_sec=SCAN_INTERVAL,
+            testnet=TESTNET
+        )
+        log.info(f'  🔭 Scanner ativo — {len(scan_pairs) if scan_pairs else 15} pares | '
+                 f'intervalo={SCAN_INTERVAL}s')
+
     warm_up()
     if STRATEGY=='grid': grid_init()
 
@@ -682,6 +772,7 @@ def main():
     log.info(f"  Resultado final: PnL ${state['pnl']:+.2f} | "
              f"W:{state['wins']} L:{state['losses']} WR:{wr:.0f}%")
     log.info(f"{'═'*62}")
+    multi_scanner.stop()
     notify_stop(SYMBOL, state['pnl'], state['wins'], state['losses'])
     # Limpa PID file ao encerrar (se foi criado)
     pid_file = os.environ.get('BOT_PID_FILE', '')

@@ -371,18 +371,24 @@ def notify_exit(side: str, symbol: str, entry: float, exit_price: float,
     )
 
 def notify_signal(symbol: str, direction: str, confidence: float,
-                  patterns: list = None, reason: str = ''):
-    """Notificação simples de sinal (modo auto — sem botões)."""
-    dir_text = '🔼 ALTA' if direction in ('up','buy') else ('🔽 BAIXA' if direction in ('down','sell') else '➡️ NEUTRO')
-    pat_str  = ', '.join(patterns[:3]) if patterns else (reason or '—')
+                  patterns: list = None, reason: str = '',
+                  rsi: float = 0, target_pct: float = 0, source: str = 'bot'):
+    """Sinal sem botões — modo auto ou aviso informativo."""
+    dir_text  = '🔼 ALTA' if direction in ('up','buy') else ('🔽 BAIXA' if direction in ('down','sell') else '➡️ NEUTRO')
+    pat_str   = ', '.join(patterns[:3]) if patterns else (reason or '—')
+    rsi_line  = f'📊 RSI:        <code>{rsi:.0f}</code>\n' if rsi else ''
+    tgt_line  = f'🎯 Alvo:       <code>{target_pct:+.1f}%</code>\n' if target_pct else ''
+    src_label = '🔭 Scanner Multi-Par' if source == 'scanner' else '🤖 Bot Principal'
     _send(
-        f'📡 <b>Sinal — {symbol}</b>\n'
+        f'📡 <b>Sinal {dir_text} — {symbol}</b>\n'
+        f'<i>{src_label}</i>\n'
         f'{SEP}\n'
-        f'📊 Direção:    {dir_text}\n'
-        f'🔍 Padrão:     <i>{pat_str}</i>\n'
         f'📡 Confiança:  {_bar(confidence*100,8)} {confidence:.0%}\n'
+        f'🔍 Padrão:     <i>{pat_str}</i>\n'
+        f'{rsi_line}'
+        f'{tgt_line}'
         f'{SEP}\n'
-        f'<i>Entrando automaticamente...</i>\n'
+        f'<i>Executando ordem automaticamente...</i>\n'
         f'🕐 <i>{_ts()}</i>'
     )
 
