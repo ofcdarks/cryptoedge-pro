@@ -529,13 +529,20 @@ app.get('/api/binance/balance', requireAuth, async (req, res) => {
     const secret = user.binance_secret_enc ? decryptSecret(user.binance_secret_enc) : user.binance_secret;
     if (!secret) return res.json({ ok: false, error: 'Binance Secret não configurado', simulated: true, balance: 500 });
 
-    const ts     = Date.now();
-    const sigF   = crypto.createHmac('sha256', secret).update(`timestamp=${ts}`).digest('hex');
+    // Sync timestamp with Binance server to avoid "Timestamp for this request" error
+    let ts = Date.now();
+    try {
+      const timeR = await axios.get('https://api.binance.com/api/v3/time', { timeout: 3000 });
+      ts = timeR.data.serverTime || ts;
+    } catch {}
+
+    const mkSig = (params) => crypto.createHmac('sha256', secret).update(params).digest('hex');
+    const sigF   = mkSig(`timestamp=${ts}&recvWindow=10000`);
     let totalUSDT = 0, walletData = [], source = 'futures';
 
     try {
       const rF = await axios.get('https://fapi.binance.com/fapi/v2/balance', {
-        params: { timestamp: ts, signature: sigF }, headers: { 'X-MBX-APIKEY': user.binance_key }, timeout: 8000
+        params: { timestamp: ts, recvWindow: 10000, signature: sigF }, headers: { 'X-MBX-APIKEY': user.binance_key }, timeout: 8000
       });
       const futuresBalances = rF.data.filter(b => parseFloat(b.balance) > 0);
       totalUSDT = futuresBalances.reduce((s,b) => s + parseFloat(b.balance), 0);
@@ -545,9 +552,9 @@ app.get('/api/binance/balance', requireAuth, async (req, res) => {
       }));
     } catch {
       source = 'spot';
-      const sigS = crypto.createHmac('sha256', secret).update(`timestamp=${ts}`).digest('hex');
+      const sigS = mkSig(`timestamp=${ts}&recvWindow=10000`);
       const rS = await axios.get('https://api.binance.com/api/v3/account', {
-        params: { timestamp: ts, signature: sigS }, headers: { 'X-MBX-APIKEY': user.binance_key }, timeout: 8000
+        params: { timestamp: ts, recvWindow: 10000, signature: sigS }, headers: { 'X-MBX-APIKEY': user.binance_key }, timeout: 8000
       });
       const spotBalances = rS.data.balances.filter(b => parseFloat(b.free) + parseFloat(b.locked) > 0);
       walletData = spotBalances.map(b => ({
@@ -895,12 +902,21 @@ app.get('/api/bot/status', requireAuth, (req, res) => {
   const pidAlive   = savedPid ? _isPidAlive(savedPid) : false;
   // Fonte 2: referência spawn em memória
   const spawnAlive = _botIsRunning();
+  // Fonte 3: pgrep — detecta bot iniciado por versões anteriores sem PID file
+  let pgrepPid = null;
+  if (!pidAlive && !spawnAlive) {
+    try {
+      const out = execSync('pgrep -f gridbot.py 2>/dev/null | head -1', { encoding:'utf8', timeout:2000, stdio:['pipe','pipe','pipe'] });
+      const p = parseInt(out.trim());
+      if (!isNaN(p)) { pgrepPid = p; _writeBotPid(p); } // adota o processo existente
+    } catch {}
+  }
 
-  const running = pidAlive || spawnAlive;
-  const pid     = running ? (savedPid || _botProcess?.pid)?.toString() : null;
+  const running = pidAlive || spawnAlive || !!pgrepPid;
+  const pid     = running ? (savedPid || pgrepPid || _botProcess?.pid)?.toString() : null;
 
   // Limpa PID file se processo não existe mais
-  if (savedPid && !pidAlive && !spawnAlive) {
+  if (savedPid && !pidAlive && !spawnAlive && !pgrepPid) {
     _clearBotPid();
     if (_botProcess) { _botProcess = null; }
   }
