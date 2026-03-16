@@ -728,7 +728,7 @@ let _botStartTime  = null;
 let _botShouldRun  = false;  // flag: usuário quer o bot rodando
 let _botRestartTimer = null;
 const MAX_BOT_RESTARTS = 10;
-const BOT_RESTART_DELAY = 20000; // 20s entre reinícios
+const BOT_RESTART_DELAY = 10000; // 10s entre reinícios do processo
 
 function _appendBotLog(line) {
   const ts = new Date().toLocaleString('pt-BR');
@@ -758,14 +758,14 @@ function _botIsRunning() {
 
 function _isPythonBotRunning() {
   try {
-    const out = execSync("ps aux 2>/dev/null | grep '[g]ridbot.py'", { encoding:'utf8', timeout:2000, stdio:['pipe','pipe','pipe'] });
+    const out = execSync("pgrep -f gridbot.py 2>/dev/null || true", { encoding:'utf8', timeout:2000, stdio:['pipe','pipe','pipe'] });
     return out.trim().length > 0;
   } catch { return false; }
 }
 
 function _getPythonBotPid() {
   try {
-    const out = execSync("ps aux 2>/dev/null | grep '[g]ridbot.py' | awk '{print $2}' | head -1", { encoding:'utf8', timeout:2000, stdio:['pipe','pipe','pipe'] });
+    const out = execSync("pgrep -f gridbot.py 2>/dev/null | head -1", { encoding:'utf8', timeout:2000, stdio:['pipe','pipe','pipe'] });
     return out.trim() || null;
   } catch { return null; }
 }
@@ -827,18 +827,19 @@ function _spawnBot(botEnv) {
 }
 
 app.get('/api/bot/status', requireAuth, (req, res) => {
-  // Fonte da verdade: verifica se gridbot.py está rodando via ps
+  // Fonte da verdade 1: referência ao processo spawn (mais confiável)
+  const nativeRunning = _botIsRunning();
+  // Fonte da verdade 2: pgrep (captura processos órfãos ou de outras instâncias)
   let pyRunning = false, pyPid = null;
   try {
-    const pidOut = execSync("ps aux 2>/dev/null | grep '[g]ridbot.py' | awk '{print $2}' | head -1",
+    const pidOut = execSync("pgrep -f gridbot.py 2>/dev/null | head -1",
       { encoding:'utf8', timeout:2000, stdio:['pipe','pipe','pipe'] });
     pyPid     = pidOut.trim() || null;
     pyRunning = !!pyPid;
   } catch {}
 
-  const nativeRunning = _botIsRunning();
-  const running       = pyRunning || nativeRunning;
-  const pid           = pyPid || (_botProcess?.pid?.toString()) || null;
+  const running = nativeRunning || pyRunning;
+  const pid     = (_botProcess?.pid?.toString()) || pyPid || null;
 
   // Uptime
   let uptime = null;
@@ -890,11 +891,11 @@ app.post('/api/bot/start', requireAuth, async (req, res) => {
       _botProcess.kill('SIGTERM');
       await new Promise(r => setTimeout(r, 1500)); // aguarda encerrar
     }
-    // Kill direto via ps caso tenha algum órfão
+    // Mata qualquer processo gridbot.py órfão (Alpine/Docker compatível)
     try {
-      execSync("pkill -f 'gridbot.py' 2>/dev/null || true", { timeout:2000 });
-      await new Promise(r => setTimeout(r, 500));
+      execSync("pkill -f gridbot.py 2>/dev/null; sleep 0.5 || true", { timeout:3000 });
     } catch {}
+    await new Promise(r => setTimeout(r, 800));
 
     // Reset restart counter
     _botRestarts  = 0;
@@ -916,9 +917,9 @@ app.post('/api/bot/stop', requireAuth, (req, res) => {
     try { _botProcess.kill('SIGTERM'); } catch {}
   }
 
-  // Kill direto via ps (garante que para mesmo em edge cases)
+  // Kill direto (Alpine/Docker compatível)
   try {
-    execSync("pkill -f 'gridbot.py' 2>/dev/null || true", { timeout:3000 });
+    execSync("pkill -f gridbot.py 2>/dev/null || true", { timeout:3000 });
   } catch {}
 
   _appendBotLog('🛑 Bot parado pelo usuário');

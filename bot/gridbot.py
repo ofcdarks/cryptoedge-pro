@@ -555,37 +555,57 @@ def main():
     warm_up()
     if STRATEGY=='grid': grid_init()
 
-    # ThreadedWebsocketManager — delay <100ms, python-binance v1+ nativo
     from binance import ThreadedWebsocketManager
-    twm = ThreadedWebsocketManager(api_key=API_KEY, api_secret=SECRET_KEY,
-                                    testnet=TESTNET)
-    twm.start()
 
-    if STRATEGY == 'scalping':
-        log.info("  📡 WebSocket TICKER ao vivo (delay <100ms)")
-        twm.start_symbol_ticker_socket(callback=on_ticker, symbol=SYMBOL)
-    else:
-        log.info(f"  📡 WebSocket KLINE [{TIMEFRAME}] — delay <100ms")
-        twm.start_kline_socket(callback=on_kline, symbol=SYMBOL, interval=TIMEFRAME)
+    ws_reconnects = 0
+    MAX_WS_RECONNECTS = 20  # reconexões dentro do mesmo processo
 
-    log.info("  ✅ WebSocket conectado — monitorando velas...")
-    try:
-        while state['running']:
-            time.sleep(1)
-            # Watchdog: if twm is not alive, restart
-            if not twm.is_alive():
-                log.warning("  ⚠️ WebSocket desconectado — reconectando...")
-                break
-    except KeyboardInterrupt:
-        pass
-    finally:
-        try: twm.stop()
-        except: pass
-        wr = state['wins']/max(1,state['wins']+state['losses'])*100
-        log.info(f"\n{'═'*62}")
-        log.info(f"  Resultado final: PnL ${state['pnl']:+.2f} | "
-                 f"W:{state['wins']} L:{state['losses']} WR:{wr:.0f}%")
-        log.info(f"{'═'*62}")
+    while state['running'] and ws_reconnects < MAX_WS_RECONNECTS:
+        try:
+            log.info(f"  📡 Conectando WebSocket (tentativa {ws_reconnects+1})...")
+            twm = ThreadedWebsocketManager(api_key=api_key, api_secret=secret_key,
+                                           testnet=TESTNET)
+            twm.start()
+
+            if STRATEGY == 'scalping':
+                twm.start_symbol_ticker_socket(callback=on_ticker, symbol=SYMBOL)
+            else:
+                twm.start_kline_socket(callback=on_kline, symbol=SYMBOL, interval=TIMEFRAME)
+
+            log.info("  ✅ WebSocket conectado — monitorando velas...")
+            ws_reconnects_before = ws_reconnects
+
+            # Watchdog loop
+            while state['running']:
+                time.sleep(2)
+                if not twm.is_alive():
+                    log.warning("  ⚠️ WebSocket desconectado — reconectando em 5s...")
+                    break
+
+            try: twm.stop()
+            except: pass
+
+            if not state['running']:
+                break  # usuário parou
+
+            # Reconexão
+            ws_reconnects += 1
+            wait = min(5 * ws_reconnects, 30)  # espera progressiva: 5s, 10s, 15s... máx 30s
+            log.info(f"  🔄 Reconectando WebSocket em {wait}s... ({ws_reconnects}/{MAX_WS_RECONNECTS})")
+            time.sleep(wait)
+
+        except KeyboardInterrupt:
+            break
+        except Exception as e:
+            ws_reconnects += 1
+            log.error(f"  WebSocket erro: {e}")
+            time.sleep(10)
+
+    wr = state['wins']/max(1,state['wins']+state['losses'])*100
+    log.info(f"\n{'═'*62}")
+    log.info(f"  Resultado final: PnL ${state['pnl']:+.2f} | "
+             f"W:{state['wins']} L:{state['losses']} WR:{wr:.0f}%")
+    log.info(f"{'═'*62}")
 
 if __name__=='__main__':
     MAX_RETRIES = 10   # máximo de tentativas de reconexão
