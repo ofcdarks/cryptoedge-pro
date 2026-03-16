@@ -780,85 +780,145 @@ function _tryFindPM2() {
   return null;
 }
 
-let _cachedBotEnv = null; // guarda env para auto-restarts
+let _cachedBotEnv = null;
+const BOT_PID_FILE = path.join(process.env.DB_PATH || '/data', 'bot.pid');
 
-// Inicia o processo Python do bot (sem PM2)
+// ─── Lê PID do arquivo ────────────────────────────────────────────────────────
+function _readBotPid() {
+  try {
+    const p = parseInt(fs.readFileSync(BOT_PID_FILE, 'utf8').trim());
+    return isNaN(p) ? null : p;
+  } catch { return null; }
+}
+
+function _writeBotPid(pid) {
+  try { fs.writeFileSync(BOT_PID_FILE, String(pid), 'utf8'); } catch {}
+}
+
+function _clearBotPid() {
+  try { fs.unlinkSync(BOT_PID_FILE); } catch {}
+}
+
+// ─── Verifica se processo com PID está vivo ───────────────────────────────────
+function _isPidAlive(pid) {
+  if (!pid) return false;
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+// ─── Spawn DETACHED — sobrevive a reinicializações do Node/EasyPanel ─────────
+// detached:true = processo Python em process group próprio
+// Node recebe SIGTERM do EasyPanel mas Python continua rodando
 function _spawnBot(botEnv) {
-  if (_botProcess && !_botProcess.killed) return; // já rodando
-  if (botEnv) _cachedBotEnv = botEnv; // atualiza cache
-  botEnv = _cachedBotEnv || botEnv; // usa cache se não passou env
+  if (botEnv) _cachedBotEnv = botEnv;
+  botEnv = _cachedBotEnv;
 
-  const pyInterp = process.platform === 'win32' ? 'python' : 'python3';
+  const pyInterp  = process.platform === 'win32' ? 'python' : 'python3';
   const botScript = path.join(__dirname, 'bot', 'gridbot.py');
+  const logFile   = path.join(__dirname, 'gridbot.log');
 
-  _botProcess = spawn(pyInterp, [botScript], {
+  // Escreve logs diretamente no arquivo (stdio pipe não funciona com detached)
+  let outFd, errFd;
+  try {
+    outFd = fs.openSync(logFile, 'a');
+    errFd = fs.openSync(logFile, 'a');
+  } catch {
+    outFd = 'ignore';
+    errFd = 'ignore';
+  }
+
+  // Spawn Python diretamente com detached:true
+  // Node.js chama setsid() internamente → Python fica em session própria
+  // Python escreve seu próprio PID via BOT_PID_FILE → tracking confiável
+  const proc = spawn(pyInterp, [botScript], {
     env:      botEnv,
     cwd:      __dirname,
-    detached: false,
-    stdio:    ['ignore', 'pipe', 'pipe'],
+    detached: true,   // nova sessão de processo (setsid interno do Node)
+    stdio:    ['ignore', outFd, errFd],
   });
+
+  proc.unref(); // Node não espera Python terminar
+
+  // Fecha file descriptors no pai (filho já herdou)
+  try { if (typeof outFd === 'number') fs.closeSync(outFd); } catch {}
+  try { if (typeof errFd === 'number') fs.closeSync(errFd); } catch {}
+
+  _botProcess   = proc;
   _botStartTime = Date.now();
-  _appendBotLog('🚀 Bot iniciado (PID ' + _botProcess.pid + ')');
+  // NÃO escrevemos proc.pid pois com detached o PID pode ser do wrapper
+  // Python escreve seu próprio PID em BOT_PID_FILE via os.getpid()
+  // Aguardamos Python escrever (até 5s)
+  _appendBotLog('🚀 Bot iniciado — aguardando Python escrever PID...');
+  let pidWaitAttempts = 0;
+  const pidWaitInterval = setInterval(() => {
+    pidWaitAttempts++;
+    const savedPid = _readBotPid();
+    if (savedPid && _isPidAlive(savedPid)) {
+      _appendBotLog('✅ Bot PID registrado: ' + savedPid);
+      clearInterval(pidWaitInterval);
+    } else if (pidWaitAttempts >= 10) {
+      clearInterval(pidWaitInterval);
+      _appendBotLog('⚠ PID não registrado após 5s — usando proc.pid=' + proc.pid);
+      _writeBotPid(proc.pid);
+    }
+  }, 500);
 
-  _botProcess.stdout.on('data', d =>
-    String(d).split('\n').filter(Boolean).forEach(_appendBotLog));
-  _botProcess.stderr.on('data', d =>
-    String(d).split('\n').filter(Boolean).forEach(l => _appendBotLog('⚠ ' + l)));
-
-  _botProcess.on('exit', (code, sig) => {
+  // Monitora saída sem bloquear (proc.on funciona mesmo com detached)
+  proc.on('exit', (code, sig) => {
     _appendBotLog(`🛑 Bot encerrado (código=${code}, sinal=${sig})`);
     _botProcess = null;
+    _clearBotPid();
 
-    // Auto-restart apenas se o usuário não parou manualmente e não foi erro de config
     if (_botShouldRun && code !== 2) {
       if (_botRestarts >= MAX_BOT_RESTARTS) {
-        _appendBotLog(`❌ Máximo de ${MAX_BOT_RESTARTS} reinícios atingido. Parando.`);
+        _appendBotLog(`❌ Máximo de ${MAX_BOT_RESTARTS} reinícios atingido.`);
         _botShouldRun = false;
         return;
       }
       _botRestarts++;
-      _appendBotLog(`🔄 Reiniciando em ${BOT_RESTART_DELAY/1000}s... (tentativa ${_botRestarts}/${MAX_BOT_RESTARTS})`);
+      _appendBotLog(`🔄 Reiniciando em ${BOT_RESTART_DELAY/1000}s... (${_botRestarts}/${MAX_BOT_RESTARTS})`);
       _botRestartTimer = setTimeout(() => {
         if (_botShouldRun) _spawnBot(_cachedBotEnv);
       }, BOT_RESTART_DELAY);
     }
   });
 
-  _botProcess.on('error', err => {
-    _appendBotLog('❌ Erro ao iniciar processo: ' + err.message);
+  proc.on('error', err => {
+    _appendBotLog('❌ Erro: ' + err.message);
     _botProcess = null;
+    _clearBotPid();
   });
 }
 
 app.get('/api/bot/status', requireAuth, (req, res) => {
-  // Fonte da verdade 1: referência ao processo spawn (mais confiável)
-  const nativeRunning = _botIsRunning();
-  // Fonte da verdade 2: pgrep (captura processos órfãos ou de outras instâncias)
-  let pyRunning = false, pyPid = null;
-  try {
-    const pidOut = execSync("pgrep -f gridbot.py 2>/dev/null | head -1",
-      { encoding:'utf8', timeout:2000, stdio:['pipe','pipe','pipe'] });
-    pyPid     = pidOut.trim() || null;
-    pyRunning = !!pyPid;
-  } catch {}
+  // Fonte 1: PID file (sobrevive reinicializações do Node)
+  const savedPid   = _readBotPid();
+  const pidAlive   = savedPid ? _isPidAlive(savedPid) : false;
+  // Fonte 2: referência spawn em memória
+  const spawnAlive = _botIsRunning();
 
-  const running = nativeRunning || pyRunning;
-  const pid     = (_botProcess?.pid?.toString()) || pyPid || null;
+  const running = pidAlive || spawnAlive;
+  const pid     = running ? (savedPid || _botProcess?.pid)?.toString() : null;
+
+  // Limpa PID file se processo não existe mais
+  if (savedPid && !pidAlive && !spawnAlive) {
+    _clearBotPid();
+    if (_botProcess) { _botProcess = null; }
+  }
 
   // Uptime
   let uptime = null;
   if (running && _botStartTime) {
     const s = Math.round((Date.now() - _botStartTime) / 1000);
-    uptime = s < 60 ? s+'s' : Math.floor(s/60)+'m '+( s%60)+'s';
+    uptime = s < 60 ? s+'s' : Math.floor(s/60)+'m '+(s%60)+'s';
   }
 
   res.json({
     running,
-    status:    running ? 'online' : 'stopped',
+    status:     running ? 'online' : 'stopped',
     pid,
-    restarts:  _botRestarts,
-    pm2_found: false,
-    mode:      'native',
+    restarts:   _botRestarts,
+    pm2_found:  false,
+    mode:       'native (detached)',
     uptime,
     should_run: _botShouldRun,
   });
@@ -887,6 +947,7 @@ app.post('/api/bot/start', requireAuth, async (req, res) => {
     botEnv['PATH']           = botEnv['PATH']   || process.env.PATH   || '/usr/local/bin:/usr/bin:/bin';
     botEnv['HOME']           = botEnv['HOME']   || process.env.HOME   || '/root';
     botEnv['PYTHONUNBUFFERED']   = '1';
+    botEnv['BOT_PID_FILE'] = BOT_PID_FILE;
 
     // ── 1. Para PM2 se existir (versões anteriores podiam ter deixado PM2 rodando) ─
     const pm2 = _tryFindPM2();
@@ -936,21 +997,26 @@ app.post('/api/bot/stop', requireAuth, (req, res) => {
   _botShouldRun = false;
   if (_botRestartTimer) { clearTimeout(_botRestartTimer); _botRestartTimer = null; }
 
-  // Para processo spawn nativo
+  // Mata via PID file (processo detached)
+  const savedPid = _readBotPid();
+  if (savedPid && _isPidAlive(savedPid)) {
+    try { process.kill(savedPid, 'SIGTERM'); } catch {}
+  }
+
+  // Mata referência spawn se existir
   if (_botIsRunning()) {
     try { _botProcess.kill('SIGTERM'); } catch {}
   }
 
-  // Kill direto (Alpine/Docker compatível)
-  try {
-    execSync("pkill -f gridbot.py 2>/dev/null || true", { timeout:3000 });
-  } catch {}
+  // pkill como último recurso
+  try { execSync("pkill -f gridbot.py 2>/dev/null || true", { timeout:3000 }); } catch {}
 
   _appendBotLog('🛑 Bot parado pelo usuário');
   setTimeout(() => {
-    _botProcess = null;
+    _botProcess  = null;
     _botStartTime = null;
-  }, 2000);
+    _clearBotPid();
+  }, 3000);
 
   res.json({ ok: true, message: 'Bot parado' });
 });

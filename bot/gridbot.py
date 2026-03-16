@@ -525,6 +525,16 @@ def warm_up():
 
 def main():
     global client
+    # Escreve PID file para que o servidor Node possa rastrear este processo
+    pid_file = os.environ.get('BOT_PID_FILE', '/data/bot.pid')
+    try:
+        os.makedirs(os.path.dirname(pid_file), exist_ok=True)
+        with open(pid_file, 'w') as f:
+            f.write(str(os.getpid()))
+        log.info(f"  PID {os.getpid()} salvo em {pid_file}")
+    except Exception as e:
+        log.warning(f"  Não foi possível salvar PID: {e}")
+
     # Recarrega chaves a cada tentativa (podem ter sido injetadas após o início)
     api_key    = os.environ.get('BINANCE_API_KEY',    API_KEY)
     secret_key = os.environ.get('BINANCE_SECRET_KEY', SECRET_KEY)
@@ -606,6 +616,12 @@ def main():
     log.info(f"  Resultado final: PnL ${state['pnl']:+.2f} | "
              f"W:{state['wins']} L:{state['losses']} WR:{wr:.0f}%")
     log.info(f"{'═'*62}")
+    # Limpa PID file ao encerrar
+    try:
+        pid_file = os.environ.get('BOT_PID_FILE', '/data/bot.pid')
+        if os.path.exists(pid_file):
+            os.remove(pid_file)
+    except: pass
 
 if __name__=='__main__':
     MAX_RETRIES = 10   # máximo de tentativas de reconexão
