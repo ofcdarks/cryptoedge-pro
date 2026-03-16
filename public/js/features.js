@@ -614,7 +614,190 @@ document.querySelectorAll('.nav-item').forEach(item => {
     const panel = item.dataset.panel;
     if (panel === 'funding')     loadFundingRates();
     if (panel === 'journal')     switchJournalTab('register');
+    if (panel === 'live')        initLivePanel();
   });
 });
 
 console.log('[Features v2.0] Funding Rate, Correlation, Enhanced Journal, Risk Manager, Equity Curve loaded.');
+
+// ═══════════════════════════════════════════════════════════════════
+// LIVE TRADING PANEL
+// ═══════════════════════════════════════════════════════════════════
+
+let _liveInterval   = null;
+let _liveTVWidget   = null;
+let _liveNarrateTimer = null;
+let _liveSessionStart = null;
+
+async function initLivePanel() {
+  // Load initial state
+  await refreshLiveState();
+
+  // Start polling every 5s
+  if (_liveInterval) clearInterval(_liveInterval);
+  _liveInterval = setInterval(refreshLiveState, 5000);
+
+  // Init TradingView in live panel
+  _initLiveTV();
+
+  // Update session timer every second
+  setInterval(() => {
+    if (_liveSessionStart) {
+      const s = Math.floor((Date.now() - _liveSessionStart) / 1000);
+      const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), ss = s%60;
+      const el = document.getElementById('live-session-time');
+      if (el) el.textContent = `Sessão: ${h>0?h+'h ':''} ${m}m ${ss}s`;
+    }
+  }, 1000);
+
+  // Update position age every second
+  setInterval(() => {
+    const lovTime = document.getElementById('lov-time');
+    if (lovTime && window._livePositionOpenedAt) {
+      const s = Math.floor((Date.now() - window._livePositionOpenedAt) / 1000);
+      lovTime.textContent = s < 60 ? s+'s' : Math.floor(s/60)+'m '+( s%60)+'s';
+    }
+  }, 1000);
+}
+
+function _initLiveTV() {
+  const container = document.getElementById('live-tv-widget');
+  if (!container || _liveTVWidget) return;
+  if (typeof TradingView === 'undefined') {
+    setTimeout(_initLiveTV, 1000); return;
+  }
+  try {
+    _liveTVWidget = new TradingView.widget({
+      container_id:      'live-tv-widget',
+      symbol:            'BINANCE:BTCUSDT',
+      interval:          '15',
+      timezone:          'America/Sao_Paulo',
+      theme:             'dark',
+      style:             '1',
+      locale:            'br',
+      toolbar_bg:        '#0D1117',
+      hide_side_toolbar: false,
+      allow_symbol_change: false,
+      height:            '100%',
+      width:             '100%',
+    });
+  } catch(e) {
+    if (container) container.innerHTML = '<div style="height:100%;display:flex;align-items:center;justify-content:center;color:var(--t3)">Gráfico indisponível</div>';
+  }
+}
+
+async function refreshLiveState() {
+  try {
+    const r = await fetch('/api/live/state', { headers: auth.headers() });
+    const d = await r.json();
+    if (!d.ok) return;
+    _renderLiveState(d);
+  } catch {}
+}
+
+function _renderLiveState(d) {
+  const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+
+  // Header
+  set('live-pair-title', d.pair || 'BTC/USDT');
+  set('live-strategy-label', (d.strategy||'').toUpperCase() + (d.enabled ? ' · AO VIVO' : ' · PAUSADO'));
+
+  // Live dot
+  const dot = document.getElementById('live-dot');
+  if (dot) { dot.style.background = d.enabled ? 'var(--green)' : 'var(--t3)'; dot.style.boxShadow = d.enabled ? '0 0 8px var(--green)' : 'none'; }
+
+  // Session stats
+  const sess = d.session || {};
+  set('ls-trades', sess.trades || 0);
+  set('ls-wins',   sess.wins   || 0);
+  set('ls-losses', sess.losses || 0);
+  set('ls-wr',     sess.trades > 0 ? Math.round((sess.wins / sess.trades) * 100) + '%' : '—');
+  const pnl = sess.pnl || 0;
+  const pnlEl = document.getElementById('ls-pnl');
+  if (pnlEl) { pnlEl.textContent = (pnl >= 0 ? '+' : '') + '$' + Math.abs(pnl).toFixed(2); pnlEl.style.color = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--t2)'; }
+  if (sess.startedAt && !_liveSessionStart) _liveSessionStart = new Date(sess.startedAt).getTime();
+
+  // Position overlay
+  const overlay = document.getElementById('live-position-overlay');
+  if (d.position) {
+    if (overlay) overlay.style.display = 'block';
+    window._livePositionOpenedAt = new Date(d.position.openedAt || Date.now()).getTime();
+    const dir = d.position.side === 'BUY' ? 'LONG' : 'SHORT';
+    const dirEl = document.getElementById('lov-dir');
+    if (dirEl) { dirEl.textContent = dir; dirEl.style.color = d.position.side === 'BUY' ? 'var(--green)' : 'var(--red)'; }
+    set('lov-entry', '$' + parseFloat(d.position.entry || 0).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}));
+    set('lov-sl',    '$' + parseFloat(d.position.sl    || 0).toFixed(2));
+    set('lov-tp',    '$' + parseFloat(d.position.tp    || 0).toFixed(2));
+  } else {
+    if (overlay) overlay.style.display = 'none';
+    window._livePositionOpenedAt = null;
+    set('lov-pnl', '—');
+  }
+
+  // IA narration
+  const iaEl = document.getElementById('live-ia-text');
+  if (iaEl && d.narration) { iaEl.textContent = d.narration; iaEl.style.color = 'var(--t1)'; }
+
+  // Signal feed
+  _renderLiveFeed(d.feed || []);
+}
+
+function _renderLiveFeed(feed) {
+  const el = document.getElementById('live-signal-feed');
+  if (!el) return;
+  if (!feed.length) { el.innerHTML = '<div style="text-align:center;color:var(--t3);font-size:12px;padding:20px">Nenhum sinal ainda</div>'; return; }
+  const colors = { green:'var(--green)', red:'var(--red)', gold:'var(--gold)', gray:'var(--t3)' };
+  el.innerHTML = feed.slice(0, 40).map(f => {
+    const c = colors[f.color] || 'var(--t3)';
+    const t = f.ts ? new Date(f.ts).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '';
+    return `<div style="padding:7px 9px;border-radius:6px;background:var(--bg2);border-left:2px solid ${c};font-size:12px">
+      <div style="font-weight:600;color:${c}">${escHtml(f.label||'')}</div>
+      ${f.detail ? `<div style="color:var(--t3);font-size:11px;font-family:var(--mono);margin-top:2px">${escHtml(f.detail)}</div>` : ''}
+      <div style="color:var(--t3);font-size:10px;font-family:var(--mono);margin-top:3px">${t}</div>
+    </div>`;
+  }).join('');
+}
+
+async function requestLiveNarration() {
+  const iaEl = document.getElementById('live-ia-text');
+  if (iaEl) iaEl.innerHTML = '<span style="color:var(--gold)">⏳ IA analisando...</span>';
+  try {
+    const r = await fetch('/api/live/narrate', { method: 'POST', headers: auth.headers(), body: JSON.stringify({}) });
+    const d = await r.json();
+    if (iaEl && d.text) { iaEl.textContent = d.text; iaEl.style.color = 'var(--t1)'; }
+  } catch {}
+}
+
+function copyLiveLink() {
+  const url = window.location.origin + '/live';
+  navigator.clipboard.writeText(url).then(() => showToast('🔗 Link copiado: ' + url)).catch(() => {
+    prompt('Link público do Live Trading:', url);
+  });
+}
+
+function toggleLiveFullscreen() {
+  const panel = document.getElementById('panel-live');
+  if (!panel) return;
+  if (document.fullscreenElement) {
+    document.exitFullscreen();
+  } else {
+    panel.requestFullscreen().catch(() => showToast('Tela cheia não disponível neste navegador'));
+  }
+}
+
+function clearLiveFeed() {
+  const el = document.getElementById('live-signal-feed');
+  if (el) el.innerHTML = '<div style="text-align:center;color:var(--t3);font-size:12px;padding:20px">Feed limpo</div>';
+}
+
+// Stop live polling when leaving panel
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.nav-item').forEach(item => {
+    item.addEventListener('click', () => {
+      if (item.dataset.panel !== 'live' && _liveInterval) {
+        clearInterval(_liveInterval);
+        _liveInterval = null;
+      }
+    });
+  });
+});

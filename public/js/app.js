@@ -2110,7 +2110,6 @@ async function botStart() {
     const r = await fetch('/api/bot/start', { method: 'POST' });
     const d = await r.json();
     if (!d.ok) {
-      // Erros de configuração — guia o usuário
       if (d.error && (d.error.includes('Binance') || d.error.includes('chaves'))) {
         showToast('⚙️ ' + d.error + ' → Vá em Meu Perfil → Chaves de API', true);
       } else {
@@ -2118,10 +2117,15 @@ async function botStart() {
       }
     } else {
       showToast('✅ ' + d.message);
+      // Atualiza badge sidebar imediatamente
+      const badge = document.getElementById('bot-status-badge');
+      if (badge) { badge.textContent = 'ON'; badge.style.background = 'var(--green)'; badge.style.color = '#000'; }
     }
     setTimeout(loadBotStatus, 1500);
     setTimeout(loadBotLogs,   2000);
-    setTimeout(loadBotLogs,   5000); // segunda leitura depois de estabilizar
+    setTimeout(loadBotLogs,   5000);
+    // Notifica live state
+    try { fetch('/api/live/event', { method:'POST', headers: auth.headers(), body: JSON.stringify({ type:'bot_started', data:{ pair: document.getElementById('bc-symbol')?.value||'BTCUSDT', strategy: document.getElementById('bc-strategy')?.value||'pattern' } }) }); } catch {}
   } catch(e) {
     showToast('❌ Erro: ' + e.message, true);
   } finally {
@@ -2138,6 +2142,11 @@ async function botStop() {
     const r = await fetch('/api/bot/stop', { method: 'POST' });
     const d = await r.json();
     showToast(d.ok ? '✅ ' + d.message : '❌ ' + d.error, !d.ok);
+    if (d.ok) {
+      const badge = document.getElementById('bot-status-badge');
+      if (badge) { badge.textContent = 'OFF'; badge.style.background = ''; badge.style.color = ''; }
+      try { fetch('/api/live/event', { method:'POST', headers: auth.headers(), body: JSON.stringify({ type:'bot_stopped', data:{} }) }); } catch {}
+    }
     setTimeout(loadBotStatus, 1500);
   } catch(e) {
     showToast('❌ Erro: ' + e.message, true);
@@ -5632,6 +5641,22 @@ function initApp() {
   loadFearGreed();
   loadTrades();
   loadStats();
+  // ── Polling global do badge do bot no sidebar (a cada 15s, leve) ──────────
+  async function _updateBotSidebarBadge() {
+    try {
+      const r = await fetch('/api/bot/status');
+      const d = await r.json();
+      const badge = document.getElementById('bot-status-badge');
+      if (!badge) return;
+      const running = d.running;
+      badge.textContent = running ? 'ON' : 'OFF';
+      badge.style.background   = running ? 'var(--green)' : '';
+      badge.style.color        = running ? '#000' : '';
+      badge.style.borderRadius = running ? '3px' : '';
+    } catch {}
+  }
+  _updateBotSidebarBadge();
+  setInterval(_updateBotSidebarBadge, 15000);
   loadWatchlist();
   buildAnalysisSymbolSelector();
   buildAlertSymbolSelector();

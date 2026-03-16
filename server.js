@@ -761,31 +761,77 @@ function _appendBotLog(line) {
   } catch {}
 }
 
+// Detecta se gridbot.py está rodando via ps (independente de PM2/spawn)
+function _isPythonBotRunning() {
+  try {
+    const out = execSync("ps aux 2>/dev/null | grep '[g]ridbot.py'", { encoding:'utf8', timeout:2000, stdio:['pipe','pipe','pipe'] });
+    return out.trim().length > 0;
+  } catch { return false; }
+}
+
+function _getPythonBotPid() {
+  try {
+    const out = execSync("ps aux 2>/dev/null | grep '[g]ridbot.py' | awk '{print $2}' | head -1", { encoding:'utf8', timeout:2000, stdio:['pipe','pipe','pipe'] });
+    return out.trim() || null;
+  } catch { return null; }
+}
+
 app.get('/api/bot/status', requireAuth, (req, res) => {
-  // 1. Try PM2 first
+  // 1. Verifica diretamente se gridbot.py está rodando (fonte da verdade)
+  const pyRunning = _isPythonBotRunning();
+  const pyPid     = pyRunning ? _getPythonBotPid() : null;
+
+  // 2. Consulta PM2 para metadados (restarts, uptime)
   const pm2 = _tryFindPM2();
+  let pm2Meta = null;
   if (pm2) {
     try {
-      const out = execSync(pm2 + ' jlist', { encoding:'utf8', timeout:5000, stdio:['pipe','pipe','pipe'] });
+      const out = execSync(pm2 + ' jlist', { encoding:'utf8', timeout:4000, stdio:['pipe','pipe','pipe'] });
       const raw = (out||'').trim();
       const jsonStart = raw.lastIndexOf('[');
       let list = [];
       try { list = JSON.parse(jsonStart >= 0 ? raw.slice(jsonStart) : raw); } catch {}
       const bot = Array.isArray(list) ? list.find(p => p.name === 'cryptoedge-bot') : null;
-      if (bot) return res.json({ running: bot.pm2_env?.status==='online', status: bot.pm2_env?.status, pid: bot.pid, restarts: bot.pm2_env?.restart_time, pm2_found: true, mode: 'pm2' });
-      return res.json({ running: false, status: 'stopped', pid: null, pm2_found: true, mode: 'pm2' });
+      if (bot) pm2Meta = { restarts: bot.pm2_env?.restart_time, uptime: bot.pm2_env?.pm_uptime };
     } catch {}
   }
-  // 2. Fallback: spawn nativo
-  const running = _botIsRunning();
+
+  // 3. Se Python está rodando, bot está ONLINE independente do PM2
+  if (pyRunning) {
+    return res.json({
+      running:  true,
+      status:   'online',
+      pid:      pyPid,
+      restarts: pm2Meta?.restarts ?? _botRestarts,
+      pm2_found: !!pm2,
+      mode:     pm2 ? 'pm2' : 'native',
+      source:   'process',
+    });
+  }
+
+  // 4. Python não encontrado — verifica spawn nativo
+  const nativeRunning = _botIsRunning();
+  if (nativeRunning) {
+    return res.json({
+      running:  true,
+      status:   'online',
+      pid:      _botProcess?.pid,
+      restarts: _botRestarts,
+      pm2_found: false,
+      mode:     'native',
+      source:   'native',
+    });
+  }
+
+  // 5. Nada rodando
   res.json({
-    running,
-    status:    running ? 'online' : 'stopped',
-    pid:       running ? _botProcess?.pid : null,
-    restarts:  _botRestarts,
-    pm2_found: false,
-    mode:      'native',
-    uptime:    running && _botStartTime ? Math.round((Date.now()-_botStartTime)/1000)+'s' : null,
+    running:   false,
+    status:    'stopped',
+    pid:       null,
+    restarts:  pm2Meta?.restarts ?? 0,
+    pm2_found: !!pm2,
+    mode:      pm2 ? 'pm2' : 'native',
+    source:    'none',
   });
 });
 
@@ -843,10 +889,13 @@ app.post('/api/bot/start', requireAuth, async (req, res) => {
       const cwdEsc       = __dirname.split('\\').join('/');
       const launcherCode = [
         "'use strict';",
+        "process.title='cryptoedge-bot-runner';",
         "const {spawn}=require('child_process'),fs=require('fs');",
         "const env=JSON.parse(fs.readFileSync('" + runtimeEsc + "','utf8'));",
-        "const p=spawn(process.platform==='win32'?'python':'python3',['" + botScriptEsc + "'],{env,stdio:'inherit',cwd:'" + cwdEsc + "'});",
-        "p.on('exit',c=>process.exit(c||0));"
+        "const p=spawn(process.platform==='win32'?'python':'python3',['" + botScriptEsc + "'],{env,stdio:'inherit',cwd:'" + cwdEsc + "',detached:false});",
+        "process.stdin.resume();",
+        "['SIGTERM','SIGINT'].forEach(s=>process.on(s,()=>{try{p.kill(s);}catch{}setTimeout(()=>process.exit(0),3000);}));",
+        "p.on('exit',(c,s)=>{process.exit(c!=null?c:(s?1:0));});"
       ].join('\n');
       fs.writeFileSync(launcherJs, launcherCode, 'utf8');
 
@@ -895,27 +944,42 @@ app.post('/api/bot/start', requireAuth, async (req, res) => {
 });
 
 app.post('/api/bot/stop', requireAuth, (req, res) => {
-  // 1. Tenta PM2
+  let stopped = false;
+
+  // 1. Para via PM2 (para o launcher Node, que propaga SIGTERM ao Python)
   const pm2 = _tryFindPM2();
   if (pm2) {
     try {
-      execSync(`${pm2} stop cryptoedge-bot`, { encoding:'utf8', timeout:5000 });
-      return res.json({ ok: true, message: 'Bot parado via PM2' });
+      execSync(pm2 + ' stop cryptoedge-bot', { encoding:'utf8', timeout:5000 });
+      stopped = true;
     } catch {}
   }
-  // 2. Mata processo nativo
+
+  // 2. Para processo nativo se existir
   if (_botIsRunning()) {
-    try {
-      _botProcess.kill('SIGTERM');
-      setTimeout(() => { try { if (_botIsRunning()) _botProcess.kill('SIGKILL'); } catch {} }, 5000);
-      _appendBotLog('🛑 Bot parado pelo usuário');
-      res.json({ ok: true, message: 'Bot parado' });
-    } catch(e) {
-      res.status(500).json({ ok: false, error: e.message });
-    }
-  } else {
-    res.json({ ok: true, message: 'Bot já estava parado' });
+    try { _botProcess.kill('SIGTERM'); stopped = true; } catch {}
   }
+
+  // 3. Kill direto no Python via ps (garante que para mesmo se PM2/spawn falharem)
+  try {
+    const pid = _getPythonBotPid();
+    if (pid) {
+      execSync('kill -SIGTERM ' + pid + ' 2>/dev/null || true', { timeout:2000 });
+      stopped = true;
+    }
+  } catch {}
+
+  // 4. SIGKILL após 5s se ainda estiver rodando
+  setTimeout(() => {
+    try {
+      const pid = _getPythonBotPid();
+      if (pid) execSync('kill -SIGKILL ' + pid + ' 2>/dev/null || true', { timeout:2000 });
+      if (_botIsRunning()) _botProcess?.kill('SIGKILL');
+    } catch {}
+  }, 5000);
+
+  _appendBotLog('🛑 Bot parado pelo usuário');
+  res.json({ ok: true, message: stopped ? 'Bot parado' : 'Bot já estava parado' });
 });
 
 app.get('/api/bot/logs', requireAuth, (req, res) => {
@@ -1324,6 +1388,124 @@ async function sendMail({ to, subject, html }) {
     console.log('[EMAIL] Sent:', subject, '->', to);
   } catch(e) { console.error('[EMAIL] Error:', e.message); }
 }
+
+// ─── Live Trading State ───────────────────────────────────────────────────────
+const _liveState = {
+  enabled:    false,
+  pair:       'BTCUSDT',
+  strategy:   'pattern',
+  position:   null,      // { side, entry, sl, tp, qty, openedAt }
+  session:    { trades:0, wins:0, losses:0, pnl:0, startedAt: null },
+  feed:       [],        // últimos 50 eventos
+  lastNarration: '',
+  lastCandle: null,
+};
+
+function _pushLiveFeed(event) {
+  _liveState.feed.unshift({ ...event, ts: new Date().toISOString() });
+  if (_liveState.feed.length > 100) _liveState.feed = _liveState.feed.slice(0, 100);
+}
+
+// Public endpoint — sem auth (para link público)
+app.get('/live', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'live.html'));
+});
+
+// Live state API — público (só leitura, sem dados sensíveis)
+app.get('/api/live/state', (req, res) => {
+  res.json({
+    ok:       true,
+    enabled:  _liveState.enabled,
+    pair:     _liveState.pair,
+    strategy: _liveState.strategy,
+    position: _liveState.position,
+    session:  _liveState.session,
+    feed:     _liveState.feed.slice(0, 30),
+    narration: _liveState.lastNarration,
+    ts:       new Date().toISOString(),
+  });
+});
+
+// Bot posts events to live state (called internally by bot webhook or analysis save)
+app.post('/api/live/event', requireAuth, (req, res) => {
+  try {
+    const { type, data } = req.body || {};
+    if (!type) return res.status(400).json({ error: 'type required' });
+
+    switch (type) {
+      case 'bot_started':
+        _liveState.enabled    = true;
+        _liveState.pair       = data.pair     || _liveState.pair;
+        _liveState.strategy   = data.strategy || _liveState.strategy;
+        _liveState.session    = { trades:0, wins:0, losses:0, pnl:0, startedAt: new Date().toISOString() };
+        _pushLiveFeed({ type, label: '🚀 Bot iniciado', detail: `${data.strategy} | ${data.pair}`, color: 'green' });
+        break;
+      case 'bot_stopped':
+        _liveState.enabled  = false;
+        _liveState.position = null;
+        _pushLiveFeed({ type, label: '🛑 Bot parado', detail: `PnL sessão: $${(_liveState.session.pnl||0).toFixed(2)}`, color: 'gray' });
+        break;
+      case 'position_open':
+        _liveState.position = { ...data, openedAt: new Date().toISOString() };
+        _pushLiveFeed({ type, label: data.side === 'BUY' ? '🟢 Long aberto' : '🔴 Short aberto', detail: `${data.pair} @ $${parseFloat(data.entry).toFixed(2)} | SL $${parseFloat(data.sl).toFixed(2)} | TP $${parseFloat(data.tp).toFixed(2)}`, color: data.side==='BUY'?'green':'red' });
+        break;
+      case 'position_close':
+        _liveState.position = null;
+        const pnl = parseFloat(data.pnl) || 0;
+        _liveState.session.trades++;
+        _liveState.session.pnl += pnl;
+        if (pnl >= 0) _liveState.session.wins++; else _liveState.session.losses++;
+        _pushLiveFeed({ type, label: pnl >= 0 ? '✅ Trade fechado — WIN' : '❌ Trade fechado — LOSS', detail: `${data.reason} | PnL: ${pnl>=0?'+':''}$${pnl.toFixed(2)}`, color: pnl>=0?'green':'red' });
+        break;
+      case 'signal':
+        _pushLiveFeed({ type, label: `📡 Sinal: ${data.direction?.toUpperCase()}`, detail: `${data.pattern} | conf=${data.confidence}% | ${data.pair}`, color: data.direction==='up'?'green':'red' });
+        break;
+      case 'candle':
+        _liveState.lastCandle = data;
+        _pushLiveFeed({ type, label: `🕯 Vela ${data.timeframe}`, detail: `O:${data.open} H:${data.high} L:${data.low} C:${data.close}`, color: parseFloat(data.close)>=parseFloat(data.open)?'green':'red' });
+        break;
+      case 'narration':
+        _liveState.lastNarration = data.text || '';
+        _pushLiveFeed({ type, label: '🤖 IA', detail: data.text?.slice(0,120), color: 'gold' });
+        break;
+    }
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Generate live narration from current state
+app.post('/api/live/narrate', requireAuth, async (req, res) => {
+  const apiKey  = process.env.LAOZHANG_API_KEY;
+  const baseUrl = process.env.LAOZHANG_BASE_URL || 'https://api.laozhang.ai/v1';
+  const model   = process.env.AI_MODEL || 'qwen3-30b-a3b';
+  if (!apiKey) return res.json({ ok: false, text: 'IA não configurada.' });
+
+  const { candle, patterns, prediction, position, session } = req.body || {};
+  const prompt = `Você é um trader profissional narrando ao vivo. Seja direto e objetivo em 2-3 frases curtas.
+Par: ${_liveState.pair} | Estratégia: ${_liveState.strategy}
+Vela atual: ${JSON.stringify(candle||{})}
+Padrões: ${JSON.stringify(patterns||[])}
+Predição: ${JSON.stringify(prediction||{})}
+Posição: ${position ? JSON.stringify(position) : 'sem posição aberta'}
+Sessão: ${session?.trades||0} trades | WR: ${session?.trades>0?Math.round((session.wins/session.trades)*100):0}% | PnL: $${(session?.pnl||0).toFixed(2)}
+Narre o que está acontecendo agora de forma objetiva, como um comentarista de trading ao vivo.`;
+
+  try {
+    const r = await axios.post(`${baseUrl}/chat/completions`, {
+      model, max_tokens: 150, temperature: 0.6,
+      messages: [{ role:'user', content: prompt }],
+      ...(model.toLowerCase().includes('qwen3') ? { enable_thinking:false } : {})
+    }, { headers: { Authorization:`Bearer ${apiKey}`, 'Content-Type':'application/json' }, timeout:15000 });
+
+    let text = r.data?.choices?.[0]?.message?.content || '';
+    text = text.replace(/<think>[\s\S]*?<\/think>/gi,'').trim();
+    _liveState.lastNarration = text;
+    _pushLiveFeed({ type:'narration', label:'🤖 IA', detail: text.slice(0,120), color:'gold' });
+    res.json({ ok: true, text });
+  } catch(e) {
+    res.json({ ok: false, text: 'Erro na narração: ' + (e.message||'').slice(0,60) });
+  }
+});
 
 // ─── Health ────────────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => res.json({
