@@ -1266,6 +1266,61 @@ app.get('/api/analysis/pnl-stats', requireAuth, (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+
+// ─── Binance Account Balance (real) ───────────────────────────────────────────
+app.get('/api/binance/balance', requireAuth, async (req, res) => {
+  try {
+    const user = db.get('SELECT binance_key, binance_secret FROM users WHERE username=?', [req.user]);
+    if (!user?.binance_key || !user?.binance_secret)
+      return res.json({ ok: false, error: 'Binance API Key não configurada em Meu Perfil', simulated: true, balance: 500 });
+
+    const crypto   = require('crypto');
+    const ts       = Date.now();
+    const qsFutures = `timestamp=${ts}`;
+    const sigF     = crypto.createHmac('sha256', user.binance_secret).update(qsFutures).digest('hex');
+
+    // Try Futures balance first (USD-M)
+    let totalUSDT = 0, walletData = [], source = 'futures';
+    try {
+      const rF = await axios.get('https://fapi.binance.com/fapi/v2/balance', {
+        params: { timestamp: ts, signature: sigF },
+        headers: { 'X-MBX-APIKEY': user.binance_key },
+        timeout: 8000
+      });
+      const futuresBalances = rF.data.filter(b => parseFloat(b.balance) > 0);
+      totalUSDT = futuresBalances.reduce((s, b) => s + parseFloat(b.balance), 0);
+      walletData = futuresBalances.map(b => ({
+        asset: b.asset, balance: parseFloat(b.balance).toFixed(2),
+        unrealizedProfit: parseFloat(b.crossUnPnl||0).toFixed(2)
+      }));
+    } catch {
+      // Fallback: Spot balance
+      source = 'spot';
+      const qsSpot = `timestamp=${ts}`;
+      const sigS   = crypto.createHmac('sha256', user.binance_secret).update(qsSpot).digest('hex');
+      const rS = await axios.get('https://api.binance.com/api/v3/account', {
+        params: { timestamp: ts, signature: sigS },
+        headers: { 'X-MBX-APIKEY': user.binance_key },
+        timeout: 8000
+      });
+      const spotBalances = rS.data.balances.filter(b => parseFloat(b.free) + parseFloat(b.locked) > 0);
+      walletData = spotBalances.map(b => ({
+        asset: b.asset,
+        balance: (parseFloat(b.free) + parseFloat(b.locked)).toFixed(4),
+        free: parseFloat(b.free).toFixed(4),
+        locked: parseFloat(b.locked).toFixed(4)
+      }));
+      const usdt = spotBalances.find(b => b.asset === 'USDT');
+      totalUSDT = usdt ? parseFloat(usdt.free) + parseFloat(usdt.locked) : 0;
+    }
+
+    res.json({ ok: true, source, totalUSDT: totalUSDT.toFixed(2), balances: walletData });
+  } catch(e) {
+    const errMsg = e.response?.data?.msg || e.message;
+    res.json({ ok: false, error: errMsg, simulated: true, balance: 500 });
+  }
+});
+
 // ─── Legal pages ──────────────────────────────────────────────────────────────
 const path2 = require('path');
 app.get('/privacy', (req, res) => res.sendFile(path2.join(__dirname, 'public', 'privacy.html')));

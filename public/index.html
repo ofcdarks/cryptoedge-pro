@@ -414,7 +414,11 @@
         <div class="grid g4" style="margin-bottom:10px">
           <div class="metric"><label>P&L Hoje</label><div class="val green" id="d-pnl">$0.00</div><div class="sub" id="d-trades-sub">0 trades</div></div>
           <div class="metric"><label>Win Rate</label><div class="val gold" id="d-winrate">—</div><div class="sub" id="d-wl">0W / 0L</div></div>
-          <div class="metric"><label>Saldo Simulado</label><div class="val" id="d-bal">$500.00</div><div class="sub">Capital base</div></div>
+          <div class="metric" style="cursor:pointer" onclick="loadRealBalance()" title="Clique para atualizar">
+            <label id="d-bal-label">Saldo Binance</label>
+            <div class="val" id="d-bal">$—</div>
+            <div class="sub" id="d-bal-sub">Clique para carregar</div>
+          </div>
           <div class="metric"><label>Fear & Greed</label><div class="val" id="d-fng-val">—</div><div class="sub" id="d-fng-label">Carregando...</div></div>
         </div>
 

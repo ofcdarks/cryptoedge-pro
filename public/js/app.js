@@ -5134,6 +5134,33 @@ async function loadAIPnLStats(period = 'month') {
 }
 
 
+
+// ─── Real Binance Balance ──────────────────────────────────────────────────────
+async function loadRealBalance() {
+  const balEl  = document.getElementById('d-bal');
+  const subEl  = document.getElementById('d-bal-sub');
+  const lblEl  = document.getElementById('d-bal-label');
+  if (balEl) balEl.textContent = '...';
+  if (subEl) subEl.textContent = 'Buscando...';
+  try {
+    const r = await fetch('/api/binance/balance', { headers: auth.headers() });
+    const d = await r.json();
+    if (d.ok) {
+      if (balEl) { balEl.textContent = '$' + parseFloat(d.totalUSDT).toLocaleString('pt-BR',{minimumFractionDigits:2}); balEl.className = 'val green'; }
+      if (subEl) subEl.textContent = (d.source === 'futures' ? 'Futures USD-M' : 'Spot') + ' · ' + d.balances.length + ' ativo(s)';
+      if (lblEl) lblEl.textContent = 'Saldo Binance Real';
+    } else {
+      if (balEl) { balEl.textContent = d.balance ? '$'+d.balance.toFixed(2) : '—'; balEl.className = 'val'; }
+      if (subEl) subEl.textContent = d.error || 'Configure sua API Key em Meu Perfil';
+      if (lblEl) lblEl.textContent = d.simulated ? 'Saldo Simulado' : 'Saldo Binance';
+    }
+  } catch(e) {
+    if (balEl) balEl.textContent = '$500.00';
+    if (subEl) subEl.textContent = 'Simulado';
+  }
+}
+
+
 document.addEventListener('DOMContentLoaded', () => {
   loadTheme();
   initLoginParticles();
