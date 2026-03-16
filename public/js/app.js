@@ -1964,7 +1964,8 @@ function toggleAutoRefresh() {
 function getBotConfig() {
   const strat = document.getElementById('bc-strategy')?.value || 'pattern';
   const cfg = {
-    BOT_SYMBOL:   document.getElementById('bc-symbol')?.value    || 'BTCUSDT',
+    BOT_SYMBOL:   (document.getElementById('bc-symbol-custom')?.value.trim() || document.getElementById('bc-symbol')?.value || 'BTCUSDT').toUpperCase().replace('/','').replace('-',''),
+    SYMBOL:       (document.getElementById('bc-symbol-custom')?.value.trim() || document.getElementById('bc-symbol')?.value || 'BTCUSDT').toUpperCase().replace('/','').replace('-',''),
     BOT_STRATEGY: strat,
     BOT_CAPITAL:  document.getElementById('bc-capital')?.value   || '300',
     BOT_TIMEFRAME:document.getElementById('bc-timeframe')?.value || '15m',

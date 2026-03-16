@@ -15,6 +15,9 @@ from patterns import Candle, PatternResult, Signal, run_all
 from telegram_notify import notify_start, notify_entry, notify_exit, notify_stop_loss_global, notify_error
 
 load_dotenv()
+load_dotenv('.bot.env', override=True)  # frontend config takes priority
+# Normalize symbol after loading .bot.env
+SYMBOL = os.environ.get('BOT_SYMBOL', os.environ.get('SYMBOL', SYMBOL)).upper().replace('/','').replace('-','')
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,7 +34,7 @@ API_KEY    = os.environ.get('BINANCE_API_KEY',   '')
 SECRET_KEY = os.environ.get('BINANCE_SECRET_KEY','')
 TESTNET    = os.environ.get('BOT_TESTNET','true').lower() == 'true'
 
-SYMBOL     = os.environ.get('BOT_SYMBOL',    'BTCUSDT')
+SYMBOL     = os.environ.get('BOT_SYMBOL', os.environ.get('SYMBOL', 'BTCUSDT')).upper().replace('/','').replace('-','')
 CAPITAL    = float(os.environ.get('BOT_CAPITAL',    '300'))
 STOP_LOSS  = float(os.environ.get('BOT_STOP_LOSS',  '0'))
 TIMEFRAME  = os.environ.get('BOT_TIMEFRAME', '15m')
@@ -544,7 +547,7 @@ def main():
 
     # ThreadedWebsocketManager — delay <100ms, python-binance v1+ nativo
     from binance import ThreadedWebsocketManager
-    twm = ThreadedWebsocketManager(api_key=API_KEY, api_secret=API_SECRET,
+    twm = ThreadedWebsocketManager(api_key=API_KEY, api_secret=SECRET_KEY,
                                     testnet=TESTNET)
     twm.start()
 

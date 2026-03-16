@@ -1099,10 +1099,33 @@
               <div class="card-title">Configuração Rápida</div>
               <div class="form-row g2">
                 <div class="field"><label>Par</label>
-                  <select id="bc-symbol">
-                    <option>BTCUSDT</option><option>ETHUSDT</option><option>BNBUSDT</option>
-                    <option>SOLUSDT</option><option>XRPUSDT</option><option>DOGEUSDT</option>
+                  <select id="bc-symbol" id="bc-symbol" oninput="updateBotSymbol(this.value)">
+                    <optgroup label="Top Bitcoin">
+                      <option>BTCUSDT</option>
+                    </optgroup>
+                    <optgroup label="Top Altcoins">
+                      <option>ETHUSDT</option><option>BNBUSDT</option><option>SOLUSDT</option>
+                      <option>XRPUSDT</option><option>ADAUSDT</option><option>DOGEUSDT</option>
+                      <option>AVAXUSDT</option><option>DOTUSDT</option><option>TRXUSDT</option>
+                    </optgroup>
+                    <optgroup label="DeFi">
+                      <option>UNIUSDT</option><option>AAVEUSDT</option><option>LINKUSDT</option>
+                      <option>LDOUSDT</option><option>MKRUSDT</option>
+                    </optgroup>
+                    <optgroup label="Meme">
+                      <option>SHIBUSDT</option><option>PEPEUSDT</option><option>FLOKIUSDT</option>
+                    </optgroup>
+                    <optgroup label="Layer 2">
+                      <option>MATICUSDT</option><option>ARBUSDT</option><option>OPUSDT</option>
+                    </optgroup>
+                    <optgroup label="AI">
+                      <option>FETUSDT</option><option>AGIXUSDT</option><option>RENDERUSDT</option>
+                    </optgroup>
                   </select>
+                  <input type="text" id="bc-symbol-custom" placeholder="Ex: WIFUSDT (personalizado)" 
+                    style="margin-top:6px;font-family:var(--mono);font-size:12px;text-transform:uppercase"
+                    oninput="this.value=this.value.toUpperCase().replace('/','').replace('-','')"
+                    onchange="if(this.value) document.getElementById('bc-symbol').value=this.value">
                 </div>
                 <div class="field"><label>Estratégia</label>
                   <select id="bc-strategy">
