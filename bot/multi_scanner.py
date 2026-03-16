@@ -88,9 +88,26 @@ def _scan_pair(client: Client, symbol: str, timeframe: str, min_conf: float):
         return None
 
 
+def _broadcast(signal: dict, app_url: str, signal_token: str):
+    """Envia sinal ao servidor Node que distribui para todos os subscribers."""
+    try:
+        import json as _json, urllib.request as _req
+        payload = _json.dumps(signal).encode()
+        headers = {'Content-Type': 'application/json'}
+        if signal_token:
+            headers['X-Signal-Token'] = signal_token
+        req = _req.Request(f'{app_url}/api/signals/broadcast',
+                           data=payload, headers=headers, method='POST')
+        _req.urlopen(req, timeout=5)
+        log.info(f'  📡 Broadcast enviado: {signal["symbol"]} {signal["direction"].upper()} '
+                 f'conf={signal["confidence"]:.0%}')
+    except Exception as e:
+        log.warning(f'  Broadcast erro: {e}')
+
+
 def _scanner_loop(api_key: str, secret_key: str, pairs: list,
                   timeframe: str, min_conf: float, interval_sec: int,
-                  notify_fn, testnet: bool):
+                  notify_fn, testnet: bool, app_url: str, signal_token: str):
     """Thread principal do scanner."""
     global _running
     log.info(f'  🔭 Scanner iniciado — {len(pairs)} pares | {timeframe} | '
@@ -105,13 +122,11 @@ def _scanner_loop(api_key: str, secret_key: str, pairs: list,
             result = _scan_pair(client, sym, timeframe, min_conf)
             if result:
                 signals.append(result)
-            time.sleep(0.3)   # gentil com a API
+            time.sleep(0.4)   # gentil com a API
 
         if signals:
-            # Ordena por confiança
             signals.sort(key=lambda x: x['confidence'], reverse=True)
             now = time.time()
-
             sent = 0
             for sig in signals:
                 sym = sig['symbol']
@@ -121,14 +136,14 @@ def _scanner_loop(api_key: str, secret_key: str, pairs: list,
                         continue
                     _last_signal[sym] = now
 
-                log.info(f'  📡 Scanner sinal: {sym} {sig["direction"].upper()} '
-                         f'conf={sig["confidence"]:.0%} | {sig["patterns"]}')
-                notify_fn(sig)
+                # 1. Broadcast para todos os subscribers via servidor Node
+                _broadcast(sig, app_url, signal_token)
+                # 2. Callback local (ex: bot principal para entrar na posição)
+                if notify_fn:
+                    notify_fn(sig)
                 sent += 1
-                if sent >= 3:   # máx 3 sinais por ciclo para não spammar
-                    break
+                if sent >= 3: break
 
-        # Aguarda próximo ciclo
         for _ in range(interval_sec):
             if not _running: break
             time.sleep(1)
@@ -137,13 +152,15 @@ def _scanner_loop(api_key: str, secret_key: str, pairs: list,
 # ─────────────────────────────────────────────────────────────────────────────
 # API pública
 # ─────────────────────────────────────────────────────────────────────────────
-def start(api_key: str, secret_key: str, notify_fn,
+def start(api_key: str, secret_key: str, notify_fn=None,
           pairs: list = None, timeframe: str = '15m',
           min_conf: float = 0.68, interval_sec: int = 300,
-          testnet: bool = True):
+          testnet: bool = True,
+          app_url: str = '', signal_token: str = ''):
     """
     Inicia o scanner em thread daemon.
-    notify_fn(signal_dict) é chamado para cada sinal encontrado.
+    - Faz broadcast para /api/signals/broadcast (distribui a TODOS os subscribers)
+    - notify_fn(signal_dict) é callback local opcional (ex: entrar no par principal)
     """
     global _scanner_thread, _running
 
@@ -151,12 +168,16 @@ def start(api_key: str, secret_key: str, notify_fn,
         log.warning('  Scanner já está rodando')
         return
 
+    _app_url      = app_url or os.environ.get('APP_URL', 'http://localhost:3000')
+    _signal_token = signal_token or os.environ.get('ADMIN_SIGNAL_TOKEN', '')
+
     scan_pairs = pairs or DEFAULT_PAIRS
     _running = True
     _scanner_thread = threading.Thread(
         target=_scanner_loop,
         args=(api_key, secret_key, scan_pairs, timeframe,
-              min_conf, interval_sec, notify_fn, testnet),
+              min_conf, interval_sec, notify_fn, testnet,
+              _app_url, _signal_token),
         daemon=True,
         name='MultiScanner'
     )

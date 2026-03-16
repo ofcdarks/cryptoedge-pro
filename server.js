@@ -1393,6 +1393,152 @@ Narre o que está acontecendo agora de forma objetiva, como um comentarista de t
   }
 });
 
+
+// ─── Signal Subscriptions ──────────────────────────────────────────────────────
+
+// Função central: envia sinal para TODOS os usuários com signals_enabled=1
+async function broadcastSignal(signal) {
+  try {
+    const subs = db.all(
+      "SELECT username, telegram_token, telegram_chatid FROM users " +
+      "WHERE signals_enabled=1 AND status='active' " +
+      "AND telegram_token != '' AND telegram_chatid != ''"
+    );
+    if (!subs.length) return 0;
+
+    const { symbol, direction, confidence, patterns=[], rsi=0, target_pct=0,
+            price=0, sl=0, tp=0, side='', source='scanner' } = signal;
+
+    const dir_text = direction === 'up' ? '🔼 ALTA' : (direction === 'down' ? '🔽 BAIXA' : '➡️ NEUTRO');
+    const bar = (pct, n=10) => '█'.repeat(Math.min(n,Math.round(pct/100*n))) + '░'.repeat(Math.max(0,n-Math.min(n,Math.round(pct/100*n))));
+    const sep = '―'.repeat(26);
+    const ts  = new Date().toLocaleString('pt-BR');
+    const src_label = source === 'scanner' ? '🔭 Scanner Multi-Par' : '🤖 Bot Principal';
+    const sl_pct = sl && price ? Math.abs((sl-price)/price*100).toFixed(1) : null;
+    const tp_pct = tp && price ? Math.abs((tp-price)/price*100).toFixed(1) : null;
+    const rr     = sl_pct && tp_pct ? (parseFloat(tp_pct)/parseFloat(sl_pct)).toFixed(1) : null;
+
+    let sent = 0;
+    for (const sub of subs) {
+      try {
+        const markup = side ? {
+          inline_keyboard: [[
+            { text: '✅  ENTRAR AGORA', callback_data: `ce_${sub.username}_${Date.now()}:confirm` },
+            { text: '❌  IGNORAR',      callback_data: `ce_${sub.username}_${Date.now()}:ignore`  },
+          ]]
+        } : null;
+
+        const text = [
+          `📡 <b>Sinal ${dir_text} — ${symbol}</b>`,
+          `<i>${src_label}</i>`,
+          sep,
+          price ? `💲 Preço:      <code>$${parseFloat(price).toLocaleString('en-US',{minimumFractionDigits:2})}</code>` : null,
+          sl    ? `🛡 Stop Loss:  <code>$${parseFloat(sl).toFixed(2)}</code>${sl_pct ? `  <i>(-${sl_pct}%)</i>` : ''}` : null,
+          tp    ? `🎯 Take Profit:<code>$${parseFloat(tp).toFixed(2)}</code>${tp_pct ? `  <i>(+${tp_pct}%)</i>` : ''}` : null,
+          rr    ? `⚖️ R/R Ratio:  <code>1 : ${rr}</code>` : null,
+          sep,
+          `📡 Confiança:  ${bar(confidence*100)} ${(confidence*100).toFixed(0)}%`,
+          patterns.length ? `🔍 Padrão:    <i>${patterns.slice(0,2).join(', ')}</i>` : null,
+          rsi   ? `📊 RSI:       <code>${parseFloat(rsi).toFixed(0)}</code>` : null,
+          target_pct ? `🎯 Alvo:      <code>${parseFloat(target_pct)>0?'+':''}${parseFloat(target_pct).toFixed(1)}%</code>` : null,
+          sep,
+          side ? `⏳ <i>Responda em até 90s</i>` : `<i>Sinal informativo — ${ts}</i>`,
+        ].filter(Boolean).join('\n');
+
+        const payload = { chat_id: sub.telegram_chatid, text, parse_mode: 'HTML' };
+        if (markup) payload.reply_markup = markup;
+
+        await axios.post(
+          `https://api.telegram.org/bot${sub.telegram_token}/sendMessage`,
+          payload, { timeout: 8000 }
+        );
+        sent++;
+      } catch(e) {
+        console.warn(`[Signal] Falha ao enviar para ${sub.username}: ${e.message?.slice(0,60)}`);
+      }
+    }
+    return sent;
+  } catch(e) {
+    console.error('[broadcastSignal] Erro:', e.message);
+    return 0;
+  }
+}
+
+// GET /api/signals/status — usuário vê se está inscrito
+app.get('/api/signals/status', requireAuth, (req, res) => {
+  try {
+    const user = db.get(
+      'SELECT signals_enabled, signals_plan, telegram_token, telegram_chatid FROM users WHERE username=?',
+      [req.user]
+    );
+    res.json({
+      ok: true,
+      enabled:  !!user?.signals_enabled,
+      plan:     user?.signals_plan || 'free',
+      has_telegram: !!(user?.telegram_token && user?.telegram_chatid),
+    });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// POST /api/signals/subscribe — usuário ativa/desativa recebimento
+app.post('/api/signals/subscribe', requireAuth, (req, res) => {
+  try {
+    const { enabled } = req.body || {};
+    const user = db.get('SELECT telegram_token, telegram_chatid FROM users WHERE username=?', [req.user]);
+    if (enabled && (!user?.telegram_token || !user?.telegram_chatid))
+      return res.status(400).json({ ok: false, error: 'Configure seu Telegram em Meu Perfil antes de ativar os sinais.' });
+    db.run('UPDATE users SET signals_enabled=? WHERE username=?', [enabled ? 1 : 0, req.user]);
+    res.json({ ok: true, enabled: !!enabled });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// POST /api/signals/broadcast — bot Python chama este endpoint para distribuir sinais
+// Autenticado pelo ADMIN_SIGNAL_TOKEN (env var) para que o Python não precise de sessão
+app.post('/api/signals/broadcast', async (req, res) => {
+  const token = req.headers['x-signal-token'] || '';
+  const expected = process.env.ADMIN_SIGNAL_TOKEN || '';
+  // Fallback: aceita do localhost sem token (bot na mesma máquina)
+  const fromLocal = req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1';
+  if (!fromLocal && expected && token !== expected)
+    return res.status(401).json({ ok: false, error: 'Unauthorized' });
+
+  try {
+    const signal = req.body || {};
+    const sent   = await broadcastSignal(signal);
+    // Também atualiza live state
+    _pushLiveFeed({ type: 'signal',
+      label: `📡 Sinal: ${(signal.direction==='up'?'🔼':'🔽')} ${signal.symbol}`,
+      detail: `conf=${Math.round(signal.confidence*100)}% | ${(signal.patterns||[]).join(', ')}`,
+      color: signal.direction==='up' ? 'green' : 'red'
+    });
+    res.json({ ok: true, sent });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// PATCH /api/admin/users/:username/signals — admin controla acesso de cada usuário
+app.patch('/api/admin/users/:username/signals', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const { enabled, plan } = req.body || {};
+    const updates = {};
+    if (enabled !== undefined) updates.signals_enabled = enabled ? 1 : 0;
+    if (plan    !== undefined) updates.signals_plan    = plan;
+    db.update('users', updates, 'username=?', [req.params.username]);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// GET /api/admin/signals/subscribers — admin vê quem está inscrito
+app.get('/api/admin/signals/subscribers', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const subs = db.all(
+      "SELECT username, email, signals_plan, signals_enabled, " +
+      "CASE WHEN telegram_chatid != '' THEN 1 ELSE 0 END as has_telegram " +
+      "FROM users WHERE status='active' ORDER BY signals_enabled DESC, username"
+    );
+    res.json({ ok: true, subscribers: subs, total_active: subs.filter(s=>s.signals_enabled).length });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // ─── Health ────────────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => res.json({
   status:'ok', model: process.env.AI_MODEL||'qwen3-30b-a3b', env: process.env.NODE_ENV||'development',

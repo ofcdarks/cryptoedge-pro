@@ -108,8 +108,12 @@ async function init() {
 
   // Migrate existing users table
   const userCols = all("PRAGMA table_info(users)").map(c => c.name);
-  if (!userCols.includes('binance_secret_enc')) { try { _db.run("ALTER TABLE users ADD COLUMN binance_secret_enc TEXT DEFAULT ''"); } catch {} }
-  if (!userCols.includes('webhook_token'))      { try { _db.run("ALTER TABLE users ADD COLUMN webhook_token TEXT DEFAULT ''"); } catch {} }
+  if (!userCols.includes('binance_secret_enc'))  { try { _db.run("ALTER TABLE users ADD COLUMN binance_secret_enc TEXT DEFAULT ''"); } catch {} }
+  if (!userCols.includes('webhook_token'))        { try { _db.run("ALTER TABLE users ADD COLUMN webhook_token TEXT DEFAULT ''"); } catch {} }
+  if (!userCols.includes('signals_enabled'))      { try { _db.run("ALTER TABLE users ADD COLUMN signals_enabled INTEGER DEFAULT 0"); } catch {} }
+  if (!userCols.includes('signals_plan'))         { try { _db.run("ALTER TABLE users ADD COLUMN signals_plan TEXT DEFAULT 'free'"); } catch {} }
+  // Admin recebe sinais por padrão
+  try { _db.run("UPDATE users SET signals_enabled=1 WHERE role='admin' AND signals_enabled=0"); } catch {}
 
   _db.run(`CREATE TABLE IF NOT EXISTS sessions (
     token      TEXT PRIMARY KEY,

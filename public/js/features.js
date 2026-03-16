@@ -618,6 +618,157 @@ document.querySelectorAll('.nav-item').forEach(item => {
   });
 });
 
+
+// ═══════════════════════════════════════════════════════════════════
+// GESTÃO DE RISCO — PERFIS AUTO-CONFIGURAR
+// ═══════════════════════════════════════════════════════════════════
+
+const RISK_PROFILES = {
+  conservador: {
+    label:      'Conservador 🛡️',
+    color:      'var(--green)',
+    border:     '#00dc82',
+    // Position Sizing
+    riskPct:    1,
+    leverage:   1,
+    // Risk Manager
+    rmRiskPct:  1,
+    rmLeverage: 1,
+    // Bot config
+    botConf:    0.75,   // confiança mínima padrão
+    botRR:      2.5,    // R:R ratio
+    botSLAtr:   2.0,    // SL × ATR
+    botVolume:  true,   // exigir volume
+    botMinConf: 0.75,   // scan min conf
+    desc: 'Proteção máxima do capital. Indicado para iniciantes ou mercados muito voláteis.'
+  },
+  audacioso: {
+    label:      'Audacioso ⚡',
+    color:      'var(--gold)',
+    border:     '#f0c040',
+    riskPct:    2,
+    leverage:   3,
+    rmRiskPct:  2,
+    rmLeverage: 3,
+    botConf:    0.65,
+    botRR:      2.0,
+    botSLAtr:   1.5,
+    botVolume:  true,
+    botMinConf: 0.68,
+    desc: 'Equilíbrio entre proteção e oportunidade. Bom para traders com alguma experiência.'
+  },
+  expert: {
+    label:      'Expert 🔥',
+    color:      'var(--red)',
+    border:     '#e05050',
+    riskPct:    3,
+    leverage:   5,
+    rmRiskPct:  3,
+    rmLeverage: 5,
+    botConf:    0.60,
+    botRR:      1.5,
+    botSLAtr:   1.0,
+    botVolume:  false,
+    botMinConf: 0.62,
+    desc: 'Alto risco / alto retorno. Apenas para traders experientes com gestão disciplinada.'
+  }
+};
+
+let _activeProfile = null;
+
+function applyRiskProfile(mode) {
+  const p = RISK_PROFILES[mode];
+  if (!p) return;
+  _activeProfile = mode;
+
+  // ── Destacar card selecionado ───────────────────────────────────
+  ['conservador','audacioso','expert'].forEach(m => {
+    const card = document.getElementById('rp-' + m);
+    if (!card) return;
+    if (m === mode) {
+      card.style.borderColor = p.border;
+      card.style.background  = 'rgba(255,255,255,.04)';
+      card.style.boxShadow   = `0 0 12px ${p.border}44`;
+    } else {
+      card.style.borderColor = 'var(--border)';
+      card.style.background  = 'var(--bg2)';
+      card.style.boxShadow   = 'none';
+    }
+  });
+
+  // ── Position Sizing ─────────────────────────────────────────────
+  const rsRisk = document.getElementById('rs-risk');
+  const rsLev  = document.getElementById('rs-lev');
+  const rsDisp = document.getElementById('rs-riskdisp');
+  if (rsRisk) { rsRisk.value = p.riskPct; if(rsDisp) rsDisp.textContent = p.riskPct + '%'; }
+  if (rsLev)  { rsLev.value  = p.leverage; }
+
+  // ── Risk Manager ────────────────────────────────────────────────
+  const rmRisk = document.getElementById('rm-risk-pct');
+  const rmLev  = document.getElementById('rm-leverage');
+  if (rmRisk) rmRisk.value = p.rmRiskPct;
+  if (rmLev)  rmLev.value  = p.rmLeverage;
+
+  // ── Bot Config (se estiver no painel Bot Control) ───────────────
+  const patConf = document.getElementById('bc-pat-conf') || document.getElementById('pat-conf');
+  const patRR   = document.getElementById('bc-pat-rr')   || document.getElementById('pat-rr');
+  const patAtr  = document.getElementById('bc-pat-atr')  || document.getElementById('pat-sl-atr');
+  const patVol  = document.getElementById('bc-pat-vol')  || document.getElementById('pat-vol');
+  if (patConf) patConf.value = p.botConf;
+  if (patRR)   patRR.value   = p.botRR;
+  if (patAtr)  patAtr.value  = p.botSLAtr;
+  if (patVol)  patVol.value  = p.botVolume ? 'true' : 'false';
+
+  // Recalcular tudo
+  if (typeof calcRisk === 'function')         calcRisk();
+  if (typeof calcPositionSize === 'function') calcPositionSize();
+
+  // ── Mensagem de confirmação ─────────────────────────────────────
+  const msg  = document.getElementById('rp-applied-msg');
+  const text = document.getElementById('rp-applied-text');
+  if (msg && text) {
+    text.textContent = `Perfil "${p.label}" aplicado! ${p.desc}`;
+    msg.style.display = 'block';
+    setTimeout(() => { msg.style.display = 'none'; }, 6000);
+  }
+
+  if (typeof showToast === 'function')
+    showToast(`✅ Perfil ${p.label} aplicado a todas as calculadoras`);
+}
+
+function applyRiskToBotConfig() {
+  // Lê os valores ATUAIS das calculadoras e aplica no Bot Control
+  const rmRiskPct  = parseFloat(document.getElementById('rm-risk-pct')?.value || '1');
+  const rmLeverage = parseFloat(document.getElementById('rm-leverage')?.value || '1');
+  const rmEntry    = parseFloat(document.getElementById('rm-entry')?.value || '0');
+  const rmStop     = parseFloat(document.getElementById('rm-stop')?.value || '0');
+
+  // Capital do bot
+  const bcCapital = document.getElementById('bc-capital') || document.getElementById('gb-cap');
+  const rmBalance = parseFloat(document.getElementById('rm-balance')?.value || '0');
+  if (bcCapital && rmBalance > 0) bcCapital.value = rmBalance;
+
+  // Se perfil ativo, aplica parâmetros do bot
+  if (_activeProfile) {
+    const p = RISK_PROFILES[_activeProfile];
+    const patConf = document.getElementById('bc-pat-conf') || document.getElementById('pat-conf');
+    const patRR   = document.getElementById('bc-pat-rr')   || document.getElementById('pat-rr');
+    const patAtr  = document.getElementById('bc-pat-atr')  || document.getElementById('pat-sl-atr');
+    const patVol  = document.getElementById('bc-pat-vol')  || document.getElementById('pat-vol');
+    if (patConf) patConf.value = p.botConf;
+    if (patRR)   patRR.value   = p.botRR;
+    if (patAtr)  patAtr.value  = p.botSLAtr;
+    if (patVol)  patVol.value  = p.botVolume ? 'true' : 'false';
+  }
+
+  // Navega para o Bot Control para o usuário ver e salvar
+  const botNav = document.querySelector('[data-panel="botcontrol"]');
+  if (botNav) botNav.click();
+
+  if (typeof showToast === 'function')
+    showToast('⚡ Configurações aplicadas ao Bot Control — revise e salve!');
+}
+
 console.log('[Features v2.0] Funding Rate, Correlation, Enhanced Journal, Risk Manager, Equity Curve loaded.');
 
 // ═══════════════════════════════════════════════════════════════════

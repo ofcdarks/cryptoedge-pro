@@ -26,7 +26,14 @@
 <style>
 .admin-mode .admin-only { display: flex !important; }
 @keyframes livePulse{0%,100%{opacity:1}50%{opacity:0.4}}
-</style>
+
+      /* ── Risk Profile Cards ─────────────────────────── */
+      .risk-profile-card:hover {
+        border-color: var(--green) !important;
+        background: rgba(255,255,255,.04) !important;
+        transform: translateY(-2px);
+      }
+      </style>
 </head>
 <body>
 <!-- ── Cookie Consent Banner ── -->
@@ -671,6 +678,73 @@
 
       <!-- ──────────── RISK ──────────── -->
       <div id="panel-risk" class="panel">
+
+        <!-- ── PERFIS DE RISCO ─────────────────────────────────────── -->
+        <div class="card" style="margin-bottom:12px">
+          <div class="card-title" style="margin-bottom:12px">🎯 Perfil de Risco — Auto Configurar</div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px" id="risk-profiles">
+
+            <div class="risk-profile-card" id="rp-conservador" onclick="applyRiskProfile('conservador')" style="cursor:pointer;padding:14px;border-radius:var(--r2);border:2px solid var(--border);background:var(--bg2);transition:all .2s">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+                <span style="font-size:22px">🛡️</span>
+                <div>
+                  <div style="font-weight:700;font-size:13px;color:var(--green)">Conservador</div>
+                  <div style="font-size:10px;color:var(--t3)">Proteção máxima</div>
+                </div>
+              </div>
+              <div style="font-size:10px;color:var(--t3);line-height:1.7;font-family:var(--mono)">
+                Risco/trade: <b style="color:var(--t2)">1%</b><br>
+                Alavancagem: <b style="color:var(--t2)">1×</b><br>
+                SL ATR: <b style="color:var(--t2)">2.0×</b><br>
+                Confiança: <b style="color:var(--t2)">75%</b><br>
+                R:R mínimo: <b style="color:var(--t2)">2:1</b>
+              </div>
+              <div style="margin-top:10px;font-size:10px;color:var(--t3)">Ideal para iniciantes ou mercados voláteis</div>
+            </div>
+
+            <div class="risk-profile-card" id="rp-audacioso" onclick="applyRiskProfile('audacioso')" style="cursor:pointer;padding:14px;border-radius:var(--r2);border:2px solid var(--border);background:var(--bg2);transition:all .2s">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+                <span style="font-size:22px">⚡</span>
+                <div>
+                  <div style="font-weight:700;font-size:13px;color:var(--gold)">Audacioso</div>
+                  <div style="font-size:10px;color:var(--t3)">Equilíbrio risco/retorno</div>
+                </div>
+              </div>
+              <div style="font-size:10px;color:var(--t3);line-height:1.7;font-family:var(--mono)">
+                Risco/trade: <b style="color:var(--t2)">2%</b><br>
+                Alavancagem: <b style="color:var(--t2)">3×</b><br>
+                SL ATR: <b style="color:var(--t2)">1.5×</b><br>
+                Confiança: <b style="color:var(--t2)">65%</b><br>
+                R:R mínimo: <b style="color:var(--t2)">2:1</b>
+              </div>
+              <div style="margin-top:10px;font-size:10px;color:var(--t3)">Bom para traders com experiência</div>
+            </div>
+
+            <div class="risk-profile-card" id="rp-expert" onclick="applyRiskProfile('expert')" style="cursor:pointer;padding:14px;border-radius:var(--r2);border:2px solid var(--border);background:var(--bg2);transition:all .2s">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+                <span style="font-size:22px">🔥</span>
+                <div>
+                  <div style="font-weight:700;font-size:13px;color:var(--red)">Expert</div>
+                  <div style="font-size:10px;color:var(--t3)">Alto risco / alto retorno</div>
+                </div>
+              </div>
+              <div style="font-size:10px;color:var(--t3);line-height:1.7;font-family:var(--mono)">
+                Risco/trade: <b style="color:var(--t2)">3%</b><br>
+                Alavancagem: <b style="color:var(--t2)">5×</b><br>
+                SL ATR: <b style="color:var(--t2)">1.0×</b><br>
+                Confiança: <b style="color:var(--t2)">60%</b><br>
+                R:R mínimo: <b style="color:var(--t2)">1.5:1</b>
+              </div>
+              <div style="margin-top:10px;font-size:10px;color:var(--t3)">Somente traders experientes</div>
+            </div>
+
+          </div>
+          <div id="rp-applied-msg" style="display:none;padding:10px 14px;border-radius:var(--r2);background:rgba(0,220,130,.08);border:1px solid var(--green);font-size:12px;color:var(--green)">
+            ✅ <span id="rp-applied-text">Perfil aplicado com sucesso.</span>
+          </div>
+        </div>
+        <!-- ── / PERFIS ─────────────────────────────────────────────── -->
+
         <div class="grid g2">
           <div class="card">
             <div class="card-title">Position Sizing — Tamanho Ideal de Posição</div>
@@ -747,6 +821,7 @@
                 <div style="display:flex;justify-content:space-between"><span style="color:var(--t3);font-size:12px">TP2 (3.0:1 R:R)</span><span id="rm-r-tp2" style="font-family:var(--mono);color:var(--green)">—</span></div>
                 <div style="display:flex;justify-content:space-between"><span style="color:var(--t3);font-size:12px">R:R Ratio</span><span id="rm-r-rr" style="font-family:var(--mono)">—</span></div>
               </div>
+              <button onclick="applyRiskToBotConfig()" style="margin-top:14px;width:100%;padding:10px;border-radius:var(--r2);background:var(--green);color:#000;font-weight:700;font-size:12px;border:none;cursor:pointer;letter-spacing:.5px">⚡ APLICAR AO BOT</button>
             </div>
           </div>
         </div>
