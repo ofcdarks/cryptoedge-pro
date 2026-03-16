@@ -3,18 +3,14 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install dependencies
 RUN pip install --no-cache-dir \
     python-binance \
     python-dotenv \
     requests \
     websocket-client
 
-# Copy bot files
 COPY bot/ ./bot/
-COPY .env.example ./.env.example
 
-# Create data directory
 RUN mkdir -p /data
 
 ENV PYTHONUNBUFFERED=1
