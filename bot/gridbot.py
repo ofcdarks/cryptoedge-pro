@@ -9,7 +9,7 @@ from decimal import Decimal
 from collections import deque
 from binance.client import Client
 from binance.enums import *
-from binance.websockets import BinanceSocketManager
+# python-binance v1+ uses REST polling — no BinanceSocketManager needed
 from dotenv import load_dotenv
 from patterns import Candle, PatternResult, Signal, run_all
 from telegram_notify import notify_start, notify_entry, notify_exit, notify_stop_loss_global, notify_error
@@ -542,14 +542,18 @@ def main():
     warm_up()
     if STRATEGY=='grid': grid_init()
 
-    bm = BinanceSocketManager(client)
-    if STRATEGY=='scalping':
-        log.info("  📡 WebSocket TICKER (tick a tick)")
-        conn = bm.start_symbol_ticker_socket(SYMBOL, on_ticker)
+    # ThreadedWebsocketManager — delay <100ms, python-binance v1+ nativo
+    from binance import ThreadedWebsocketManager
+    twm = ThreadedWebsocketManager(api_key=API_KEY, api_secret=API_SECRET,
+                                    testnet=TESTNET)
+    twm.start()
+
+    if STRATEGY == 'scalping':
+        log.info("  📡 WebSocket TICKER ao vivo (delay <100ms)")
+        twm.start_symbol_ticker_socket(callback=on_ticker, symbol=SYMBOL)
     else:
-        log.info(f"  📡 WebSocket KLINE [{TIMEFRAME}] — opera no fechamento de cada vela")
-        conn = bm.start_kline_socket(SYMBOL, on_kline, interval=TIMEFRAME)
-    bm.start()
+        log.info(f"  📡 WebSocket KLINE [{TIMEFRAME}] — delay <100ms")
+        twm.start_kline_socket(callback=on_kline, symbol=SYMBOL, interval=TIMEFRAME)
 
     try:
         while state['running']:
@@ -557,7 +561,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        bm.stop_socket(conn); bm.close()
+        twm.stop()
         wr = state['wins']/max(1,state['wins']+state['losses'])*100
         log.info(f"\n{'═'*62}")
         log.info(f"  Resultado final: PnL ${state['pnl']:+.2f} | "
