@@ -17,7 +17,7 @@ from telegram_notify import notify_start, notify_entry, notify_exit, notify_stop
 load_dotenv()
 load_dotenv('.bot.env', override=True)  # frontend config takes priority
 # Normalize symbol after loading .bot.env
-SYMBOL = os.environ.get('BOT_SYMBOL', os.environ.get('SYMBOL', SYMBOL)).upper().replace('/','').replace('-','')
+SYMBOL = os.environ.get('BOT_SYMBOL', os.environ.get('SYMBOL', 'BTCUSDT')).upper().replace('/','').replace('-','')
 
 logging.basicConfig(
     level=logging.INFO,
