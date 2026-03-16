@@ -1,194 +1,363 @@
-# 🚀 Deploy CryptoEdge Pro no EasyPanel
+# 🚀 CryptoEdge Pro v2.0 — Deploy no EasyPanel
 
-## PRÉ-REQUISITOS
-- Conta no GitHub (gratuita)
-- VPS com EasyPanel instalado
-- Domínio apontando para o IP da VPS
+> Guia completo e atualizado. Tempo estimado: **15–20 minutos**.
 
 ---
 
-## PARTE 1 — Versionar no Git/GitHub
+## Índice
+1. [Pré-requisitos](#1-pré-requisitos)
+2. [Subir código no GitHub](#2-subir-código-no-github)
+3. [Criar projeto no EasyPanel](#3-criar-projeto-no-easypanel)
+4. [Configurar variáveis de ambiente](#4-configurar-variáveis-de-ambiente)
+5. [Configurar volume (banco de dados)](#5-configurar-volume-banco-de-dados)
+6. [Configurar domínio + HTTPS](#6-configurar-domínio--https)
+7. [Fazer o deploy](#7-fazer-o-deploy)
+8. [Primeiro acesso](#8-primeiro-acesso)
+9. [Atualizações automáticas](#9-atualizações-automáticas)
+10. [Backup do banco de dados](#10-backup-do-banco-de-dados)
+11. [Solução de problemas](#11-solução-de-problemas)
 
-### 1.1 — Instalar Git (se não tiver)
-```bash
-# Windows: baixe em https://git-scm.com/download/win
-# Mac:     brew install git
-# Linux:   sudo apt install git
-```
+---
 
-### 1.2 — Configurar Git (primeira vez)
+## 1. Pré-requisitos
+
+| Item | Onde obter |
+|------|-----------|
+| VPS com Ubuntu 22.04+ | Hetzner, DigitalOcean, Vultr (~€4-6/mês) |
+| EasyPanel instalado na VPS | `curl -sSL https://get.easypanel.io | sh` |
+| Domínio apontando para o IP da VPS | Registro.br, Namecheap, Cloudflare |
+| Conta GitHub gratuita | github.com |
+
+---
+
+## 2. Subir código no GitHub
+
+### 2.1 — Configurar Git (primeira vez)
 ```bash
 git config --global user.name  "Seu Nome"
 git config --global user.email "seu@email.com"
 ```
 
-### 1.3 — Criar repositório no GitHub
-1. Acesse **github.com** → clique em **"New repository"**
+### 2.2 — Criar repositório no GitHub
+1. Acesse **github.com** → botão verde **"New"**
 2. Nome: `cryptoedge-pro`
-3. Visibilidade: **Private** (recomendado — contém sua plataforma)
-4. Clique em **"Create repository"**
+3. Visibilidade: **Private** ← obrigatório (contém seu código)
+4. **Não** marque "Initialize with README"
+5. Clique **"Create repository"**
 
-### 1.4 — Inicializar Git no projeto
+### 2.3 — Enviar o projeto
 ```bash
-# Entre na pasta do projeto
-cd cryptoedge-pro
+# Entre na pasta do projeto descompactado
+cd cryptoedge-pro-v2
 
-# Inicializar repositório Git
+# Inicializar Git
 git init
-
-# Adicionar todos os arquivos (o .gitignore já exclui node_modules, data/, .env)
 git add .
-
-# Primeiro commit
-git commit -m "🚀 Initial commit — CryptoEdge Pro v1.0"
+git commit -m "🚀 CryptoEdge Pro v2.0"
 
 # Conectar ao GitHub (copie a URL do seu repositório)
 git remote add origin https://github.com/SEU_USUARIO/cryptoedge-pro.git
-
-# Enviar para o GitHub
 git branch -M main
 git push -u origin main
 ```
 
-✅ **Seu código está no GitHub!**
+> ✅ Seu código está no GitHub. O `.gitignore` já exclui `.env`, `node_modules/` e `data/`.
 
 ---
 
-## PARTE 2 — Configurar EasyPanel
+## 3. Criar projeto no EasyPanel
 
-### 2.1 — Criar novo projeto no EasyPanel
-1. Abra o EasyPanel: `https://seu-vps.com:3000`
-2. Clique em **"Create Project"**
-3. Nome: `cryptoedge`
+1. Abra o EasyPanel: `https://IP-DA-VPS:3000`
+2. **"Create Project"** → Nome: `cryptoedge`
+3. Dentro do projeto → **"Create Service"** → **"App"**
+4. Preencha:
 
-### 2.2 — Criar serviço App
-1. Dentro do projeto → **"Create Service"** → **"App"**
-2. Nome: `cryptoedge-pro`
-3. Source: **"GitHub"**
-4. Repositório: selecione `cryptoedge-pro`
-5. Branch: `main`
-6. Build Method: **"Dockerfile"** ✅
+| Campo | Valor |
+|-------|-------|
+| **Name** | `cryptoedge-pro` |
+| **Source** | GitHub |
+| **Repository** | `SEU_USUARIO/cryptoedge-pro` |
+| **Branch** | `main` |
+| **Build Method** | `Dockerfile` ← importante |
 
-### 2.3 — Configurar variáveis de ambiente
-No EasyPanel → aba **"Environment"**:
+---
 
+## 4. Configurar variáveis de ambiente
+
+Na aba **"Environment"** do serviço, adicione cada variável:
+
+### Obrigatórias
 ```
 PORT=3000
 NODE_ENV=production
 DB_PATH=/data
-LAOZHANG_API_KEY=sk-sua-chave-aqui
-AI_MODEL=qwen3-30b-a3b
-BINANCE_API_KEY=
-BINANCE_SECRET_KEY=
-TELEGRAM_TOKEN=
-TELEGRAM_CHAT_ID=
 ```
 
-### 2.4 — Configurar Volume (banco de dados persistente)
-1. Aba **"Volumes"** → **"Add Volume"**
-2. Name: `cryptoedge-data`
-3. Mount Path: `/data`
-4. Size: `1GB`
+### 🔒 Segurança — CRÍTICAS (novas no v2)
+```
+# Gere uma chave segura rodando no seu terminal:
+# node -e "console.log(require('crypto').randomBytes(16).toString('hex'))"
+ENCRYPTION_KEY=cole_aqui_a_chave_gerada_acima
 
-⚠️ **IMPORTANTE:** Sem o volume, o banco de dados é apagado ao reiniciar!
+# Seu domínio completo (com https://)
+ALLOWED_ORIGIN=https://cryptoedge.seudominio.com
+```
 
-### 2.5 — Configurar Domínio + HTTPS
-1. Aba **"Domains"** → **"Add Domain"**
-2. Domain: `cryptoedge.seudominio.com`
-3. Port: `3000`
-4. HTTPS: **Ativado** ✅ (EasyPanel configura Let's Encrypt automaticamente!)
+### IA Expert (opcional mas recomendado)
+```
+LAOZHANG_API_KEY=sk-sua-chave-laozhang
+LAOZHANG_BASE_URL=https://api.laozhang.ai/v1
+AI_MODEL=qwen3-30b-a3b
+```
 
-### 2.6 — Deploy!
-1. Clique em **"Deploy"**
-2. Aguarde o build (2-5 minutos)
-3. Acesse: `https://cryptoedge.seudominio.com`
+### Binance (para saldo real e bot)
+```
+BINANCE_API_KEY=sua_binance_api_key
+BINANCE_SECRET_KEY=sua_binance_secret_key
+```
+
+### Telegram (notificações do bot)
+```
+TELEGRAM_TOKEN=1234567890:AAFxxxxxxxxxx
+TELEGRAM_CHAT_ID=-100123456789
+```
+
+### SMTP — Reset de senha por e-mail (opcional)
+```
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=seu@gmail.com
+SMTP_PASS=senha_de_app_gmail
+SMTP_FROM="CryptoEdge Pro <noreply@seudominio.com>"
+APP_URL=https://cryptoedge.seudominio.com
+```
+
+> 💡 **Gmail:** Ative 2FA → gere senha de app em myaccount.google.com/apppasswords
 
 ---
 
-## PARTE 3 — Primeiro acesso
+## 5. Configurar volume (banco de dados)
+
+⚠️ **Sem o volume o banco é apagado a cada deploy!**
+
+Na aba **"Volumes"** → **"Add Volume"**:
+
+| Campo | Valor |
+|-------|-------|
+| **Name** | `cryptoedge-data` |
+| **Mount Path** | `/data` |
+| **Size** | `2 GB` |
+
+---
+
+## 6. Configurar domínio + HTTPS
+
+Na aba **"Domains"** → **"Add Domain"**:
+
+| Campo | Valor |
+|-------|-------|
+| **Domain** | `cryptoedge.seudominio.com` |
+| **Port** | `3000` |
+| **HTTPS** | ✅ Ativado (Let's Encrypt automático) |
+
+> ✅ O EasyPanel configura o HTTPS automaticamente — não precisa fazer nada a mais.
+
+---
+
+## 7. Fazer o deploy
+
+1. Clique em **"Deploy"** (ou **"Build & Deploy"**)
+2. Acompanhe os logs na aba **"Deployments"**
+3. O build leva **2–5 minutos** na primeira vez
+4. Quando aparecer ✅ **"Running"** → está online!
+
+**Verificar se está funcionando:**
+```
+https://cryptoedge.seudominio.com/api/health
+```
+Deve retornar: `{"status":"ok", ...}`
+
+---
+
+## 8. Primeiro acesso
 
 1. Abra `https://cryptoedge.seudominio.com`
-2. Tela de **primeiro acesso** → crie sua conta admin
-3. Preencha usuário e senha (mínimo 6 caracteres)
+2. Será exibida a tela de **configuração inicial**
+3. Crie sua conta de administrador:
+   - Usuário (sem espaços)
+   - Senha (mínimo 6 caracteres) — **use uma senha forte!**
 4. Clique em **"Criar conta e entrar"**
 
-✅ **Plataforma online!**
+> ✅ Plataforma online! Você é o admin.
+
+### Primeiros passos após login:
+- **Meu Perfil** → Adicionar Binance API Key e Secret
+- **Configurações do Bot** → Definir estratégia e capital
+- **Admin** → Configurar modo de registro (invite/open/closed)
+- **Admin** → Gerar código de convite para novos usuários
 
 ---
 
-## PARTE 4 — Atualizações futuras
+## 9. Atualizações automáticas
 
-Quando quiser atualizar a plataforma:
+### Opção A — Auto-deploy com GitHub Webhook (recomendado)
+
+No EasyPanel → aba **"Deployments"** → copie o **Webhook URL**
+
+No GitHub → repositório → **Settings** → **Webhooks** → **Add webhook**:
+- Payload URL: cole o URL do EasyPanel
+- Content type: `application/json`
+- Events: **"Just the push event"**
+
+Agora, toda vez que fizer `git push`, o EasyPanel fará o deploy automático.
+
+### Opção B — Deploy manual
 
 ```bash
-# Faça suas alterações nos arquivos...
-
-# Adicionar alterações
+# Faça alterações no código...
 git add .
-
-# Commit com descrição
-git commit -m "✨ feat: nova funcionalidade X"
-
-# Enviar para GitHub
+git commit -m "✨ Melhoria X"
 git push origin main
 ```
-
-No EasyPanel:
-- O deploy pode ser **automático** (configure webhook do GitHub)
-- Ou manual: clique em **"Redeploy"** no painel
+No EasyPanel → clique em **"Redeploy"**
 
 ---
 
-## PARTE 5 — Backup do banco de dados
+## 10. Backup do banco de dados
 
+### Backup manual via EasyPanel Terminal
+
+No EasyPanel → serviço → aba **"Terminal"**:
 ```bash
-# Acessar o container via EasyPanel Terminal
-# Ou via SSH na VPS:
+# Dentro do container:
+cp /data/cryptoedge.db /data/backup-$(date +%Y%m%d-%H%M).db
+ls -lh /data/
+```
 
-# Copiar banco de dados para backup
-docker cp cryptoedge-pro_container:/data/cryptoedge.db ./backup-$(date +%Y%m%d).db
+### Backup via SSH na VPS
+```bash
+# Na sua VPS:
+docker cp cryptoedge-pro:/data/cryptoedge.db ./backup-$(date +%Y%m%d).db
 
-# Restaurar backup
-docker cp backup-20250101.db cryptoedge-pro_container:/data/cryptoedge.db
-docker restart cryptoedge-pro_container
+# Baixar para seu computador (do seu computador):
+scp usuario@IP-VPS:~/backup-$(date +%Y%m%d).db ./
+```
+
+### Restaurar backup
+```bash
+# Parar o serviço no EasyPanel primeiro, depois:
+docker cp backup-20250101.db cryptoedge-pro:/data/cryptoedge.db
+# Reiniciar o serviço no EasyPanel
+```
+
+### Backup automático com cron (recomendado)
+```bash
+# Na VPS, editar crontab:
+crontab -e
+
+# Adicionar (backup diário às 3h):
+0 3 * * * docker cp cryptoedge-pro:/data/cryptoedge.db /backups/ce-$(date +\%Y\%m\%d).db
+# Manter apenas últimos 30 dias:
+0 4 * * * find /backups -name "ce-*.db" -mtime +30 -delete
 ```
 
 ---
 
-## Estrutura de arquivos no GitHub
+## 11. Solução de problemas
+
+### App não inicia — verificar logs
+No EasyPanel → serviço → aba **"Logs"**
+
+### Erro: "ENCRYPTION_KEY não definida"
+→ Adicione `ENCRYPTION_KEY` nas variáveis de ambiente do EasyPanel
+
+### Erro: "Cannot connect to database"
+→ Verifique se o volume `/data` está montado corretamente
+
+### WebSocket de preços não conecta
+→ Verifique se o domínio usa HTTPS — WebSocket precisa de WSS em produção
+→ O EasyPanel com HTTPS já configura WSS automaticamente
+
+### Bot não inicia via painel
+→ O bot Python precisa de `BINANCE_API_KEY` e `BINANCE_SECRET_KEY` configurados
+→ Mantenha `BOT_TESTNET=true` até validar
+
+### "Too many requests" nos logs
+→ Normal — é o rate limiter protegendo. Aumente `max` no `apiLimiter` se necessário.
+
+### Resetar senha de admin (emergência)
+No Terminal do EasyPanel:
+```bash
+node -e "
+const db = require('./db');
+const bcrypt = require('bcrypt');
+db.init().then(async () => {
+  const hash = await bcrypt.hash('nova_senha_aqui', 12);
+  db.run('UPDATE users SET password=? WHERE role=\"admin\"', [hash]);
+  db.saveNow();
+  console.log('Senha resetada!');
+  process.exit(0);
+});
+"
+```
+
+---
+
+## Estrutura de arquivos no repositório
 
 ```
 cryptoedge-pro/
-├── 📄 Dockerfile          ← Build instructions para EasyPanel
-├── 📄 server.js           ← Backend Node.js
-├── 📄 db.js               ← Camada SQLite
-├── 📄 package.json        ← Dependências
-├── 📄 .env.example        ← Template de variáveis (commit isso)
-├── 📄 .gitignore          ← Exclui node_modules, data/, .env
-├── 📄 ecosystem.config.js ← Config PM2
-├── 📁 public/             ← Frontend (HTML/CSS/JS)
-├── 📁 bot/                ← Scripts Python do bot
-└── 📄 EASYPANEL.md        ← Este guia
+├── Dockerfile            ← Build para EasyPanel (Node 20 Alpine)
+├── docker-compose.yml    ← Para testes locais
+├── nginx.conf            ← Se usar Nginx externo (opcional)
+├── server.js             ← Backend Node.js (v2 — segurança reforçada)
+├── db.js                 ← Banco SQLite com migrations automáticas
+├── package.json          ← Dependências (inclui bcrypt, helmet, rate-limit)
+├── .env.example          ← Template — copie para .env
+├── .gitignore            ← Exclui .env, node_modules, data/
+├── public/
+│   ├── index.html        ← App SPA
+│   ├── js/
+│   │   ├── app.js        ← Frontend principal (~5600 linhas)
+│   │   └── features.js   ← Novas features v2.0
+│   └── css/app.css
+├── bot/
+│   ├── gridbot.py        ← Bot de trading Python
+│   ├── backtest.py       ← Engine de backtesting
+│   ├── patterns.py       ← Detecção de padrões técnicos
+│   ├── analysis_ai.py    ← Análise com IA
+│   ├── scanner.py        ← Scanner de mercado
+│   └── requirements.txt  ← Dependências Python
+└── templates/email.js    ← Templates de e-mail
 ```
 
 ---
 
-## Dicas de segurança
+## Custos estimados de infraestrutura
 
-✅ **NUNCA faça commit do `.env`** — ele está no `.gitignore`
-✅ Use repositório **privado** no GitHub  
-✅ Configure senha forte no primeiro acesso
-✅ Mantenha `BOT_TESTNET=true` até ter certeza do que está fazendo
-✅ Faça backup semanal do banco de dados
+| Recurso | Provedor | Custo |
+|---------|----------|-------|
+| VPS 2 vCPU / 4GB RAM | Hetzner CX22 | €4.35/mês |
+| Domínio .com | Namecheap | ~R$60/ano |
+| SSL (Let's Encrypt) | EasyPanel automático | **Grátis** |
+| GitHub repo privado | GitHub | **Grátis** |
+| **Total** | | **~€5/mês** |
 
 ---
 
-## Custos estimados
+## Checklist de segurança pré-produção
 
-| Recurso | Custo |
-|---------|-------|
-| VPS mínima (1 vCPU, 2GB RAM) | €4-6/mês (Hetzner) |
-| Domínio .com | ~R$50/ano |
-| SSL (Let's Encrypt via EasyPanel) | **Gratuito** |
-| GitHub (repo privado) | **Gratuito** |
-| **Total** | ~€5-7/mês |
+- [ ] `ENCRYPTION_KEY` definida (chave de 32 chars única)
+- [ ] `ALLOWED_ORIGIN` definida com seu domínio HTTPS
+- [ ] `NODE_ENV=production`
+- [ ] Repositório GitHub em modo **Private**
+- [ ] Volume `/data` configurado (banco persistente)
+- [ ] Senha do admin é forte (12+ caracteres)
+- [ ] `BOT_TESTNET=true` até testar em produção
+- [ ] Backup automático configurado
+- [ ] HTTPS ativado no domínio
+
+---
+
+*CryptoEdge Pro v2.0 — Deploy guide atualizado em 2026*

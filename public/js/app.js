@@ -5564,3 +5564,52 @@ function initApp() {
   calcRisk();
   calcGrid();
 }
+
+// ─── Webhook Token UI ─────────────────────────────────────────────────────────
+function copyWebhookToken() {
+  const el = document.getElementById('profile-webhook-token');
+  if (!el) return;
+  const text = el.textContent;
+  if (!text || text === 'Carregando...') return;
+  navigator.clipboard.writeText(text).then(() => showToast('Token copiado!')).catch(() => {
+    const inp = document.createElement('textarea');
+    inp.value = text; document.body.appendChild(inp); inp.select();
+    document.execCommand('copy'); document.body.removeChild(inp);
+    showToast('Token copiado!');
+  });
+}
+
+// Patch loadProfile to show webhook token
+const _origLoadProfile = loadProfile;
+async function loadProfile() {
+  await _origLoadProfile();
+  try {
+    const r = await fetch('/api/auth/me', { headers: auth.headers() });
+    const d = await r.json();
+    const el = document.getElementById('profile-webhook-token');
+    if (el && d.user?.webhook_token) {
+      el.textContent = d.user.webhook_token;
+    }
+  } catch {}
+}
+
+// Patch runBacktest to fire equity curve event
+if (typeof runBacktest === 'function') {
+  const _origBacktest = runBacktest;
+  window.runBacktest = async function() {
+    const r = await _origBacktest.apply(this, arguments);
+    // fire custom event for features.js to pick up
+    if (window._lastBacktestData) {
+      document.dispatchEvent(new CustomEvent('backtestResult', { detail: window._lastBacktestData }));
+    }
+    return r;
+  };
+}
+
+// ─── Export CSV helper (fallback if anchor fails) ────────────────────────────
+function downloadTradesCSV() {
+  const a = document.createElement('a');
+  a.href = '/api/trades/export/csv';
+  a.download = 'trades_' + new Date().toISOString().slice(0,10) + '.csv';
+  a.click();
+}

@@ -1,55 +1,84 @@
 version: '3.9'
 
+# ── CryptoEdge Pro v2.0 — Docker Compose ──────────────────────────────────────
+# Uso local:  docker compose up -d
+# Com bot:    docker compose --profile bot up -d
+# Parar:      docker compose down
+# Logs:       docker compose logs -f web
+
 services:
-  # ── Web App ────────────────────────────────────────────────────────────────
   web:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: cryptoedge-web
     restart: unless-stopped
     ports:
       - "${PORT:-3000}:3000"
     environment:
-      - NODE_ENV=production
-      - PORT=3000
-      - DB_PATH=/data/data.db
-      - LAOZHANG_API_KEY=${LAOZHANG_API_KEY}
-      - LAOZHANG_BASE_URL=${LAOZHANG_BASE_URL:-https://api.laozhang.ai/v1}
-      - AI_MODEL=${AI_MODEL:-qwen3-30b-a3b}
+      NODE_ENV: production
+      PORT: 3000
+      DB_PATH: /data
+
+      # ── IA Expert (opcional) ──────────────────────────────
+      LAOZHANG_API_KEY: ${LAOZHANG_API_KEY:-}
+      LAOZHANG_BASE_URL: ${LAOZHANG_BASE_URL:-https://api.laozhang.ai/v1}
+      AI_MODEL: ${AI_MODEL:-qwen3-30b-a3b}
+
+      # ── Segurança (OBRIGATÓRIO em produção) ──────────────
+      # Gere: node -e "console.log(require('crypto').randomBytes(16).toString('hex'))"
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-mude_antes_de_usar_em_producao!!}
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-}
+
+      # ── Binance (para saldo real) ─────────────────────────
+      BINANCE_API_KEY: ${BINANCE_API_KEY:-}
+      BINANCE_SECRET_KEY: ${BINANCE_SECRET_KEY:-}
+
+      # ── Telegram (notificações) ───────────────────────────
+      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+
+      # ── SMTP (e-mail para reset de senha) ─────────────────
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      APP_URL: ${APP_URL:-http://localhost:3000}
+
     volumes:
       - cryptoedge-data:/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      test: ["CMD", "curl", "-sf", "http://localhost:3000/api/health"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 15s
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.cryptoedge.rule=Host(`${DOMAIN:-localhost}`)"
-      - "traefik.http.routers.cryptoedge.entrypoints=websecure"
-      - "traefik.http.routers.cryptoedge.tls.certresolver=letsencrypt"
+      retries: 5
+      start_period: 40s
 
-  # ── Grid Bot (opcional — roda o bot em separado) ───────────────────────────
+  # ── Bot Python (opcional) ────────────────────────────────────────────────────
+  # Sobe apenas com: docker compose --profile bot up -d
   bot:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.bot
     container_name: cryptoedge-bot
     restart: unless-stopped
-    command: ["python3", "bot/gridbot.py"]
     environment:
-      - BINANCE_API_KEY=${BINANCE_API_KEY}
-      - BINANCE_SECRET_KEY=${BINANCE_SECRET_KEY}
-      - BOT_SYMBOL=${BOT_SYMBOL:-BTCUSDT}
-      - BOT_CAPITAL=${BOT_CAPITAL:-300}
-      - BOT_PRICE_MIN=${BOT_PRICE_MIN:-80000}
-      - BOT_PRICE_MAX=${BOT_PRICE_MAX:-90000}
-      - BOT_NUM_GRIDS=${BOT_NUM_GRIDS:-10}
-      - BOT_STOP_LOSS=${BOT_STOP_LOSS:-73600}
-      - BOT_TESTNET=${BOT_TESTNET:-true}
-      - BOT_INTERVAL=${BOT_INTERVAL:-30}
+      BINANCE_API_KEY: ${BINANCE_API_KEY:-}
+      BINANCE_SECRET_KEY: ${BINANCE_SECRET_KEY:-}
+      BOT_SYMBOL: ${BOT_SYMBOL:-BTCUSDT}
+      BOT_STRATEGY: ${BOT_STRATEGY:-pattern}
+      BOT_CAPITAL: ${BOT_CAPITAL:-300}
+      BOT_TIMEFRAME: ${BOT_TIMEFRAME:-15m}
+      BOT_TESTNET: ${BOT_TESTNET:-true}
+      BOT_STOP_LOSS: ${BOT_STOP_LOSS:-0}
+      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     volumes:
       - cryptoedge-data:/data
     profiles:
-      - bot   # só sobe com: docker compose --profile bot up
+      - bot
 
 volumes:
   cryptoedge-data:

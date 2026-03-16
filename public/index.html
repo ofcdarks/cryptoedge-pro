@@ -336,6 +336,14 @@
       <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
       <span>PnL Chart</span>
     </div>
+    <div class="nav-item" data-panel="funding">
+      <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      <span>Funding Rate</span>
+    </div>
+    <div class="nav-item" data-panel="correlation">
+      <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+      <span>Correlação</span>
+    </div>
     <div class="nav-item" data-panel="ai">
       <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
       <span>IA Expert</span>
@@ -701,6 +709,36 @@
             </div>
           </div>
         </div>
+
+        <div class="card" style="margin-top:12px">
+          <div class="card-title" style="margin-bottom:12px">📐 Risk Manager — Calculadora de Posição</div>
+          <div class="grid g2">
+            <div>
+              <div class="form-row g2" style="margin-bottom:10px">
+                <div class="field"><label>Capital total (USDT)</label><input type="number" id="rm-balance" value="1000" oninput="calcPositionSize()"></div>
+                <div class="field"><label>Risco por trade (%)</label><input type="number" id="rm-risk-pct" value="1" min="0.1" max="10" step="0.1" oninput="calcPositionSize()"></div>
+              </div>
+              <div class="form-row g2" style="margin-bottom:10px">
+                <div class="field"><label>Preço de entrada</label><input type="number" id="rm-entry" placeholder="83000" oninput="calcPositionSize()"></div>
+                <div class="field"><label>Preço do Stop Loss</label><input type="number" id="rm-stop" placeholder="82000" oninput="calcPositionSize()"></div>
+              </div>
+              <div class="field" style="margin-bottom:10px"><label>Alavancagem</label><input type="number" id="rm-leverage" value="1" min="1" max="100" oninput="calcPositionSize()"></div>
+            </div>
+            <div style="background:var(--bg2);border-radius:var(--r2);padding:14px;border:1px solid var(--border)">
+              <div style="font-size:11px;font-weight:700;color:var(--t3);letter-spacing:1px;text-transform:uppercase;margin-bottom:10px">Resultado</div>
+              <div style="display:flex;flex-direction:column;gap:8px">
+                <div style="display:flex;justify-content:space-between"><span style="color:var(--t3);font-size:12px">Tamanho da posição</span><span id="rm-r-size" style="font-family:var(--mono);font-weight:600">—</span></div>
+                <div style="display:flex;justify-content:space-between"><span style="color:var(--t3);font-size:12px">Margem necessária</span><span id="rm-r-margin" style="font-family:var(--mono);font-weight:600">—</span></div>
+                <div style="display:flex;justify-content:space-between"><span style="color:var(--t3);font-size:12px">Quantidade</span><span id="rm-r-qty" style="font-family:var(--mono)">—</span></div>
+                <div style="display:flex;justify-content:space-between;border-top:1px solid var(--border);padding-top:8px"><span style="color:var(--t3);font-size:12px">Risco máximo</span><span id="rm-r-loss" style="font-family:var(--mono);font-weight:600;color:var(--red)">—</span></div>
+                <div style="display:flex;justify-content:space-between"><span style="color:var(--t3);font-size:12px">TP1 (1.5:1 R:R)</span><span id="rm-r-tp1" style="font-family:var(--mono);color:var(--green)">—</span></div>
+                <div style="display:flex;justify-content:space-between"><span style="color:var(--t3);font-size:12px">TP2 (3.0:1 R:R)</span><span id="rm-r-tp2" style="font-family:var(--mono);color:var(--green)">—</span></div>
+                <div style="display:flex;justify-content:space-between"><span style="color:var(--t3);font-size:12px">R:R Ratio</span><span id="rm-r-rr" style="font-family:var(--mono)">—</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
       </div>
 
       <!-- ──────────── GRID BOT / ESTRATÉGIAS ──────────── -->
@@ -1000,43 +1038,134 @@
 
       <!-- ──────────── JOURNAL ──────────── -->
       <div id="panel-journal" class="panel">
-        <div class="grid g2">
-          <div class="card">
-            <div class="card-title">Registrar Operação</div>
-            <div class="form-row g2">
-              <div class="field"><label>Par</label><select id="j-pair"><option>BTC/USDT</option><option>ETH/USDT</option><option>BNB/USDT</option><option>SOL/USDT</option><option>XRP/USDT</option><option>DOGE/USDT</option><option>AVAX/USDT</option></select></div>
-              <div class="field"><label>Direção</label><select id="j-dir"><option value="Long">Long</option><option value="Short">Short</option></select></div>
-            </div>
-            <div class="form-row g2">
-              <div class="field"><label>Entrada (USDT)</label><input type="number" id="j-entry" placeholder="83000"></div>
-              <div class="field"><label>Saída (USDT)</label><input type="number" id="j-exit" placeholder="85000"></div>
-            </div>
-            <div class="form-row g2">
-              <div class="field"><label>Tamanho (USDT)</label><input type="number" id="j-size" placeholder="500"></div>
-              <div class="field"><label>Alavancagem</label><select id="j-lev"><option>1x</option><option>2x</option><option>3x</option><option>5x</option><option>10x</option><option>20x</option><option>50x</option></select></div>
-            </div>
-            <div class="field" style="margin-bottom:10px"><label>Motivo da entrada</label><input type="text" id="j-reason" placeholder="Ex: Rompimento de resistência com volume alto..."></div>
-            <div class="field" style="margin-bottom:10px"><label>Resultado</label><select id="j-result"><option value="win">Win</option><option value="loss">Loss</option><option value="be">Break Even</option></select></div>
-            <button class="btn btn-gold btn-full" onclick="addTrade()">Registrar Trade</button>
+        <!-- Tabs -->
+        <div style="display:flex;gap:4px;margin-bottom:14px;background:var(--bg2);border-radius:8px;padding:4px;border:1px solid var(--border);width:fit-content">
+          <button id="jrn-tab-register" onclick="switchJournalTab('register')" style="font-size:12px;font-weight:700;padding:8px 16px;border:none;border-radius:6px;cursor:pointer;background:var(--gold);color:#000">✏️ Registrar</button>
+          <button id="jrn-tab-history"  onclick="switchJournalTab('history')"  style="font-size:12px;padding:8px 16px;border:none;border-radius:6px;cursor:pointer;background:transparent;color:var(--t2)">📋 Histórico</button>
+          <button id="jrn-tab-stats"    onclick="switchJournalTab('stats')"    style="font-size:12px;padding:8px 16px;border:none;border-radius:6px;cursor:pointer;background:transparent;color:var(--t2)">📊 Estatísticas</button>
+        </div>
 
-            <div class="divider"></div>
-            <div class="card-title">Estatísticas gerais</div>
-            <div class="grid g2">
-              <div class="metric"><label>Total trades</label><div class="val" id="st-total">0</div></div>
-              <div class="metric"><label>Win Rate</label><div class="val gold" id="st-wr">—</div></div>
-              <div class="metric"><label>Total PnL</label><div class="val" id="st-pnl">$0</div></div>
-              <div class="metric"><label>Wins / Losses</label><div class="val" id="st-wl">0 / 0</div></div>
+        <!-- Tab: Registrar -->
+        <div id="jrn-panel-register">
+          <div class="grid g2">
+            <div class="card">
+              <div class="card-title">Registrar Operação</div>
+              <div class="form-row g2">
+                <div class="field"><label>Par</label><select id="j-pair"><option>BTC/USDT</option><option>ETH/USDT</option><option>BNB/USDT</option><option>SOL/USDT</option><option>XRP/USDT</option><option>DOGE/USDT</option><option>AVAX/USDT</option><option>LINK/USDT</option><option>ADA/USDT</option></select></div>
+                <div class="field"><label>Direção</label><select id="j-dir"><option value="Long">Long</option><option value="Short">Short</option></select></div>
+              </div>
+              <div class="form-row g2">
+                <div class="field"><label>Entrada (USDT)</label><input type="number" id="j-entry" placeholder="83000"></div>
+                <div class="field"><label>Saída (USDT)</label><input type="number" id="j-exit" placeholder="85000"></div>
+              </div>
+              <div class="form-row g2">
+                <div class="field"><label>Tamanho (USDT)</label><input type="number" id="j-size" placeholder="500"></div>
+                <div class="field"><label>Alavancagem</label><select id="j-lev"><option>1x</option><option>2x</option><option>3x</option><option>5x</option><option>10x</option><option>20x</option><option>50x</option></select></div>
+              </div>
+              <div class="field" style="margin-bottom:10px"><label>Motivo da entrada</label><input type="text" id="j-reason" placeholder="Ex: Rompimento de resistência com volume alto..."></div>
+              <div class="field" style="margin-bottom:10px"><label>Resultado</label>
+                <select id="j-result">
+                  <option value="win">✅ Win</option>
+                  <option value="loss">❌ Loss</option>
+                  <option value="be">🟡 Break Even</option>
+                  <option value="pending">⏳ Em Andamento</option>
+                </select>
+              </div>
+              <div class="field" style="margin-bottom:10px"><label>Notas / Aprendizado</label><textarea id="j-notes" rows="3" style="width:100%;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);color:var(--t1);padding:8px;font-size:13px;resize:vertical" placeholder="O que aprendi nesse trade? Errei o timing? Qual foi o erro?"></textarea></div>
+              <div class="field" style="margin-bottom:12px">
+                <label>Tags</label>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px" id="j-tags-row">
+                  <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer"><input type="checkbox" value="scalp"> Scalp</label>
+                  <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer"><input type="checkbox" value="swing"> Swing</label>
+                  <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer"><input type="checkbox" value="fomo"> FOMO</label>
+                  <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer"><input type="checkbox" value="revenge"> Revenge</label>
+                  <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer"><input type="checkbox" value="setup-a"> Setup A</label>
+                  <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer"><input type="checkbox" value="news"> News</label>
+                </div>
+              </div>
+              <div class="field" style="margin-bottom:12px">
+                <label>Screenshot do gráfico (opcional)</label>
+                <div id="j-screenshot-area" style="margin-top:6px;border:2px dashed var(--border);border-radius:var(--r);padding:14px;text-align:center;cursor:pointer;transition:border-color 0.2s" onclick="document.getElementById('j-screenshot-input').click()" ondragover="event.preventDefault();this.style.borderColor='var(--gold)'" ondragleave="this.style.borderColor='var(--border)'" ondrop="handleScreenshotDrop(event)">
+                  <div id="j-screenshot-preview">
+                    <div style="font-size:24px">📷</div>
+                    <div style="font-size:11px;color:var(--t3);margin-top:4px">Clique ou arraste uma imagem aqui</div>
+                  </div>
+                </div>
+                <input type="file" id="j-screenshot-input" accept="image/*" style="display:none" onchange="handleScreenshotFile(this)">
+              </div>
+              <button class="btn btn-gold btn-full" onclick="addTrade()">💾 Registrar Trade</button>
+            </div>
+            <div class="card">
+              <div class="card-title">Estatísticas gerais</div>
+              <div class="grid g2" style="margin-bottom:14px">
+                <div class="metric"><label>Total trades</label><div class="val" id="st-total">0</div></div>
+                <div class="metric"><label>Win Rate</label><div class="val gold" id="st-wr">—</div></div>
+                <div class="metric"><label>Total PnL</label><div class="val" id="st-pnl">/bin/sh</div></div>
+                <div class="metric"><label>Wins / Losses</label><div class="val" id="st-wl">0 / 0</div></div>
+              </div>
+              <div class="divider"></div>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                <div class="card-title" style="margin:0">Trades Recentes</div>
+                <div style="display:flex;gap:6px">
+                  <a href="/api/trades/export/csv" style="font-size:11px;padding:5px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);color:var(--t2);text-decoration:none" title="Exportar CSV para Excel">📥 CSV</a>
+                  <button class="btn btn-outline" style="font-size:10px;padding:5px 10px" onclick="loadTrades()">↻</button>
+                </div>
+              </div>
+              <div id="journal-list" style="max-height:480px;overflow-y:auto"></div>
             </div>
           </div>
+        </div>
+
+        <!-- Tab: Histórico -->
+        <div id="jrn-panel-history" style="display:none">
           <div class="card">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-              <div class="card-title" style="margin:0">Histórico de Trades</div>
-              <button class="btn btn-outline" style="font-size:10px;padding:5px 10px" onclick="loadTrades()">Atualizar</button>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+              <div class="card-title" style="margin:0">Todos os Trades</div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <input type="text" id="jrn-search" placeholder="Buscar par, razão, notas..." style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:6px 10px;font-size:12px;color:var(--t1);width:200px" oninput="filterJournalHistory()">
+                <select id="jrn-filter-result" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:6px 10px;font-size:12px;color:var(--t1)" onchange="filterJournalHistory()">
+                  <option value="">Todos resultados</option>
+                  <option value="win">✅ Wins</option>
+                  <option value="loss">❌ Losses</option>
+                  <option value="pending">⏳ Em andamento</option>
+                </select>
+                <a href="/api/trades/export/csv" style="font-size:12px;padding:6px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);color:var(--t2);text-decoration:none">📥 Exportar CSV</a>
+              </div>
             </div>
-            <div id="journal-list" style="max-height:500px;overflow-y:auto"></div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Data</th><th>Par</th><th>Dir.</th><th>Entrada</th><th>Saída</th><th>Tam.</th><th>Lev.</th><th>PnL</th><th>PnL%</th><th>Tags</th><th>Result.</th><th></th></tr></thead>
+                <tbody id="jrn-history-table"><tr><td colspan="12" style="text-align:center;padding:30px;color:var(--t3)">Carregando...</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab: Estatísticas -->
+        <div id="jrn-panel-stats" style="display:none">
+          <div class="grid g4" style="margin-bottom:14px">
+            <div class="metric"><label>Taxa de Acerto</label><div class="val gold" id="js-winrate">—</div></div>
+            <div class="metric"><label>PnL Total</label><div class="val" id="js-pnl-total">—</div></div>
+            <div class="metric"><label>Melhor Trade</label><div class="val green" id="js-best">—</div></div>
+            <div class="metric"><label>Pior Trade</label><div class="val red" id="js-worst">—</div></div>
+            <div class="metric"><label>Média Win</label><div class="val green" id="js-avg-win">—</div></div>
+            <div class="metric"><label>Média Loss</label><div class="val red" id="js-avg-loss">—</div></div>
+            <div class="metric"><label>Profit Factor</label><div class="val" id="js-pf">—</div></div>
+            <div class="metric"><label>Total Trades</label><div class="val" id="js-total">—</div></div>
+          </div>
+          <div class="grid g2">
+            <div class="card">
+              <div class="card-title" style="margin-bottom:10px">Desempenho por Par</div>
+              <div id="js-by-pair" style="font-size:13px"></div>
+            </div>
+            <div class="card">
+              <div class="card-title" style="margin-bottom:10px">Análise por Tags</div>
+              <div id="js-by-tag" style="font-size:13px"></div>
+            </div>
           </div>
         </div>
       </div>
+
 
       <!-- ──────────── AI EXPERT ──────────── -->
       <div id="panel-ai" class="panel" style="height:calc(100vh - var(--top) - 2.5rem)">
@@ -1312,6 +1441,7 @@
               <div class="divider"></div>
               <div class="card-title">Curva de Capital</div>
               <canvas id="bt-equity-chart" height="120" style="margin-bottom:12px"></canvas>
+              <canvas id="bt-equity-canvas" style="width:100%;border-radius:6px;background:var(--bg2);margin-bottom:12px"></canvas>
               <div class="divider"></div>
               <div class="card-title">Últimos Trades</div>
               <div class="table-wrap" style="max-height:220px;overflow-y:auto">
@@ -1779,6 +1909,15 @@
                 <input type="text" id="key-tg-chatid" placeholder="-100123456789" style="font-family:var(--mono);font-size:12px">
               </div>
 
+              <div class="card-title" style="font-size:11px;margin-bottom:8px;margin-top:14px">🔗 Webhook Token (MT5/ProfitChart)</div>
+              <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:10px;margin-bottom:10px">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+                  <span id="profile-webhook-token" style="font-family:var(--mono);font-size:11px;color:var(--t2);flex:1;word-break:break-all">Carregando...</span>
+                  <button onclick="copyWebhookToken()" style="background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:4px 8px;color:var(--t2);font-size:11px;cursor:pointer;flex-shrink:0">📋 Copiar</button>
+                </div>
+              </div>
+              <button onclick="regenerateWebhookToken()" style="width:100%;padding:7px;background:rgba(248,81,73,0.1);border:1px solid rgba(248,81,73,0.3);border-radius:var(--r);color:var(--red);font-size:12px;cursor:pointer;margin-bottom:14px">🔄 Gerar Novo Token</button>
+
               <button class="btn btn-gold btn-full" onclick="saveApiKeys()">💾 Salvar Chaves</button>
               <div id="prof-keys-status" style="font-size:12px;color:var(--t3);text-align:center;margin-top:8px"></div>
             </div>
@@ -1794,7 +1933,87 @@
         </div>
       </div>
 
-      <!-- ──────────── ADMIN PANEL ──────────── -->
+      <!-- ──────────── FUNDING RATES ──────────── -->
+      <div id="panel-funding" class="panel">
+        <div class="card" style="margin-bottom:12px">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+            <div>
+              <div class="card-title" style="margin:0">📡 Funding Rate — Futuros Perpétuos</div>
+              <div style="font-size:11px;color:var(--t3);margin-top:3px">Atualizado a cada 8h. Extremos (&gt;0.1% ou &lt;-0.1%) são sinais contrários fortes.</div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <span id="fr-last-update" style="font-size:11px;color:var(--t3);font-family:var(--mono)"></span>
+              <button class="btn btn-gold" onclick="loadFundingRates()">↻ Atualizar</button>
+            </div>
+          </div>
+          <div class="grid g4" id="fr-summary" style="margin-top:14px">
+            <div class="metric"><label>Extremo Long</label><div class="val red" id="fr-s-high">—</div></div>
+            <div class="metric"><label>Extremo Short</label><div class="val green" id="fr-s-low">—</div></div>
+            <div class="metric"><label>Média Geral</label><div class="val" id="fr-s-avg">—</div></div>
+            <div class="metric"><label>Anualizado Médio</label><div class="val gold" id="fr-s-ann">—</div></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Par</th><th>Funding Rate</th><th>Anualizado</th><th>Mark Price</th><th>Próx. Funding</th><th>Sinal</th></tr></thead>
+              <tbody id="fr-table"><tr><td colspan="6" style="text-align:center;padding:30px;color:var(--t3)">Clique em Atualizar para carregar</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card" style="margin-top:12px">
+          <div class="card-title" style="margin-bottom:10px">📖 Como usar Funding Rate no Trading</div>
+          <div style="font-size:12px;color:var(--t2);line-height:1.7">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+              <div style="background:var(--reddim);border-radius:6px;padding:10px;border-left:3px solid var(--red)">
+                <div style="font-weight:600;color:var(--red);margin-bottom:4px">⚠️ Funding Muito Positivo (&gt;0.1%)</div>
+                Mercado excessivamente comprado. Sinal de possível reversão — considere shorts ou realize lucros.
+              </div>
+              <div style="background:var(--greendim);border-radius:6px;padding:10px;border-left:3px solid var(--green)">
+                <div style="font-weight:600;color:var(--green);margin-bottom:4px">✅ Funding Muito Negativo (&lt;-0.1%)</div>
+                Mercado excessivamente vendido. Sinal de possível reversão — considere longs ou realize lucros de shorts.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ──────────── CORRELAÇÃO ──────────── -->
+      <div id="panel-correlation" class="panel">
+        <div class="card" style="margin-bottom:12px">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+            <div>
+              <div class="card-title" style="margin:0">🔗 Correlação entre Ativos (30 dias)</div>
+              <div style="font-size:11px;color:var(--t3);margin-top:3px">Baseado em retornos diários. 1 = perfeita correlação, 0 = sem correlação, -1 = inversa.</div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <select id="corr-preset" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:6px 10px;font-size:12px;color:var(--t1)">
+                <option value="top10">Top 10 Large Cap</option>
+                <option value="defi">DeFi</option>
+                <option value="l2">Layer 2</option>
+                <option value="meme">Meme Coins</option>
+                <option value="ai">IA Tokens</option>
+              </select>
+              <button class="btn btn-gold" onclick="loadCorrelation()">↻ Calcular</button>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div id="corr-loading" style="text-align:center;padding:40px;color:var(--t3);font-size:13px;display:none">Calculando correlação — buscando 30 dias de dados...</div>
+          <div id="corr-matrix" style="overflow-x:auto"></div>
+          <div id="corr-empty" style="text-align:center;padding:40px;color:var(--t3);font-size:13px">Selecione um grupo e clique em Calcular</div>
+        </div>
+        <div class="card" style="margin-top:12px">
+          <div class="card-title" style="margin-bottom:10px">📖 Como interpretar a correlação</div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;font-size:12px;color:var(--t2)">
+            <div style="background:rgba(63,185,80,0.12);border-radius:6px;padding:8px;text-align:center"><div style="font-size:18px;font-weight:700;color:var(--green)">0.8–1.0</div>Alta correlação — movem juntos</div>
+            <div style="background:rgba(88,166,255,0.12);border-radius:6px;padding:8px;text-align:center"><div style="font-size:18px;font-weight:700;color:var(--blue)">0.3–0.7</div>Correlação moderada</div>
+            <div style="background:rgba(248,81,73,0.12);border-radius:6px;padding:8px;text-align:center"><div style="font-size:18px;font-weight:700;color:var(--red)">-1.0–0.2</div>Baixa / inversa — diversifica</div>
+          </div>
+        </div>
+      </div>
+
+            <!-- ──────────── ADMIN PANEL ──────────── -->
       <div id="panel-admin" class="panel">
 
         <!-- Stats strip -->
@@ -1931,5 +2150,6 @@
 })();
 </script>
 <script src="/js/app.js"></script>
+<script src="/js/features.js"></script>
 </body>
 </html>

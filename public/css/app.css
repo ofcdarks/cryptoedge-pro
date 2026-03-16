@@ -419,3 +419,27 @@ td.green{color:var(--green)}td.red{color:var(--red)}td.gold{color:var(--gold)}td
 /* Fix admin panel layout - prevent empty grid from causing space */
 #adm-stats:empty { display: none; }
 #adm-stats { min-height: 0; }
+
+/* ── Features v2.0 ────────────────────────────────────────────────── */
+/* Funding Rate */
+#fr-table tr:hover { background: var(--bg3) !important; cursor:pointer; transition:background 0.15s; }
+.fr-extreme-long  { background: rgba(248,81,73,0.06) !important; }
+.fr-extreme-short { background: rgba(63,185,80,0.06) !important; }
+
+/* Correlation heatmap */
+#corr-matrix table td { transition: opacity 0.2s; cursor: default; }
+#corr-matrix table td:hover { opacity: 0.85; }
+
+/* Journal enhanced */
+#jrn-panel-history .table-wrap { overflow-x: auto; }
+#journal-list .trade-item { border-radius: var(--r); margin-bottom:6px; padding:10px 12px; background:var(--bg2); border:1px solid var(--border); transition:border-color 0.15s; }
+#journal-list .trade-item:hover { border-color: var(--border2); }
+#j-screenshot-area { transition: border-color 0.2s, background 0.2s; }
+#j-screenshot-area:hover { border-color: var(--gold); background: rgba(240,185,11,0.04); }
+
+/* Risk Manager */
+#rm-r-size, #rm-r-margin, #rm-r-qty { color: var(--t1); font-weight: 600; }
+#rm-r-tp1, #rm-r-tp2 { color: var(--green); }
+
+/* Backtest equity canvas */
+#bt-equity-canvas { display: block; border-radius: 6px; background: var(--bg2); }
