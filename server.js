@@ -780,9 +780,13 @@ function _tryFindPM2() {
   return null;
 }
 
+let _cachedBotEnv = null; // guarda env para auto-restarts
+
 // Inicia o processo Python do bot (sem PM2)
 function _spawnBot(botEnv) {
   if (_botProcess && !_botProcess.killed) return; // já rodando
+  if (botEnv) _cachedBotEnv = botEnv; // atualiza cache
+  botEnv = _cachedBotEnv || botEnv; // usa cache se não passou env
 
   const pyInterp = process.platform === 'win32' ? 'python' : 'python3';
   const botScript = path.join(__dirname, 'bot', 'gridbot.py');
@@ -815,7 +819,7 @@ function _spawnBot(botEnv) {
       _botRestarts++;
       _appendBotLog(`🔄 Reiniciando em ${BOT_RESTART_DELAY/1000}s... (tentativa ${_botRestarts}/${MAX_BOT_RESTARTS})`);
       _botRestartTimer = setTimeout(() => {
-        if (_botShouldRun) _spawnBot(botEnv);
+        if (_botShouldRun) _spawnBot(_cachedBotEnv);
       }, BOT_RESTART_DELAY);
     }
   });
@@ -884,25 +888,45 @@ app.post('/api/bot/start', requireAuth, async (req, res) => {
     botEnv['HOME']           = botEnv['HOME']   || process.env.HOME   || '/root';
     botEnv['PYTHONUNBUFFERED']   = '1';
 
-    // Para qualquer instância anterior (incluindo pm2 e python diretamente)
-    if (_botRestartTimer) { clearTimeout(_botRestartTimer); _botRestartTimer = null; }
-    if (_botIsRunning()) {
-      _botShouldRun = false;
-      _botProcess.kill('SIGTERM');
-      await new Promise(r => setTimeout(r, 1500)); // aguarda encerrar
+    // ── 1. Para PM2 se existir (versões anteriores podiam ter deixado PM2 rodando) ─
+    const pm2 = _tryFindPM2();
+    if (pm2) {
+      try { execSync(pm2 + ' stop cryptoedge-bot --silent 2>/dev/null', { timeout:4000 }); } catch {}
+      try { execSync(pm2 + ' delete cryptoedge-bot --silent 2>/dev/null', { timeout:4000 }); } catch {}
+      await new Promise(r => setTimeout(r, 1000)); // aguarda PM2 terminar
     }
-    // Mata qualquer processo gridbot.py órfão (Alpine/Docker compatível)
-    try {
-      execSync("pkill -f gridbot.py 2>/dev/null; sleep 0.5 || true", { timeout:3000 });
-    } catch {}
-    await new Promise(r => setTimeout(r, 800));
 
-    // Reset restart counter
+    // ── 2. Cancela restart timer e para spawn nativo se rodando ──────────────
+    if (_botRestartTimer) { clearTimeout(_botRestartTimer); _botRestartTimer = null; }
+    _botShouldRun = false;
+    if (_botIsRunning()) {
+      _botProcess.kill('SIGTERM');
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    // ── 3. Garante que não sobrou NENHUM gridbot.py (espera terminar) ─────────
+    // NÃO usa pkill antes de verificar — espera o processo encerrar limpo
+    let killAttempts = 0;
+    while (killAttempts < 5) {
+      try {
+        const pidOut = execSync("pgrep -f gridbot.py 2>/dev/null | head -1", { encoding:'utf8', timeout:1500, stdio:['pipe','pipe','pipe'] });
+        if (!pidOut.trim()) break; // nenhum processo rodando — ok
+        execSync("pkill -SIGTERM -f gridbot.py 2>/dev/null || true", { timeout:2000 });
+        await new Promise(r => setTimeout(r, 1000));
+        killAttempts++;
+      } catch { break; }
+    }
+    // SIGKILL como último recurso
+    try { execSync("pkill -SIGKILL -f gridbot.py 2>/dev/null || true", { timeout:2000 }); } catch {}
+    await new Promise(r => setTimeout(r, 500)); // pequeno buffer antes de spawnar
+
+    // ── 4. Limpa estado e inicia novo processo ────────────────────────────────
+    _botProcess   = null;
     _botRestarts  = 0;
     _botShouldRun = true;
     _spawnBot(botEnv);
 
-    res.json({ ok: true, message: 'Bot iniciado', mode: 'native', pid: _botProcess?.pid });
+    res.json({ ok: true, message: 'Bot iniciado (modo nativo)', mode: 'native', pid: _botProcess?.pid });
   } catch(e) {
     res.status(500).json({ ok: false, error: 'Erro ao iniciar bot: ' + e.message.slice(0,300) });
   }
