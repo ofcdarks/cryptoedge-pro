@@ -658,6 +658,18 @@ async function initLivePanel() {
       lovTime.textContent = s < 60 ? s+'s' : Math.floor(s/60)+'m '+( s%60)+'s';
     }
   }, 1000);
+
+  // Auto-narração: dispara 20s após abrir o painel se bot estiver rodando
+  // e repete a cada 90s para manter o comentário atualizado
+  if (_liveNarrateTimer) clearInterval(_liveNarrateTimer);
+  setTimeout(async () => {
+    const st = await fetch('/api/live/state', { headers: auth.headers() }).then(r=>r.json()).catch(()=>({}));
+    if (st.enabled) requestLiveNarration();
+  }, 20000);
+  _liveNarrateTimer = setInterval(async () => {
+    const st = await fetch('/api/live/state', { headers: auth.headers() }).then(r=>r.json()).catch(()=>({}));
+    if (st.enabled) requestLiveNarration();
+  }, 90000);
 }
 
 function _initLiveTV() {
@@ -736,7 +748,15 @@ function _renderLiveState(d) {
 
   // IA narration
   const iaEl = document.getElementById('live-ia-text');
-  if (iaEl && d.narration) { iaEl.textContent = d.narration; iaEl.style.color = 'var(--t1)'; }
+  if (iaEl) {
+    if (d.narration) {
+      iaEl.textContent = d.narration;
+      iaEl.style.color = 'var(--t1)';
+    } else if (!d.enabled) {
+      iaEl.textContent = 'Aguardando o bot iniciar para começar a análise ao vivo...';
+      iaEl.style.color = 'var(--t3)';
+    }
+  }
 
   // Signal feed
   _renderLiveFeed(d.feed || []);

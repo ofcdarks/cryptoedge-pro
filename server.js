@@ -1281,6 +1281,9 @@ app.get('/live', (req, res) => {
 
 // Live state API — público (só leitura, sem dados sensíveis)
 app.get('/api/live/state', (req, res) => {
+  // Narration fallback: se bot está rodando mas sem texto de IA, mostra status básico
+  const narrationText = _liveState.lastNarration ||
+    (_liveState.enabled ? `Monitorando ${_liveState.pair} — estratégia ${(_liveState.strategy||'').toUpperCase()}. Aguardando sinal...` : '');
   res.json({
     ok:       true,
     enabled:  _liveState.enabled,
@@ -1289,7 +1292,7 @@ app.get('/api/live/state', (req, res) => {
     position: _liveState.position,
     session:  _liveState.session,
     feed:     _liveState.feed.slice(0, 30),
-    narration: _liveState.lastNarration,
+    narration: narrationText,
     ts:       new Date().toISOString(),
   });
 });
@@ -1306,6 +1309,7 @@ app.post('/api/live/event', requireAuth, (req, res) => {
         _liveState.pair       = data.pair     || _liveState.pair;
         _liveState.strategy   = data.strategy || _liveState.strategy;
         _liveState.session    = { trades:0, wins:0, losses:0, pnl:0, startedAt: new Date().toISOString() };
+        _liveState.lastNarration = `Bot iniciado — ${(data.strategy||'pattern').toUpperCase()} em ${data.pair||'BTCUSDT'}. Monitorando mercado em tempo real...`;
         _pushLiveFeed({ type, label: '🚀 Bot iniciado', detail: `${data.strategy} | ${data.pair}`, color: 'green' });
         break;
       case 'bot_stopped':
