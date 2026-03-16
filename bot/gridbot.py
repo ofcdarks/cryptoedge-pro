@@ -13,6 +13,7 @@ from binance.enums import *
 from dotenv import load_dotenv
 from patterns import Candle, PatternResult, Signal, run_all
 from telegram_notify import (notify_start, notify_entry, notify_exit, notify_stop,
+                              notify_session_target,
                               notify_stop_loss_global, notify_error, notify_signal,
                               request_entry_confirmation_v2)
 import multi_scanner
@@ -61,7 +62,9 @@ TESTNET    = os.environ.get('BOT_TESTNET','true').lower() == 'true'
 
 SYMBOL     = os.environ.get('BOT_SYMBOL', os.environ.get('SYMBOL', 'BTCUSDT')).upper().replace('/','').replace('-','')
 CAPITAL    = float(os.environ.get('BOT_CAPITAL',    '300'))
-STOP_LOSS  = float(os.environ.get('BOT_STOP_LOSS',  '0'))
+STOP_LOSS     = float(os.environ.get('BOT_STOP_LOSS',   '0'))
+SESSION_GAIN  = float(os.environ.get('BOT_SESSION_GAIN','0'))  # para ao atingir gain
+SESSION_LOSS  = float(os.environ.get('BOT_SESSION_LOSS','0'))  # para ao atingir loss
 TIMEFRAME  = os.environ.get('BOT_TIMEFRAME', '15m')
 STRATEGY   = os.environ.get('BOT_STRATEGY', 'pattern')
 TRADE_MODE = os.environ.get('BOT_TRADE_MODE', 'manual')  # 'manual' ou 'auto'
@@ -559,6 +562,21 @@ def on_kline(msg):
         except: pass
         close_position(close,'STOP GLOBAL')
         state['running']=False; return
+
+    # ── Session Manager: para ao atingir gain ou loss da sessão ──
+    if SESSION_GAIN > 0 and state['pnl'] >= SESSION_GAIN:
+        log.info(f"  🎯 SESSION GAIN atingido: ${state['pnl']:+.2f} >= ${SESSION_GAIN:.2f}")
+        if state['position']: close_position(close, 'SESSION GAIN')
+        notify_session_target('gain', SYMBOL, state['pnl'], SESSION_GAIN,
+                              state['wins'], state['losses'])
+        state['running'] = False; return
+
+    if SESSION_LOSS > 0 and state['pnl'] <= -SESSION_LOSS:
+        log.info(f"  🛑 SESSION LOSS atingido: ${state['pnl']:+.2f} <= -${SESSION_LOSS:.2f}")
+        if state['position']: close_position(close, 'SESSION LOSS')
+        notify_session_target('loss', SYMBOL, state['pnl'], SESSION_LOSS,
+                              state['wins'], state['losses'])
+        state['running'] = False; return
     if not is_close: return
 
     # ── VELA FECHADA ───────────────────────────────────────────────
@@ -665,6 +683,8 @@ def main():
     log.info(f"  Par: {SYMBOL} | Capital: ${CAPITAL} | Testnet: {TESTNET}")
     notify_start(SYMBOL, STRATEGY, CAPITAL, TESTNET)
     log.info(f"  Timeframe: {TIMEFRAME} | Stop global: ${STOP_LOSS:,.0f}")
+    if SESSION_GAIN > 0 or SESSION_LOSS > 0:
+        log.info(f"  🎯 Session Manager: GAIN +${SESSION_GAIN:.2f} | LOSS -${SESSION_LOSS:.2f}")
     if STRATEGY in ('pattern','auto'):
         log.info(f"  Pattern Engine: conf≥{MIN_CONFIDENCE:.0%} | "
                  f"SL={SL_ATR_MULT}×ATR | TP={TP_RR}×SL | Volume: {REQUIRE_VOLUME}")

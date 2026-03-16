@@ -402,6 +402,31 @@ def notify_stop_loss_global(symbol: str, price: float):
         f'🕐 <i>{_ts()}</i>'
     )
 
+
+def notify_session_target(result: str, symbol: str, pnl: float,
+                           target: float, wins: int, losses: int):
+    """Notifica quando o bot para por gain ou loss de sessão."""
+    is_gain  = result == 'gain'
+    icon     = '🎯' if is_gain else '🛑'
+    title    = 'GAIN ALVO ATINGIDO ✅' if is_gain else 'LOSS MÁXIMO ATINGIDO ❌'
+    color_pnl = '📈' if is_gain else '📉'
+    trades   = wins + losses
+    wr       = (wins / trades * 100) if trades > 0 else 0
+    _send(
+        f'{icon} <b>{title}</b>\n'
+        f'{SEP}\n'
+        f'📊 Par: <code>{symbol}</code>\n'
+        f'\n'
+        f'{color_pnl} PnL sessão: <b><code>${pnl:+.2f} USDT</code></b>\n'
+        f'🎯 Limite: <code>{"+" if is_gain else "-"}${target:.2f} USDT</code>\n'
+        f'{SEP}\n'
+        f'📊 Trades:   ✅ {wins} WIN  |  ❌ {losses} LOSS\n'
+        f'🎯 Win Rate: <code>{wr:.0f}%</code>  {_bar(wr)}\n'
+        f'{SEP}\n'
+        f'<b>Bot encerrado automaticamente.</b>\n'
+        f'🕐 <i>{_ts()}</i>'
+    )
+
 def notify_error(msg: str):
     _send(
         f'❌ <b>Erro no Bot</b>\n'

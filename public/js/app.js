@@ -2038,8 +2038,12 @@ function getBotConfig() {
     BOT_STRATEGY: strat,
     BOT_CAPITAL:  document.getElementById('bc-capital')?.value   || '300',
     BOT_TIMEFRAME:document.getElementById('bc-timeframe')?.value || '15m',
-    BOT_STOP_LOSS:document.getElementById('bc-stopglobal')?.value || '0',
-    BOT_TESTNET:  document.getElementById('bc-testnet')?.value   || 'true',
+    BOT_STOP_LOSS:    document.getElementById('bc-stopglobal')?.value || '0',
+    BOT_TESTNET:      document.getElementById('bc-testnet')?.value   || 'true',
+    BOT_SESSION_GAIN: document.getElementById('bc-session-enabled')?.checked
+                        ? (document.getElementById('bc-session-gain')?.value || '0') : '0',
+    BOT_SESSION_LOSS: document.getElementById('bc-session-enabled')?.checked
+                        ? (document.getElementById('bc-session-loss')?.value || '0') : '0',
   };
   if (strat === 'grid') {
     cfg.BOT_PRICE_MIN  = document.getElementById('bc-grid-min')?.value || '80000';
@@ -2052,6 +2056,33 @@ function getBotConfig() {
     cfg.BOT_REQUIRE_VOL = document.getElementById('bc-pat-vol')?.value  || 'true';
   }
   return cfg;
+}
+
+
+// ─── Session Manager ──────────────────────────────────────────────────────────
+function toggleSessionManager() {
+  const enabled = document.getElementById('bc-session-enabled')?.checked;
+  const fields  = document.getElementById('bc-session-fields');
+  if (fields) fields.style.display = enabled ? 'block' : 'none';
+  if (enabled) updateSessionPreview();
+}
+
+function updateSessionPreview() {
+  const capital = parseFloat(document.getElementById('bc-capital')?.value || '300');
+  const gain    = parseFloat(document.getElementById('bc-session-gain')?.value || '0');
+  const loss    = parseFloat(document.getElementById('bc-session-loss')?.value || '0');
+  const preview = document.getElementById('bc-session-preview');
+  if (!preview) return;
+
+  const gainPct = capital > 0 ? (gain / capital * 100).toFixed(1) : '—';
+  const lossPct = capital > 0 ? (loss / capital * 100).toFixed(1) : '—';
+  const rr      = loss > 0    ? (gain / loss).toFixed(1) : '—';
+
+  preview.innerHTML =
+    `✅ Para quando ganhar: <b style="color:var(--green)">+$${gain.toFixed(2)} USDT</b> <span style="color:var(--t3)">(+${gainPct}% do capital)</span><br>` +
+    `🛑 Para quando perder: <b style="color:var(--red)">-$${loss.toFixed(2)} USDT</b> <span style="color:var(--t3)">(-${lossPct}% do capital)</span><br>` +
+    `⚖️ R:R da sessão: <b style="color:var(--gold)">1 : ${rr}</b>` +
+    (parseFloat(rr) < 1.5 ? `<br><span style="color:var(--red)">⚠ R:R baixo — considere aumentar o gain ou reduzir o loss</span>` : '');
 }
 
 async function botSaveAndApply() {
@@ -2093,6 +2124,16 @@ async function loadBotConfig() {
     setV('bc-capital',   'BOT_CAPITAL');
     setV('bc-timeframe', 'BOT_TIMEFRAME');
     setV('bc-stopglobal','BOT_STOP_LOSS');
+    // Session Manager
+    if (cfg.BOT_SESSION_GAIN && parseFloat(cfg.BOT_SESSION_GAIN) > 0) {
+      const cb = document.getElementById('bc-session-enabled');
+      if (cb) { cb.checked = true; toggleSessionManager(); }
+      const sg = document.getElementById('bc-session-gain');
+      const sl = document.getElementById('bc-session-loss');
+      if (sg) sg.value = cfg.BOT_SESSION_GAIN;
+      if (sl) sl.value = cfg.BOT_SESSION_LOSS || '0';
+      updateSessionPreview();
+    }
     setV('bc-testnet',   'BOT_TESTNET');
     setV('bc-grid-min',  'BOT_PRICE_MIN');
     setV('bc-grid-max',  'BOT_PRICE_MAX');
