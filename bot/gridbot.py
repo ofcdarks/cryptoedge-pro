@@ -100,7 +100,8 @@ def handle_exit(sig, frame):
 signal.signal(signal.SIGTERM, handle_exit)
 signal.signal(signal.SIGINT, handle_exit)
 
-client = Client(API_KEY, SECRET_KEY, testnet=TESTNET)
+# Client será criado em main() após validar as chaves
+client = None
 
 # ─────────────────────────────────────────────────────────────────────────────
 # INDICADORES
@@ -523,14 +524,23 @@ def warm_up():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    if not API_KEY or not SECRET_KEY:
-        log.error("Configure BINANCE_API_KEY e BINANCE_SECRET_KEY no .env")
-        sys.exit(1)
+    global client
+    # Recarrega chaves a cada tentativa (podem ter sido injetadas após o início)
+    api_key    = os.environ.get('BINANCE_API_KEY',    API_KEY)
+    secret_key = os.environ.get('BINANCE_SECRET_KEY', SECRET_KEY)
+
+    if not api_key or not secret_key:
+        log.error("Configure BINANCE_API_KEY e BINANCE_SECRET_KEY no Perfil da plataforma.")
+        log.error("O bot será encerrado. Corrija as chaves e reinicie.")
+        sys.exit(2)  # exit code 2 = erro de config, PM2 não deve reiniciar
+
     try:
+        client = Client(api_key, secret_key, testnet=TESTNET)
         client.ping()
         log.info("  Binance: OK")
     except Exception as e:
-        log.error(f"  Falha Binance: {e}"); sys.exit(1)
+        log.error(f"  Falha ao conectar na Binance: {e}")
+        sys.exit(1)
 
     log.info(f"\n{'═'*62}")
     log.info(f"  🚀 CryptoEdge Pro — {STRATEGY.upper()}")
@@ -578,27 +588,38 @@ def main():
         log.info(f"{'═'*62}")
 
 if __name__=='__main__':
-    MAX_RETRIES = 999  # keep retrying forever
+    MAX_RETRIES = 10   # máximo de tentativas de reconexão
     retry_count = 0
-    retry_delay = 10   # seconds between retries
-    
+    retry_delay = 15   # segundos entre tentativas (começa em 15s)
+
     while retry_count < MAX_RETRIES:
         try:
-            state['running'] = True  # Reset running flag on each attempt
+            state['running'] = True
             main()
+        except SystemExit as e:
+            # exit(2) = erro de configuração — não reinicia
+            if e.code == 2:
+                log.error("Erro de configuração — bot não será reiniciado automaticamente.")
+                break
+            # exit(1) = erro de conexão — aguarda e tenta novamente
+            retry_count += 1
+            log.info(f"Tentativa {retry_count}/{MAX_RETRIES} em {retry_delay}s...")
+            time.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, 120)  # backoff exponencial até 2 min
         except KeyboardInterrupt:
             log.info("Interrompido pelo usuário.")
             break
         except Exception as e:
             retry_count += 1
-            log.error(f"Erro inesperado (tentativa {retry_count}): {e}")
+            log.error(f"Erro inesperado (tentativa {retry_count}/{MAX_RETRIES}): {e}")
+            if retry_count >= MAX_RETRIES:
+                log.error("Máximo de tentativas atingido — encerrando.")
+                break
             log.info(f"Reconectando em {retry_delay}s...")
             time.sleep(retry_delay)
-            retry_delay = min(retry_delay * 1.5, 120)  # backoff up to 2 min
+            retry_delay = min(retry_delay * 1.5, 120)
         else:
-            # main() returned normally - check if we should restart
             if state.get('running') == False:
-                log.info("Bot encerrado. Reiniciando em 5s...")
-                time.sleep(5)
-                continue
+                log.info("Bot encerrado pelo usuário.")
+                break
             break

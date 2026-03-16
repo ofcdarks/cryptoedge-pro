@@ -789,32 +789,83 @@ app.get('/api/bot/status', requireAuth, (req, res) => {
   });
 });
 
-app.post('/api/bot/start', requireAuth, (req, res) => {
+app.post('/api/bot/start', requireAuth, async (req, res) => {
   try {
     if (_botIsRunning()) return res.json({ ok: true, message: 'Bot já está rodando' });
+
+    // ── Busca chaves Binance do usuário no DB ──────────────────────────────────
+    const user = db.get('SELECT binance_key, binance_secret, binance_secret_enc FROM users WHERE username=?', [req.user]);
+    const binanceKey    = user?.binance_key || '';
+    const binanceSecret = user?.binance_secret_enc
+      ? decryptSecret(user.binance_secret_enc)
+      : (user?.binance_secret || '');
+
+    // ── Validação: bot não pode rodar sem chaves ────────────────────────────────
+    if (!binanceKey || !binanceSecret) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Configure suas chaves Binance API em Meu Perfil antes de iniciar o bot.'
+      });
+    }
 
     const pyInterp = process.platform === 'win32' ? 'python' : 'python3';
     const botScript= path.join(__dirname, 'bot', 'gridbot.py');
     const envFile  = path.resolve(BOT_ENV_PATH);
-    const botEnv   = _loadEnvFile(envFile);
 
-    // 1. Tenta PM2
+    // ── Constrói ambiente completo: .bot.env + chaves Binance + env do processo ─
+    const botEnv = _loadEnvFile(envFile);
+    botEnv['BINANCE_API_KEY']    = binanceKey;
+    botEnv['BINANCE_SECRET_KEY'] = binanceSecret;
+    // Garante que variáveis críticas do sistema estejam presentes
+    botEnv['PATH']   = botEnv['PATH']   || process.env.PATH   || '/usr/local/bin:/usr/bin:/bin';
+    botEnv['HOME']   = botEnv['HOME']   || process.env.HOME   || '/root';
+    botEnv['PYTHONUNBUFFERED'] = '1';  // logs em tempo real
+
+    // ── Escreve .bot.env atualizado com chaves (sem o secret) para referência ──
+    const configLines = fs.existsSync(envFile)
+      ? fs.readFileSync(envFile, 'utf8').split('\n').filter(l => !l.match(/^BINANCE_(API_KEY|SECRET_KEY)=/))
+      : [];
+    configLines.push('BINANCE_API_KEY=' + binanceKey);
+    // Secret não escrevemos em plain text no arquivo
+    fs.writeFileSync(envFile, configLines.join('\n') + '\n', 'utf8');
+
+    // ── 1. Tenta PM2 ───────────────────────────────────────────────────────────
     const pm2 = _tryFindPM2();
     if (pm2) {
-      const launcher = path.join(__dirname, 'bot', 'start_bot.sh');
-      fs.writeFileSync(launcher,
-        `#!/bin/sh\ncd "${__dirname}"\n[ -f "${envFile}" ] && export $(grep -v "^#" "${envFile}" | xargs 2>/dev/null)\n"${pyInterp}" "${botScript}"\n`,
-        { encoding:'utf8', mode:0o755 });
+      // Salva o ambiente de runtime num arquivo temporário seguro
+      const runtimeEnvPath = path.join(__dirname, 'bot', '.bot_runtime.json');
+      fs.writeFileSync(runtimeEnvPath, JSON.stringify(botEnv), { mode: 0o600 });
+
+      // Launcher Node.js — lê o env do arquivo e executa o bot Python
+      const launcherJs   = path.join(__dirname, 'bot', 'start_bot_runner.js');
+      const runtimeEsc   = runtimeEnvPath.split('\\').join('/');
+      const botScriptEsc = botScript.split('\\').join('/');
+      const cwdEsc       = __dirname.split('\\').join('/');
+      const launcherCode = [
+        "'use strict';",
+        "const {spawn}=require('child_process'),fs=require('fs');",
+        "const env=JSON.parse(fs.readFileSync('" + runtimeEsc + "','utf8'));",
+        "const p=spawn(process.platform==='win32'?'python':'python3',['" + botScriptEsc + "'],{env,stdio:'inherit',cwd:'" + cwdEsc + "'});",
+        "p.on('exit',c=>process.exit(c||0));"
+      ].join('\n');
+      fs.writeFileSync(launcherJs, launcherCode, 'utf8');
+
       try {
-        execSync(`${pm2} start "${launcher}" --name cryptoedge-bot --interpreter bash`, { encoding:'utf8', timeout:10000, cwd:__dirname });
+        // Para instância anterior se existir
+        try { execSync(pm2 + ' stop cryptoedge-bot --silent', { timeout:3000, stdio:'ignore' }); } catch {}
+        try { execSync(pm2 + ' delete cryptoedge-bot --silent', { timeout:3000, stdio:'ignore' }); } catch {}
+        execSync(
+          pm2 + ' start "' + launcherJs + '" --name cryptoedge-bot --max-restarts 3 --restart-delay 10000',
+          { encoding:'utf8', timeout:10000, cwd:__dirname }
+        );
+        _appendBotLog('🚀 Bot iniciado via PM2');
         return res.json({ ok: true, message: 'Bot iniciado via PM2', mode: 'pm2' });
       } catch(pm2Err) {
-        // PM2 falhou — usa spawn
         console.warn('[Bot] PM2 falhou, usando spawn nativo:', pm2Err.message.slice(0,100));
       }
     }
 
-    // 2. Fallback: spawn nativo (funciona em Docker sem PM2)
+    // ── 2. Fallback: spawn nativo ──────────────────────────────────────────────
     _botProcess = spawn(pyInterp, [botScript], {
       env:      botEnv,
       cwd:      __dirname,
@@ -822,20 +873,22 @@ app.post('/api/bot/start', requireAuth, (req, res) => {
       stdio:    ['ignore', 'pipe', 'pipe'],
     });
     _botStartTime = Date.now();
-    _appendBotLog('🚀 Bot iniciado (PID ' + _botProcess.pid + ')');
+    _appendBotLog('🚀 Bot iniciado modo nativo (PID ' + _botProcess.pid + ')');
 
-    _botProcess.stdout.on('data', d => String(d).split('\n').filter(Boolean).forEach(_appendBotLog));
-    _botProcess.stderr.on('data', d => String(d).split('\n').filter(Boolean).forEach(l => _appendBotLog('⚠ '+l)));
+    _botProcess.stdout.on('data', d =>
+      String(d).split('\n').filter(Boolean).forEach(_appendBotLog));
+    _botProcess.stderr.on('data', d =>
+      String(d).split('\n').filter(Boolean).forEach(l => _appendBotLog('⚠ ' + l)));
     _botProcess.on('exit', (code, sig) => {
       _appendBotLog(`🛑 Bot encerrado (código ${code}, sinal ${sig})`);
       _botProcess = null;
     });
     _botProcess.on('error', err => {
-      _appendBotLog('❌ Erro: ' + err.message);
+      _appendBotLog('❌ Erro ao iniciar processo: ' + err.message);
       _botProcess = null;
     });
 
-    res.json({ ok: true, message: 'Bot iniciado (modo nativo, sem PM2)', mode: 'native', pid: _botProcess.pid });
+    res.json({ ok: true, message: 'Bot iniciado (modo nativo)', mode: 'native', pid: _botProcess.pid });
   } catch(e) {
     res.status(500).json({ ok: false, error: 'Erro ao iniciar bot: ' + e.message.slice(0,300) });
   }

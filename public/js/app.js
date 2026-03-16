@@ -435,7 +435,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
     if (item.dataset.panel === 'risk') { calcRisk(); }
     if (item.dataset.panel === 'gridbot') { calcGrid(); }
     if (item.dataset.panel === 'journal')     { loadTrades(); loadStats(); }
-    if (item.dataset.panel === 'botcontrol')  { loadBotStatus(); loadBotLogs(); loadBotConfig(); }
+    if (item.dataset.panel === 'botcontrol')  { loadBotStatus(); loadBotLogs(); loadBotConfig(); checkBotKeysWarning(); }
     if (item.dataset.panel === 'analysisai')  { buildAnalysisSymbolSelector(); switchAITab('analyze'); }
     if (item.dataset.panel === 'profile')      { loadProfile(); }
     if (item.dataset.panel === 'admin')        { loadAdminPanel(); switchAdminTab('users'); }
@@ -2092,9 +2092,19 @@ async function botStart() {
     await botSaveAndApply();
     const r = await fetch('/api/bot/start', { method: 'POST' });
     const d = await r.json();
-    showToast(d.ok ? '✅ ' + d.message : '❌ ' + d.error, !d.ok);
-    setTimeout(loadBotStatus, 2000);
-    setTimeout(loadBotLogs,   2500);
+    if (!d.ok) {
+      // Erros de configuração — guia o usuário
+      if (d.error && (d.error.includes('Binance') || d.error.includes('chaves'))) {
+        showToast('⚙️ ' + d.error + ' → Vá em Meu Perfil → Chaves de API', true);
+      } else {
+        showToast('❌ ' + (d.error || 'Erro desconhecido'), true);
+      }
+    } else {
+      showToast('✅ ' + d.message);
+    }
+    setTimeout(loadBotStatus, 1500);
+    setTimeout(loadBotLogs,   2000);
+    setTimeout(loadBotLogs,   5000); // segunda leitura depois de estabilizar
   } catch(e) {
     showToast('❌ Erro: ' + e.message, true);
   } finally {
@@ -5647,4 +5657,34 @@ function downloadTradesCSV() {
   a.href = '/api/trades/export/csv';
   a.download = 'trades_' + new Date().toISOString().slice(0,10) + '.csv';
   a.click();
+}
+
+// ─── Bot Keys Warning ─────────────────────────────────────────────────────────
+async function checkBotKeysWarning() {
+  const warn = document.getElementById('bc-no-keys-warn');
+  if (!warn) return;
+  try {
+    const r = await fetch('/api/auth/me', { headers: auth.headers() });
+    const d = await r.json();
+    const hasKeys = d.ok && d.user?.has_binance_key;
+    warn.style.display = hasKeys ? 'none' : 'block';
+    // Also disable start button if no keys
+    const startBtn = document.getElementById('bc-btn-start');
+    if (startBtn) {
+      startBtn.disabled = !hasKeys;
+      startBtn.style.opacity = hasKeys ? '1' : '0.5';
+      startBtn.title = hasKeys ? '' : 'Configure as chaves Binance em Meu Perfil';
+    }
+  } catch {}
+}
+
+// ─── showPanel helper (used in bot warning link) ──────────────────────────────
+function showPanel(panelName) {
+  document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  const nav = document.querySelector(`[data-panel="${panelName}"]`);
+  const pan = document.getElementById('panel-' + panelName);
+  if (nav) nav.classList.add('active');
+  if (pan) pan.classList.add('active');
+  if (panelName === 'profile') loadProfile();
 }

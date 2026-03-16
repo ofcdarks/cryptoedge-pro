@@ -1218,6 +1218,10 @@
                 <div class="result-row"><span class="rk">Config salva em</span><span class="rv" id="bc-env-path">.bot.env</span></div>
                 <div class="result-row"><span class="rk">Última análise</span><span class="rv" id="bc-last-analysis" style="color:var(--t3)">—</span></div>
               </div>
+              <!-- Aviso se não tem chave Binance -->
+              <div id="bc-no-keys-warn" style="display:none;background:rgba(248,81,73,0.1);border:1px solid rgba(248,81,73,0.3);border-radius:6px;padding:10px 12px;margin-bottom:10px;font-size:12px;color:var(--red)">
+                ⚠️ <strong>Chaves Binance não configuradas.</strong> Vá em <a href="#" onclick="showPanel('profile')" style="color:var(--gold)">Meu Perfil → Chaves de API</a> antes de iniciar o bot.
+              </div>
               <div style="display:flex;gap:8px">
                 <button class="btn btn-green btn-full" id="bc-btn-start" onclick="botStart()">▶ Iniciar Bot</button>
                 <button class="btn btn-red btn-full" id="bc-btn-stop" onclick="botStop()">■ Parar Bot</button>
