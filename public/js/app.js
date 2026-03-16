@@ -241,40 +241,52 @@ function updateLoginSubtitle() {
 }
 
 
-// ─── Global fetch interceptor for session handling ────────────────────────────
+// ─── Global fetch interceptor — injeta token + trata 401 ─────────────────────
 const _origFetch = window.fetch;
 window.fetch = async function(...args) {
+  // Auto-inject x-auth-token em todas as chamadas /api/ (exceto auth pública)
+  const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
+  const skipAuth = ['/api/auth/login','/api/auth/register','/api/auth/setup',
+                    '/api/auth/forgot-password','/api/auth/reset-password','/api/health'];
+  if (url.includes('/api/') && !skipAuth.some(p => url.includes(p))) {
+    // Usar localStorage diretamente (auth object pode não estar definido ainda)
+    const token = (window.auth && window.auth.token) || localStorage.getItem('ce_token') || '';
+    if (token) {
+      args[1] = args[1] ? { ...args[1] } : {};
+      args[1].headers = { 'x-auth-token': token, ...args[1].headers };
+    }
+  }
+
   const r = await _origFetch(...args);
-  if (r.status === 401) {
-    const url = typeof args[0] === 'string' ? args[0] : '';
-    if (url.includes('/api/') && !url.includes('/api/auth/')) {
-      // Session expired — try to silently refresh
-      if (!window._refreshingSession) {
-        window._refreshingSession = true;
-        try {
-          // Re-login with stored credentials
-          const storedUser = localStorage.getItem('ce_user');
-          const storedPass = localStorage.getItem('ce_pass'); // only set if user opts in
-          if (storedUser && storedPass) {
-            const ref = await _origFetch('/api/auth/login', {
-              method: 'POST',
-              headers: {'Content-Type':'application/json'},
-              body: JSON.stringify({username: storedUser, password: storedPass})
-            });
-            const rd = await ref.json();
-            if (rd.ok) {
-              auth.save(rd.token, rd.username);
-              showToast('🔄 Sessão renovada automaticamente');
-              window._refreshingSession = false;
-              // Retry the original request with new token
-              const newArgs = [...args];
-              if (newArgs[1]) newArgs[1].headers = { ...newArgs[1].headers, 'x-auth-token': rd.token };
-              return _origFetch(...newArgs);
-            }
+
+  // Trata 401 — tenta renovar sessão automaticamente
+  if (r.status === 401 && url.includes('/api/') && !url.includes('/api/auth/')) {
+    if (!window._refreshingSession) {
+      window._refreshingSession = true;
+      try {
+        const storedUser = localStorage.getItem('ce_user');
+        const storedPass = localStorage.getItem('ce_pass');
+        if (storedUser && storedPass) {
+          const ref = await _origFetch('/api/auth/login', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({username: storedUser, password: storedPass})
+          });
+          const rd = await ref.json();
+          if (rd.ok) {
+            if (window.auth) auth.save(rd.token, rd.username);
+            else { localStorage.setItem('ce_token', rd.token); localStorage.setItem('ce_user', rd.username); }
+            showToast('🔄 Sessão renovada automaticamente');
+            window._refreshingSession = false;
+            // Retry with new token
+            const newArgs = [...args];
+            newArgs[1] = newArgs[1] ? { ...newArgs[1] } : {};
+            newArgs[1].headers = { ...newArgs[1].headers, 'x-auth-token': rd.token };
+            return _origFetch(...newArgs);
           }
-        } catch(e) {}
-        window._refreshingSession = false;
-      }
+        }
+      } catch(e) {}
+      window._refreshingSession = false;
     }
   }
   return r;
@@ -406,7 +418,7 @@ const PAIRS = [
   { sym:'CROUPDTSDT',name:'Crypto.com',        base:'CRO'    },
 ];
 
-const fmt = (n, d=2) => Number(n).toLocaleString('pt-BR', { minimumFractionDigits: d, maximumFractionDigits: d });
+const fmt = (n, d=2) => { const v = parseFloat(n); return isNaN(v) ? '0,00' : v.toLocaleString('pt-BR', { minimumFractionDigits: d, maximumFractionDigits: d }); };
 const fmtUSD = (n, d=2) => '$' + fmt(n, d);
 const el = id => document.getElementById(id);
 
@@ -1061,8 +1073,10 @@ async function addTrade() {
 
 async function loadTrades() {
   try {
-    const res = await fetch('/api/trades?limit=30');
+    const res    = await fetch('/api/trades?limit=30', { headers: auth.headers() });
+    if (!res.ok) return;
     const trades = await res.json();
+    if (!Array.isArray(trades)) return;
     renderTradeList(trades);
     renderDashTrades(trades.slice(0, 8));
   } catch {}
@@ -1070,18 +1084,38 @@ async function loadTrades() {
 
 async function loadStats() {
   try {
-    const res = await fetch('/api/trades/stats');
+    const res = await fetch('/api/trades/stats', { headers: auth.headers() });
+    if (!res.ok) return;
     const s = await res.json();
-    if (el('st-total')) el('st-total').textContent = s.total;
-    if (el('st-wr')) { el('st-wr').textContent = s.winRate + '%'; el('st-wr').style.color = parseFloat(s.winRate) >= 50 ? 'var(--green)' : 'var(--red)'; }
-    const pnl = parseFloat(s.totalPnl);
-    if (el('st-pnl')) { el('st-pnl').textContent = fmtUSD(pnl); el('st-pnl').className = 'val ' + (pnl >= 0 ? 'green' : 'red'); }
-    if (el('st-wl')) el('st-wl').textContent = s.wins + ' / ' + s.losses;
-    // Update dashboard
-    if (el('d-pnl')) { el('d-pnl').textContent = (pnl >= 0 ? '+' : '') + fmtUSD(Math.abs(pnl)); el('d-pnl').className = 'val ' + (pnl >= 0 ? 'green' : 'red'); }
-    if (el('d-winrate')) el('d-winrate').textContent = s.winRate + '%';
-    if (el('d-trades-sub')) el('d-trades-sub').textContent = s.total + ' trades registrados';
-    if (el('d-wl')) el('d-wl').textContent = s.wins + 'W / ' + s.losses + 'L';
+    if (s.error) return;
+
+    // Safe number parsing — prevents NaN/undefined in UI
+    const total   = parseInt(s.total)   || 0;
+    const wins    = parseInt(s.wins)    || 0;
+    const losses  = parseInt(s.losses)  || 0;
+    const winRate = isNaN(parseFloat(s.winRate))  ? 0 : parseFloat(s.winRate);
+    const pnl     = isNaN(parseFloat(s.totalPnl)) ? 0 : parseFloat(s.totalPnl);
+
+    // Journal stats
+    if (el('st-total')) el('st-total').textContent = total;
+    if (el('st-wr')) {
+      el('st-wr').textContent = winRate.toFixed(1) + '%';
+      el('st-wr').style.color = winRate >= 50 ? 'var(--green)' : 'var(--red)';
+    }
+    if (el('st-pnl')) {
+      el('st-pnl').textContent = fmtUSD(pnl);
+      el('st-pnl').className = 'val ' + (pnl >= 0 ? 'green' : 'red');
+    }
+    if (el('st-wl')) el('st-wl').textContent = wins + ' / ' + losses;
+
+    // Dashboard stats
+    if (el('d-pnl')) {
+      el('d-pnl').textContent = (pnl >= 0 ? '+' : '') + fmtUSD(Math.abs(pnl));
+      el('d-pnl').className = 'val ' + (pnl >= 0 ? 'green' : 'red');
+    }
+    if (el('d-winrate')) el('d-winrate').textContent = total > 0 ? winRate.toFixed(1) + '%' : '—';
+    if (el('d-trades-sub')) el('d-trades-sub').textContent = total + ' trade' + (total !== 1 ? 's' : '') + ' registrado' + (total !== 1 ? 's' : '');
+    if (el('d-wl')) el('d-wl').textContent = wins + 'W / ' + losses + 'L';
   } catch {}
 }
 
@@ -1215,7 +1249,7 @@ function renderDashTrades(trades) {
 async function deleteTrade(id) {
   const ok = await showConfirm('Remover Trade', 'Confirma remover este trade do histórico? Esta ação não pode ser desfeita.');
   if (!ok) return;
-  await fetch('/api/trades/'+id, { method: 'DELETE' });
+  await fetch('/api/trades/'+id, { method: 'DELETE', headers: auth.headers() });
   loadTrades(); loadStats();
 }
 
@@ -2194,6 +2228,9 @@ function renderBacktestResults(d) {
 
   const roiColor  = d.roi >= 0 ? 'var(--green)' : 'var(--red)';
   const pnlColor  = d.total_pnl >= 0 ? 'var(--green)' : 'var(--red)';
+  // Save for equity canvas (features.js)
+  window._lastBacktestData = d;
+  document.dispatchEvent(new CustomEvent('backtestResult', { detail: d }));
   const metrics = document.getElementById('bt-metrics');
   if (metrics) {
     metrics.innerHTML = [
@@ -4418,6 +4455,11 @@ async function loadProfile() {
     };
     setInt('int-binance',  u.has_binance_key,  'Binance');
     setInt('int-telegram', u.has_telegram,     'Telegram');
+    // Show webhook token directly
+    const wt = document.getElementById('profile-webhook-token');
+    if (wt) wt.textContent = u.webhook_token || 'Sem token — faça login novamente';
+    // Fire event for any listeners
+    document.dispatchEvent(new Event('profileLoaded'));
   } catch(e) {}
 }
 
@@ -5569,7 +5611,7 @@ function initApp() {
 function copyWebhookToken() {
   const el = document.getElementById('profile-webhook-token');
   if (!el) return;
-  const text = el.textContent;
+  const text = el.textContent.trim();
   if (!text || text === 'Carregando...') return;
   navigator.clipboard.writeText(text).then(() => showToast('Token copiado!')).catch(() => {
     const inp = document.createElement('textarea');
@@ -5579,34 +5621,17 @@ function copyWebhookToken() {
   });
 }
 
-// Patch loadProfile to show webhook token
-const _origLoadProfile = loadProfile;
-async function loadProfile() {
-  await _origLoadProfile();
+// Show webhook token in profile — uses event instead of redeclaring loadProfile
+document.addEventListener('profileLoaded', async () => {
   try {
     const r = await fetch('/api/auth/me', { headers: auth.headers() });
     const d = await r.json();
     const el = document.getElementById('profile-webhook-token');
-    if (el && d.user?.webhook_token) {
-      el.textContent = d.user.webhook_token;
-    }
+    if (el && d.user && d.user.webhook_token) el.textContent = d.user.webhook_token;
   } catch {}
-}
+});
 
-// Patch runBacktest to fire equity curve event
-if (typeof runBacktest === 'function') {
-  const _origBacktest = runBacktest;
-  window.runBacktest = async function() {
-    const r = await _origBacktest.apply(this, arguments);
-    // fire custom event for features.js to pick up
-    if (window._lastBacktestData) {
-      document.dispatchEvent(new CustomEvent('backtestResult', { detail: window._lastBacktestData }));
-    }
-    return r;
-  };
-}
-
-// ─── Export CSV helper (fallback if anchor fails) ────────────────────────────
+// ─── Export CSV helper ────────────────────────────────────────────────────────
 function downloadTradesCSV() {
   const a = document.createElement('a');
   a.href = '/api/trades/export/csv';

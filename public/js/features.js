@@ -588,8 +588,10 @@ async function regenerateWebhookToken() {
     const r    = await fetch('/api/auth/regenerate-webhook-token', { method:'POST', headers: auth.headers() });
     const data = await r.json();
     if (!data.ok) throw new Error(data.error);
+    // Update token display directly
+    const el = document.getElementById('profile-webhook-token');
+    if (el) el.textContent = data.webhook_token || '';
     showToast('✅ Novo Webhook Token gerado!');
-    loadProfile(); // Reload profile to show new token
   } catch(e) {
     showToast('Erro: ' + e.message, true);
   }
