@@ -35,6 +35,66 @@
       }
       </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+
+  <!-- PWA Install Prompt -->
+  <script>
+    let _pwaPrompt = null;
+    window.addEventListener('beforeinstallprompt', e => {
+      e.preventDefault(); _pwaPrompt = e;
+      const btn = document.getElementById('pwa-install-btn');
+      if (btn) btn.style.display = 'flex';
+    });
+    function installPWA() {
+      if (!_pwaPrompt) { if(typeof showToast==='function') showToast('App já instalado ou use o menu do navegador.'); return; }
+      _pwaPrompt.prompt();
+      _pwaPrompt.userChoice.then(r => {
+        if (r.outcome==='accepted' && typeof showToast==='function') showToast('✅ CryptoEdge Pro instalado!');
+        _pwaPrompt = null;
+        const btn = document.getElementById('pwa-install-btn');
+        if (btn) btn.style.display = 'none';
+      });
+    }
+    // Handle deep links from shortcuts
+    const urlP = new URLSearchParams(location.search);
+    const panel = urlP.get('panel');
+    if (panel) { document.addEventListener('DOMContentLoaded', () => {
+      const nav = document.querySelector('[data-panel="'+panel+'"]');
+      if (nav) setTimeout(() => nav.click(), 300);
+    }); }
+  </script>
+
+  <!-- Capacitor Native App Bridge -->
+  <script>
+    // Detect if running inside Capacitor native app
+    window._isNative = !!(window.Capacitor);
+    if (window._isNative && window.Capacitor?.Plugins?.PushNotifications) {
+      const Push = window.Capacitor.Plugins.PushNotifications;
+      Push.requestPermissions().then(result => {
+        if (result.receive === 'granted') Push.register();
+      });
+      Push.addListener('pushNotificationReceived', notification => {
+        if (typeof showToast === 'function') showToast('🔔 ' + notification.title);
+      });
+      Push.addListener('registration', token => {
+        // Send token to server for targeted push
+        fetch('/api/push/native-token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: token.value, platform: window.Capacitor.getPlatform() })
+        }).catch(() => {});
+      });
+    }
+    // Native status bar color
+    if (window._isNative && window.Capacitor?.Plugins?.StatusBar) {
+      window.Capacitor.Plugins.StatusBar.setBackgroundColor({ color: '#0d1117' }).catch(() => {});
+    }
+    // Haptic feedback on bot start
+    window._haptic = () => {
+      if (window._isNative && window.Capacitor?.Plugins?.Haptics) {
+        window.Capacitor.Plugins.Haptics.impact({ style: 'medium' }).catch(() => {});
+      }
+    };
+  </script>
 </head>
 <body>
 <!-- ── Cookie Consent Banner ── -->
@@ -341,6 +401,10 @@
       <span>Exchanges</span>
     </div>
 
+        <div class="nav-item" data-panel="replay" id="nav-replay">
+      <span class="nav-icon" style="font-size:16px">⏪</span>
+      <span>Replay</span>
+    </div>
         <div class="nav-item" data-panel="live" id="nav-live">
       <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></svg>
       <span>Live Trading</span>
@@ -384,6 +448,11 @@
     <div class="nav-item" data-panel="ai">
       <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
       <span>IA Expert</span>
+    </div>
+    <div class="nav-item" onclick="if(typeof obShowWelcome==='function')obShowWelcome()" style="color:var(--gold);border-color:rgba(240,185,11,.15)">
+      <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>
+      <span>Tutorial</span>
+      <span class="nav-badge" id="ob-progress-badge" style="background:var(--green);display:none">✓</span>
     </div>
     <div class="nav-item" data-panel="profile">
       <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
@@ -2031,7 +2100,12 @@
               <div style="font-size:10px;color:var(--t3)">Multi-par + Walk-Forward + PDF</div>
             </div>
           </div>
-          <div style="font-size:11px;color:var(--t3)">Após o pagamento via PIX/cartão, você receberá um código de ativação por email. Clique no plano desejado para inserir o código.</div>
+          <div style="font-size:11px;color:var(--t3);margin-bottom:10px">Após o pagamento, o plano é ativado automaticamente.</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button onclick="stripeCheckout()" style="flex:1;padding:10px;background:var(--blue);color:#fff;font-weight:700;border:none;border-radius:6px;cursor:pointer;font-size:12px">💳 Pagar com Cartão (Stripe)</button>
+            <button onclick="pixCheckout()" style="flex:1;padding:10px;background:rgba(0,180,80,.15);border:1px solid var(--green);color:var(--green);font-weight:700;border-radius:6px;cursor:pointer;font-size:12px">🟢 Pagar com PIX</button>
+          </div>
+          <button onclick="stripePortal()" style="margin-top:8px;width:100%;padding:8px;background:var(--bg3);border:1px solid var(--border);color:var(--t3);border-radius:6px;cursor:pointer;font-size:11px">⚙️ Gerenciar assinatura Stripe</button>
         </div>
         <!-- Admin quick access bar (shown only for admin) -->
         <div id="prof-admin-bar" style="display:none;background:rgba(240,185,11,0.08);border:1px solid rgba(240,185,11,0.3);border-radius:10px;padding:12px 16px;margin-bottom:12px;display:flex;align-items:center;gap:12px">
@@ -2341,6 +2415,9 @@
             <div class="field" style="margin-bottom:12px"><label>Taxa de cópia (%)</label><input type="number" id="cp-fee" value="0" min="0" max="20" step="0.5"></div>
             <button onclick="becomeLeader()" class="btn-full">🎯 Publicar Perfil de Líder</button>
             <div class="divider"></div>
+            <div class="card-title" style="margin-bottom:10px">💰 Minhas Taxas de Cópia</div>
+            <div id="copy-leader-stats" style="font-size:12px;color:var(--t3);margin-bottom:12px">Carregando...</div>
+            <div class="divider"></div>
             <div class="card-title" style="margin-bottom:10px">📋 Quem estou copiando</div>
             <div id="copy-my-follows" style="font-size:12px;color:var(--t3)">Carregando...</div>
           </div>
@@ -2424,6 +2501,105 @@
           <div style="font-size:12px;color:var(--t3);padding:10px;background:var(--bg3);border-radius:6px">
             Para Bybit e OKX configure as variáveis <code>BYBIT_API_KEY</code>, <code>OKX_API_KEY</code> no EasyPanel → Environment.
           </div>
+        </div>
+      </div>
+
+
+      <!-- ──────────── REPLAY HISTÓRICO ──────────── -->
+      <div id="panel-replay" class="panel">
+        <div class="card" style="margin-bottom:12px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+            <div class="card-title">⏪ Replay Histórico — Tick a Tick</div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <select id="rp-symbol" style="font-size:11px;padding:4px 8px;background:var(--bg2);border:1px solid var(--border);color:var(--t2);border-radius:4px">
+                <option>BTCUSDT</option><option>ETHUSDT</option><option>SOLUSDT</option><option>BNBUSDT</option><option>XRPUSDT</option>
+              </select>
+              <select id="rp-interval" style="font-size:11px;padding:4px 8px;background:var(--bg2);border:1px solid var(--border);color:var(--t2);border-radius:4px">
+                <option value="1m">1m</option><option value="5m">5m</option><option value="15m" selected>15m</option><option value="1h">1h</option>
+              </select>
+              <select id="rp-speed" style="font-size:11px;padding:4px 8px;background:var(--bg2);border:1px solid var(--border);color:var(--t2);border-radius:4px">
+                <option value="1000">1× Normal</option><option value="500" selected>2× Rápido</option><option value="200">5× Rápido</option><option value="100">10× Turbo</option><option value="50">20× Turbo</option>
+              </select>
+              <button id="rp-load-btn" onclick="replayLoad()" style="padding:5px 14px;background:var(--green);color:#000;font-weight:700;border:none;border-radius:4px;cursor:pointer;font-size:12px">Carregar</button>
+            </div>
+          </div>
+
+          <!-- Stats bar -->
+          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:12px">
+            <div style="background:var(--bg2);border-radius:6px;padding:8px;text-align:center">
+              <div id="rp-price" style="font-family:var(--mono);font-size:13px;font-weight:600">—</div>
+              <div style="font-size:10px;color:var(--t3)">Preço atual</div>
+            </div>
+            <div style="background:var(--bg2);border-radius:6px;padding:8px;text-align:center">
+              <div id="rp-candle-n" style="font-family:var(--mono);font-size:14px;font-weight:600">0/0</div>
+              <div style="font-size:10px;color:var(--t3)">Vela</div>
+            </div>
+            <div style="background:var(--bg2);border-radius:6px;padding:8px;text-align:center">
+              <div id="rp-pnl" style="font-family:var(--mono);font-size:14px;font-weight:600;color:var(--green)">$0.00</div>
+              <div style="font-size:10px;color:var(--t3)">PnL papel</div>
+            </div>
+            <div style="background:var(--bg2);border-radius:6px;padding:8px;text-align:center">
+              <div id="rp-trades" style="font-family:var(--mono);font-size:14px;font-weight:600">0</div>
+              <div style="font-size:10px;color:var(--t3)">Trades</div>
+            </div>
+            <div style="background:var(--bg2);border-radius:6px;padding:8px;text-align:center">
+              <div id="rp-wr" style="font-family:var(--mono);font-size:14px;font-weight:600">—</div>
+              <div style="font-size:10px;color:var(--t3)">Win Rate</div>
+            </div>
+          </div>
+
+          <!-- Chart canvas -->
+          <div style="position:relative;background:var(--bg2);border-radius:8px;padding:10px;margin-bottom:12px">
+            <canvas id="rp-canvas" style="width:100%;height:260px;display:block"></canvas>
+            <div id="rp-empty" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--t3);font-size:13px">Selecione um par e clique em Carregar para iniciar o replay</div>
+          </div>
+
+          <!-- Controls -->
+          <div style="display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap;margin-bottom:12px">
+            <button onclick="replayStart()" id="rp-play-btn" style="padding:8px 20px;background:var(--green);color:#000;font-weight:700;border:none;border-radius:6px;cursor:pointer;font-size:13px">▶ Manual</button>
+            <button onclick="replayAutoBot()" id="rp-bot-btn" style="padding:8px 20px;background:rgba(0,120,255,.15);border:1px solid var(--blue);color:var(--blue);font-weight:700;border-radius:6px;cursor:pointer;font-size:13px">🤖 Bot Auto</button>
+            <button onclick="replayPause()" style="padding:8px 16px;background:var(--bg3);border:1px solid var(--border);color:var(--t1);font-weight:600;border-radius:6px;cursor:pointer;font-size:13px">⏸ Pausar</button>
+            <button onclick="replayStep(1)" style="padding:8px 12px;background:var(--bg3);border:1px solid var(--border);color:var(--t2);border-radius:6px;cursor:pointer;font-size:12px">+1</button>
+            <button onclick="replayStep(5)" style="padding:8px 12px;background:var(--bg3);border:1px solid var(--border);color:var(--t2);border-radius:6px;cursor:pointer;font-size:12px">+5</button>
+            <button onclick="replayReset()" style="padding:8px 12px;background:var(--bg3);border:1px solid var(--border);color:var(--red);border-radius:6px;cursor:pointer;font-size:12px">↺</button>
+          </div>
+          <!-- Bot strategy selector (for auto mode) -->
+          <div id="rp-bot-controls" style="display:none;padding:10px;background:rgba(0,120,255,.06);border:1px solid var(--blue);border-radius:6px;margin-bottom:10px">
+            <div style="font-size:11px;color:var(--blue);font-weight:600;margin-bottom:8px">🤖 Configuração do Bot Auto</div>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+              <div class="field"><label style="font-size:10px">Estratégia</label>
+                <select id="rp-strategy" style="font-size:11px;padding:4px;background:var(--bg2);border:1px solid var(--border);color:var(--t2);border-radius:4px">
+                  <option value="trend">Trend (EMA)</option>
+                  <option value="macd">MACD</option>
+                  <option value="breakout">Breakout</option>
+                </select>
+              </div>
+              <div class="field"><label style="font-size:10px">R:R Ratio</label>
+                <input type="number" id="rp-rr" value="2.0" step="0.5" min="1" style="font-size:11px;padding:4px;background:var(--bg2);border:1px solid var(--border);color:var(--t2);border-radius:4px;width:100%">
+              </div>
+              <div class="field"><label style="font-size:10px">Velocidade (ms/vela)</label>
+                <select id="rp-bot-speed" style="font-size:11px;padding:4px;background:var(--bg2);border:1px solid var(--border);color:var(--t2);border-radius:4px">
+                  <option value="300">Rápido</option>
+                  <option value="100" selected>Ultra</option>
+                  <option value="50">Turbo</option>
+                </select>
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:8px">
+              <button onclick="replayStartBot()" style="flex:1;padding:8px;background:var(--blue);color:#fff;font-weight:700;border:none;border-radius:4px;cursor:pointer;font-size:12px">▶ Iniciar Bot no Replay</button>
+              <button onclick="replayStopBot()" style="padding:8px 14px;background:var(--bg3);border:1px solid var(--border);color:var(--red);border-radius:4px;cursor:pointer;font-size:12px">■ Parar</button>
+            </div>
+          </div>
+
+          <!-- Manual trading buttons -->
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+            <button onclick="replayTrade('BUY')" style="padding:12px;background:rgba(0,220,130,.15);border:1px solid var(--green);color:var(--green);font-weight:700;border-radius:6px;cursor:pointer;font-size:13px">🟢 LONG</button>
+            <button onclick="replayClosePos()" style="padding:12px;background:var(--bg3);border:1px solid var(--border);color:var(--t1);font-weight:600;border-radius:6px;cursor:pointer;font-size:13px">⬛ Fechar</button>
+            <button onclick="replayTrade('SELL')" style="padding:12px;background:rgba(220,60,80,.15);border:1px solid var(--red);color:var(--red);font-weight:700;border-radius:6px;cursor:pointer;font-size:13px">🔴 SHORT</button>
+          </div>
+          <div id="rp-position-info" style="margin-top:10px;padding:10px;border-radius:6px;background:var(--bg2);font-size:12px;display:none"></div>
+          <!-- IA Narração -->
+          <div id="rp-ia-narration" style="display:none;margin-top:10px;padding:12px;border-radius:8px;background:var(--bg2);border:1px solid var(--border2)"></div>
         </div>
       </div>
 
@@ -2541,5 +2717,6 @@
 </script>
 <script src="/js/app.js"></script>
 <script src="/js/features.js"></script>
+<script src="/js/onboarding.js"></script>
 </body>
 </html>

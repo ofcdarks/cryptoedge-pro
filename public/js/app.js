@@ -1062,7 +1062,7 @@ async function addTrade() {
   const entry = parseFloat(el('j-entry').value);
   const exit  = parseFloat(el('j-exit').value);
   const size  = parseFloat(el('j-size').value);
-  if (!entry || !exit || !size) { alert('Preencha entrada, saída e tamanho.'); return; }
+  if (!entry || !exit || !size) { showAlert('Campo obrigatório', 'Preencha entrada, saída e tamanho antes de continuar.'); return; return; }
 
   const dir    = el('j-dir').value;
   const pnlRaw = dir === 'Long' ? (exit - entry) / entry * size : (entry - exit) / entry * size;
@@ -1865,73 +1865,195 @@ ${extra}
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CUSTOM MODAL — replaces window.confirm()
+// ─── SISTEMA DE MODAIS PREMIUM ──────────────────────────────────────────────────
+// Substitui prompt(), alert(), confirm() por modais com o tema da plataforma
 // ─────────────────────────────────────────────────────────────────────────────
-function showConfirm(title, message, confirmLabel = 'Confirmar', cancelLabel = 'Cancelar', danger = false) {
+
+// Inject modal CSS once
+(function() {
+  if (document.getElementById('ce-modal-css')) return;
+  const style = document.createElement('style');
+  style.id = 'ce-modal-css';
+  style.textContent = `
+    @keyframes ceModalIn {
+      from { opacity:0; transform:translateY(-12px) scale(0.97); }
+      to   { opacity:1; transform:translateY(0) scale(1); }
+    }
+    @keyframes ceOverlayIn {
+      from { opacity:0; }
+      to   { opacity:1; }
+    }
+    @keyframes ceModalOut {
+      from { opacity:1; transform:translateY(0) scale(1); }
+      to   { opacity:0; transform:translateY(8px) scale(0.98); }
+    }
+    .ce-modal-overlay {
+      position:fixed;inset:0;z-index:99999;
+      background:rgba(0,0,0,0.72);
+      backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+      display:flex;align-items:center;justify-content:center;padding:20px;
+      animation:ceOverlayIn 0.18s ease;
+    }
+    .ce-modal-box {
+      background:var(--bg1);
+      border:1px solid var(--border2);
+      border-radius:16px;
+      padding:0;
+      min-width:360px;max-width:480px;width:100%;
+      box-shadow:0 24px 72px rgba(0,0,0,0.7),0 0 0 1px rgba(255,255,255,0.04);
+      animation:ceModalIn 0.22s cubic-bezier(0.34,1.56,0.64,1);
+      overflow:hidden;
+      display:flex;flex-direction:column;
+    }
+    .ce-modal-header {
+      padding:20px 24px 0;
+      display:flex;align-items:flex-start;gap:14px;
+    }
+    .ce-modal-icon {
+      width:40px;height:40px;border-radius:10px;flex-shrink:0;
+      display:flex;align-items:center;justify-content:center;font-size:18px;
+    }
+    .ce-modal-titles { flex:1;min-width:0; }
+    .ce-modal-title {
+      font-size:15px;font-weight:600;color:var(--t1);
+      font-family:var(--sans);line-height:1.3;margin-bottom:4px;
+    }
+    .ce-modal-subtitle {
+      font-size:13px;color:var(--t2);line-height:1.6;
+      font-family:var(--sans);white-space:pre-line;
+    }
+    .ce-modal-body { padding:0 24px; }
+    .ce-modal-input {
+      width:100%;padding:11px 14px;
+      background:var(--bg2);border:1px solid var(--border2);
+      border-radius:8px;color:var(--t1);font-size:14px;
+      font-family:var(--sans);outline:none;
+      transition:border-color 0.15s;margin-top:14px;
+    }
+    .ce-modal-input:focus { border-color:var(--gold); }
+    .ce-modal-input::placeholder { color:var(--t3); }
+    .ce-modal-footer {
+      padding:16px 24px 20px;
+      display:flex;gap:10px;justify-content:flex-end;
+      margin-top:4px;
+    }
+    .ce-modal-btn {
+      padding:10px 22px;border-radius:8px;font-size:14px;font-weight:600;
+      font-family:var(--sans);cursor:pointer;border:none;
+      transition:opacity 0.15s,transform 0.1s;outline:none;
+    }
+    .ce-modal-btn:hover { opacity:0.9; }
+    .ce-modal-btn:active { transform:scale(0.97); }
+    .ce-modal-btn-cancel {
+      background:var(--bg3);border:1px solid var(--border2);color:var(--t2);
+    }
+    .ce-modal-btn-confirm-green  { background:var(--green);color:#000; }
+    .ce-modal-btn-confirm-gold   { background:var(--gold);color:#000; }
+    .ce-modal-btn-confirm-red    { background:var(--red);color:#fff; }
+    .ce-modal-btn-confirm-blue   { background:var(--blue);color:#000; }
+    .ce-modal-divider { height:1px;background:var(--border);margin:0 24px; }
+  `;
+  document.head.appendChild(style);
+})();
+
+function _ceModal({ title, message, type = 'confirm', confirmLabel, cancelLabel,
+                     inputDefault = '', inputPlaceholder = '', icon,
+                     color = 'gold', danger = false }) {
+  // Auto-init CSS
+  if (!document.getElementById('ce-modal-css')) {
+    /* already injected above */
+  }
+
   return new Promise(resolve => {
-    // Remove existing
     const existing = document.getElementById('ce-modal');
-    if (existing) existing.remove();
+    if (existing) { existing.remove(); }
+
+    const isDanger = danger || color === 'red';
+    const btnClass = isDanger ? 'ce-modal-btn-confirm-red'
+                   : color === 'green' ? 'ce-modal-btn-confirm-green'
+                   : color === 'blue'  ? 'ce-modal-btn-confirm-blue'
+                   : 'ce-modal-btn-confirm-gold';
+
+    const iconBg    = isDanger ? 'rgba(248,81,73,0.15)'  : color === 'green' ? 'rgba(63,185,80,0.15)' : color === 'blue' ? 'rgba(88,166,255,0.15)' : 'rgba(240,185,11,0.15)';
+    const iconBorder= isDanger ? 'var(--red)'  : color === 'green' ? 'var(--green)' : color === 'blue' ? 'var(--blue)' : 'var(--gold)';
+    const autoIcon  = icon || (isDanger ? '⚠️' : type === 'prompt' ? '✏️' : type === 'info' ? 'ℹ️' : '?');
+    const confirmLbl= confirmLabel || (type === 'prompt' ? 'Confirmar' : isDanger ? 'Excluir' : 'Confirmar');
+    const cancelLbl = cancelLabel  !== undefined ? cancelLabel : (type === 'info' ? '' : 'Cancelar');
 
     const overlay = document.createElement('div');
     overlay.id = 'ce-modal';
-    overlay.style.cssText = `
-      position:fixed;inset:0;z-index:99999;
-      background:rgba(0,0,0,0.65);backdrop-filter:blur(4px);
-      display:flex;align-items:center;justify-content:center;
-      animation:fadeIn 0.15s ease;
-    `;
+    overlay.className = 'ce-modal-overlay';
 
     overlay.innerHTML = `
-      <div style="
-        background:var(--bg1);border:1px solid var(--border2);border-radius:14px;
-        padding:2rem;min-width:340px;max-width:440px;width:90%;
-        box-shadow:0 20px 60px rgba(0,0,0,0.6);
-        animation:fadeIn 0.15s ease;
-      ">
-        <div style="display:flex;align-items:center;gap:12px;margin-bottom:1rem">
-          <div style="
-            width:36px;height:36px;border-radius:50%;flex-shrink:0;
-            background:${danger ? 'var(--reddim)' : 'var(--golddim)'};
-            border:1px solid ${danger ? 'var(--red)' : 'var(--gold)'};
-            display:flex;align-items:center;justify-content:center;font-size:16px;
-          ">${danger ? '⚠' : '?'}</div>
-          <div>
-            <div style="font-size:16px;font-weight:600;color:var(--t1)">${title}</div>
-            <div style="font-size:13px;color:var(--t2);margin-top:3px;line-height:1.5">${message}</div>
+      <div class="ce-modal-box" role="dialog" aria-modal="true">
+        <div class="ce-modal-header">
+          <div class="ce-modal-icon" style="background:${iconBg};border:1px solid ${iconBorder};border-radius:10px">
+            ${autoIcon}
+          </div>
+          <div class="ce-modal-titles">
+            <div class="ce-modal-title">${title}</div>
+            <div class="ce-modal-subtitle">${message}</div>
           </div>
         </div>
-        <div style="display:flex;gap:8px;justify-content:flex-end">
-          <button id="modal-cancel" style="
-            padding:9px 18px;border:1px solid var(--border);border-radius:8px;
-            background:transparent;color:var(--t2);font-family:var(--sans);font-size:14px;
-            cursor:pointer;transition:all 0.15s;font-weight:500;
-          ">${cancelLabel}</button>
-          <button id="modal-confirm" style="
-            padding:9px 18px;border:none;border-radius:8px;
-            background:${danger ? 'var(--red)' : 'var(--gold)'};
-            color:${danger ? '#fff' : '#000'};font-family:var(--sans);font-size:14px;
-            cursor:pointer;font-weight:600;transition:opacity 0.15s;
-          ">${confirmLabel}</button>
+        ${type === 'prompt' ? `
+          <div class="ce-modal-body">
+            <input class="ce-modal-input" id="ce-modal-input" type="text"
+              placeholder="${inputPlaceholder}" value="${inputDefault}" autocomplete="off" autofocus>
+          </div>` : ''}
+        <div class="ce-modal-divider" style="margin-top:${type==='prompt'?'16px':'14px'}"></div>
+        <div class="ce-modal-footer">
+          ${cancelLbl ? `<button class="ce-modal-btn ce-modal-btn-cancel" id="ce-modal-cancel">${cancelLbl}</button>` : ''}
+          <button class="ce-modal-btn ${btnClass}" id="ce-modal-confirm">${confirmLbl}</button>
         </div>
       </div>
     `;
 
     document.body.appendChild(overlay);
 
-    const close = (val) => { overlay.remove(); resolve(val); };
-    overlay.querySelector('#modal-confirm').onclick = () => close(true);
-    overlay.querySelector('#modal-cancel').onclick  = () => close(false);
-    overlay.onclick = (e) => { if (e.target === overlay) close(false); };
+    const inputEl = overlay.querySelector('#ce-modal-input');
+    if (inputEl) { setTimeout(() => inputEl.focus(), 60); }
+
+    const close = (val) => {
+      overlay.querySelector('.ce-modal-box').style.animation = 'ceModalOut 0.15s ease forwards';
+      setTimeout(() => { overlay.remove(); resolve(val); }, 140);
+    };
+
+    overlay.querySelector('#ce-modal-confirm').onclick = () => {
+      const result = type === 'prompt' ? (inputEl?.value ?? '') : true;
+      close(result);
+    };
+    const cancelBtn = overlay.querySelector('#ce-modal-cancel');
+    if (cancelBtn) cancelBtn.onclick = () => close(type === 'prompt' ? null : false);
+
+    overlay.onclick = (e) => { if (e.target === overlay) close(type === 'prompt' ? null : false); };
+
     document.addEventListener('keydown', function esc(e) {
-      if (e.key === 'Escape') { close(false); document.removeEventListener('keydown', esc); }
+      if (e.key === 'Escape') { close(type === 'prompt' ? null : false); document.removeEventListener('keydown', esc); }
+      if (e.key === 'Enter' && type === 'prompt') { close(inputEl?.value ?? ''); document.removeEventListener('keydown', esc); }
     });
   });
 }
 
-// Also a simple info/alert modal
-function showAlert(title, message) {
-  return showConfirm(title, message, 'OK', '', false).then(() => {});
+// ── Public API ─────────────────────────────────────────────────────────────────
+function showConfirm(title, message, confirmLabel = 'Confirmar', cancelLabel = 'Cancelar', danger = false) {
+  return _ceModal({ title, message, type:'confirm', confirmLabel, cancelLabel, danger });
+}
+
+function showAlert(title, message, opts = {}) {
+  return _ceModal({ title, message, type:'info', confirmLabel:'OK', cancelLabel:'', ...opts });
+}
+
+function showPrompt(title, message, defaultVal = '', placeholder = '', opts = {}) {
+  return _ceModal({ title, message, type:'prompt', inputDefault:defaultVal, inputPlaceholder:placeholder, ...opts });
+}
+
+// Specialised shortcuts
+function showDanger(title, message, confirmLabel = 'Excluir') {
+  return _ceModal({ title, message, type:'confirm', confirmLabel, danger:true });
+}
+
+function showSuccess(title, message) {
+  return _ceModal({ title, message, type:'info', confirmLabel:'OK', cancelLabel:'', color:'green', icon:'✅' });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2153,8 +2275,8 @@ async function loadSubscription() {
 }
 
 async function upgradePlan(plan) {
-  const code = prompt(`Insira o código de ativação para o plano ${plan.toUpperCase()}:
-(Recebido após o pagamento)`);
+  const code = await showPrompt('Código de Ativação', `Insira o código recebido após o pagamento do plano ${plan.toUpperCase()}.`, '', 'Cole o código aqui...', { icon:'🔑', color:'gold' });
+
   if (!code) return;
   try {
     const r = await fetch('/api/billing/upgrade', {
@@ -2264,7 +2386,7 @@ function updateBotModeWarning(val) {
 }
 
 async function resetPaperAccount() {
-  const v = prompt('Capital inicial para paper trading ($):', '1000');
+  const v = await showPrompt('Paper Trading', 'Defina o capital inicial para simular operações.', '1000', 'Ex: 1000', { icon:'📋', color:'blue' });
   if (!v) return;
   const r = await fetch('/api/paper/reset', {
     method: 'POST', headers: { ...auth.headers(), 'Content-Type': 'application/json' },
@@ -2315,7 +2437,7 @@ async function loadCopyLeaders() {
 }
 
 async function followLeader(leader) {
-  const capital = prompt(`Capital para copiar @${leader} (USDT):`, '100');
+  const capital = await showPrompt(`Copiar @${leader}`, 'Quanto capital deseja alocar para copiar este trader?', '100', 'Ex: 100 USDT', { icon:'👥', color:'green' });
   if (!capital) return;
   const r = await fetch('/api/copy/follow', {
     method:'POST', headers:{...auth.headers(),'Content-Type':'application/json'},
@@ -2470,11 +2592,501 @@ async function checkBalance(exchange) {
 
 // ─── Panel load hooks ──────────────────────────────────────────────────────────
 const _panelLoadHooks = {
-  copy:      () => { loadCopyLeaders(); loadCopyMyFollows(); },
+  copy:      () => { loadCopyLeaders(); loadCopyMyFollows(); loadCopyLeaderStats(); },
   tvwebhook: () => loadTVWebhooks(),
   fiscal:    () => loadFiscal(),
   exchanges: () => {},
 };
+
+
+// ─── STRIPE & PIX CHECKOUT ────────────────────────────────────────────────────
+async function stripeCheckout(plan) {
+  plan = plan || document.querySelector('.pc.pf')?.dataset?.plan || 'pro';
+  const r = await fetch('/api/billing/stripe/checkout', {
+    method:'POST', headers:{...auth.headers(),'Content-Type':'application/json'},
+    body: JSON.stringify({ plan })
+  });
+  const d = await r.json();
+  if (d.ok && d.url) { window.open(d.url, '_blank'); }
+  else if (d.error?.includes('STRIPE_SECRET_KEY')) {
+    await showAlert('Stripe não configurado', 'O pagamento via Stripe ainda não está ativo.\n\nUse o código de ativação manual por enquanto.', { icon:'⚙️' });
+    upgradePlan(plan);
+  } else showToast('❌ ' + (d.error||'Erro'), true);
+}
+
+async function pixCheckout(plan) {
+  plan = plan || 'pro';
+  const r = await fetch('/api/billing/pix/create', {
+    method:'POST', headers:{...auth.headers(),'Content-Type':'application/json'},
+    body: JSON.stringify({ plan })
+  });
+  const d = await r.json();
+  if (!d.ok) { showToast('❌ ' + d.error, true); return; }
+  if (d.method === 'pix') {
+    showToast(`🟢 PIX: ${d.pix_name} · ${d.pix_key}`);
+    await showAlert('Pagamento PIX 🟢', `Chave PIX: ${d.pix_key}\nNome: ${d.pix_name}\nValor: R$ ${d.price}\n\n${d.instructions}`, { icon:'🟢', color:'green' });
+  } else {
+    await showAlert('Ativação do Plano', d.instructions || 'Entre em contato com o suporte para ativar o plano.', { icon:'ℹ️' });
+  }
+}
+
+async function stripePortal() {
+  const r = await fetch('/api/billing/stripe/portal', { method:'POST', headers:auth.headers() });
+  const d = await r.json();
+  if (d.ok && d.url) window.open(d.url,'_blank');
+  else showToast('❌ ' + (d.error||'Sem assinatura Stripe ativa'), true);
+}
+
+// ─── COPY TRADING: EXECUTAR ORDEM REAL ────────────────────────────────────────
+async function executeCopyTrade(tradeId, leaderName) {
+  const ok = await showConfirm('Copiar Trade Real',
+    `Executar ordem real na sua conta Binance copiando @${leaderName}?
+
+Isso usará seu saldo real. Certifique-se de ter saldo suficiente.`);
+  if (!ok) return;
+  try {
+    const r = await fetch('/api/copy/execute', {
+      method:'POST', headers:{...auth.headers(),'Content-Type':'application/json'},
+      body: JSON.stringify({ leader_trade_id:tradeId, confirm:true })
+    });
+    const d = await r.json();
+    if (d.ok) showToast(`✅ Ordem executada! ${d.side} ${d.qty} ${d.symbol} @ $${parseFloat(d.price).toFixed(2)}`);
+    else showToast('❌ ' + d.error, true);
+  } catch(e) { showToast('❌ ' + e.message, true); }
+}
+
+// ─── REPLAY HISTÓRICO TICK-A-TICK ─────────────────────────────────────────────
+const _rp = {
+  klines: [], idx: 0, playing: false, timer: null,
+  position: null, pnl: 0, wins: 0, losses: 0,
+  chart: null, ctx: null,
+};
+
+async function replayLoad() {
+  const symbol   = document.getElementById('rp-symbol')?.value   || 'BTCUSDT';
+  const interval = document.getElementById('rp-interval')?.value || '15m';
+  const btn = document.getElementById('rp-load-btn');
+  if (btn) { btn.textContent = '⏳...'; btn.disabled = true; }
+  try {
+    const r = await fetch(`/api/replay/klines?symbol=${symbol}&interval=${interval}&limit=200`, { headers:auth.headers() });
+    const d = await r.json();
+    if (!d.ok || !d.klines?.length) { showToast('❌ Erro ao carregar dados', true); return; }
+    _rp.klines = d.klines; _rp.idx = 5; _rp.playing = false;
+    _rp.position = null; _rp.pnl = 0; _rp.wins = 0; _rp.losses = 0;
+    clearInterval(_rp.timer);
+    const empty = document.getElementById('rp-empty');
+    if (empty) empty.style.display = 'none';
+    _replayDraw();
+    _replayUpdateStats();
+    showToast(`✅ ${d.klines.length} velas carregadas — ${symbol} ${interval}`);
+  } catch(e) { showToast('❌ ' + e.message, true); }
+  finally { if (btn) { btn.textContent = 'Carregar'; btn.disabled = false; } }
+}
+
+function replayStart() {
+  if (_rp.klines.length === 0) { showToast('⚠ Carregue os dados primeiro', true); return; }
+  if (_rp.playing) return;
+  _rp.playing = true;
+  const speed = parseInt(document.getElementById('rp-speed')?.value || '500');
+  const btn = document.getElementById('rp-play-btn');
+  if (btn) btn.style.background = 'var(--gold)';
+  _rp.timer = setInterval(() => {
+    if (_rp.idx >= _rp.klines.length - 1) { replayPause(); return; }
+    _rp.idx++;
+    _checkSLTP();
+    _replayDraw();
+    _replayUpdateStats();
+  }, speed);
+}
+
+function replayPause() {
+  _rp.playing = false;
+  clearInterval(_rp.timer);
+  const btn = document.getElementById('rp-play-btn');
+  if (btn) btn.style.background = 'var(--green)';
+}
+
+function replayStep(n) {
+  replayPause();
+  for (let i=0;i<n;i++) {
+    if (_rp.idx < _rp.klines.length - 1) {
+      _rp.idx++;
+      _checkSLTP();
+    }
+  }
+  _replayDraw();
+  _replayUpdateStats();
+}
+
+function replayReset() {
+  replayPause();
+  _rp.idx = 5; _rp.position = null; _rp.pnl = 0; _rp.wins = 0; _rp.losses = 0;
+  _replayDraw(); _replayUpdateStats();
+}
+
+function replayTrade(side) {
+  if (!_rp.klines.length) return showToast('⚠ Carregue dados primeiro', true);
+  if (_rp.position) return showToast('⚠ Feche a posição atual antes de abrir outra', true);
+  const k = _rp.klines[_rp.idx];
+  const atr = _calcATR() || k.c * 0.015;
+  _rp.position = { side, entry: k.c, sl: side==='BUY' ? k.c - atr*1.5 : k.c + atr*1.5,
+    tp: side==='BUY' ? k.c + atr*3 : k.c - atr*3, qty: 100/k.c };
+  const posInfo = document.getElementById('rp-position-info');
+  if (posInfo) {
+    posInfo.style.display = 'block';
+    posInfo.innerHTML = `<b style="color:${side==='BUY'?'var(--green)':'var(--red)'}">${side==='BUY'?'🟢 LONG':'🔴 SHORT'}</b> · Entrada: <code>$${k.c.toFixed(2)}</code> · SL: <code>$${_rp.position.sl.toFixed(2)}</code> · TP: <code>$${_rp.position.tp.toFixed(2)}</code>`;
+  }
+  _replayDraw();
+}
+
+function replayClosePos() {
+  if (!_rp.position) return;
+  const k = _rp.klines[_rp.idx];
+  const pnl = _rp.position.side==='BUY' ? (k.c - _rp.position.entry)*_rp.position.qty*_rp.position.entry
+                                         : (_rp.position.entry - k.c)*_rp.position.qty*_rp.position.entry;
+  _rp.pnl += pnl;
+  if (pnl >= 0) _rp.wins++; else _rp.losses++;
+  _rp.position = null;
+  const posInfo = document.getElementById('rp-position-info');
+  if (posInfo) posInfo.style.display = 'none';
+  _replayDraw(); _replayUpdateStats();
+  showToast(`${pnl>=0?'✅ WIN':' ❌ LOSS'}: ${pnl>=0?'+':''}$${pnl.toFixed(2)}`);
+}
+
+function _checkSLTP() {
+  if (!_rp.position) return;
+  const k = _rp.klines[_rp.idx];
+  const pos = _rp.position;
+  let closed = false, reason = '';
+  if (pos.side==='BUY') {
+    if (k.l <= pos.sl) { closed=true; reason='SL'; }
+    else if (k.h >= pos.tp) { closed=true; reason='TP'; }
+  } else {
+    if (k.h >= pos.sl) { closed=true; reason='SL'; }
+    else if (k.l <= pos.tp) { closed=true; reason='TP'; }
+  }
+  if (closed) {
+    const exitP = reason==='SL' ? pos.sl : pos.tp;
+    const pnl = pos.side==='BUY' ? (exitP-pos.entry)*pos.qty*pos.entry : (pos.entry-exitP)*pos.qty*pos.entry;
+    _rp.pnl += pnl; if(pnl>=0)_rp.wins++;else _rp.losses++;
+    _rp.position = null;
+    const posInfo = document.getElementById('rp-position-info');
+    if (posInfo) posInfo.style.display = 'none';
+  }
+}
+
+function _calcATR() {
+  const n = Math.min(14, _rp.idx);
+  if (n < 2) return 0;
+  const klines = _rp.klines.slice(Math.max(0,_rp.idx-n), _rp.idx+1);
+  const trs = klines.slice(1).map((k,i) => Math.max(k.h-k.l, Math.abs(k.h-klines[i].c), Math.abs(k.l-klines[i].c)));
+  return trs.reduce((a,b)=>a+b,0)/trs.length;
+}
+
+function _replayUpdateStats() {
+  const k = _rp.klines[_rp.idx];
+  if (!k) return;
+  const setEl = (id,v) => { const e=document.getElementById(id); if(e) e.textContent=v; };
+  setEl('rp-price', '$'+k.c.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}));
+  setEl('rp-candle-n', `${_rp.idx+1}/${_rp.klines.length}`);
+  const pnlEl = document.getElementById('rp-pnl');
+  if (pnlEl) { pnlEl.textContent=((_rp.pnl>=0)?'+':'')+'$'+_rp.pnl.toFixed(2); pnlEl.style.color=_rp.pnl>=0?'var(--green)':'var(--red)'; }
+  setEl('rp-trades', _rp.wins+_rp.losses);
+  const total = _rp.wins+_rp.losses;
+  setEl('rp-wr', total>0 ? Math.round(_rp.wins/total*100)+'%' : '—');
+}
+
+function _replayDraw() {
+  const canvas = document.getElementById('rp-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio||1;
+  canvas.width = canvas.offsetWidth * dpr;
+  canvas.height = 260 * dpr;
+  ctx.scale(dpr, dpr);
+  const W = canvas.offsetWidth, H = 260;
+  const PAD = {l:55,r:15,t:15,b:30};
+  ctx.clearRect(0,0,W,H);
+  const visible = _rp.klines.slice(0, _rp.idx+1).slice(-80);
+  if (!visible.length) return;
+  const highs = visible.map(k=>k.h), lows = visible.map(k=>k.l);
+  const maxP = Math.max(...highs), minP = Math.min(...lows);
+  const range = maxP - minP || 1;
+  const iW = W - PAD.l - PAD.r, iH = H - PAD.t - PAD.b;
+  const scaleY = p => PAD.t + (1-(p-minP)/range)*iH;
+  const barW = Math.max(3, (iW / visible.length) - 1);
+  // Price axis
+  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--t3')||'#888';
+  ctx.font = '10px monospace'; ctx.textAlign = 'right';
+  for (let i=0;i<5;i++) {
+    const p = minP + (range * i/4);
+    const y = scaleY(p);
+    ctx.fillText('$'+p.toFixed(0), PAD.l-4, y+3);
+    ctx.beginPath(); ctx.strokeStyle='rgba(128,128,128,.1)'; ctx.lineWidth=0.5;
+    ctx.moveTo(PAD.l,y); ctx.lineTo(W-PAD.r,y); ctx.stroke();
+  }
+  // Candles
+  visible.forEach((k,i) => {
+    const x = PAD.l + i*(iW/visible.length) + barW/2;
+    const isUp = k.c >= k.o;
+    const color = isUp ? '#1d9e75' : '#e24b4a';
+    // Wick
+    ctx.beginPath(); ctx.strokeStyle=color; ctx.lineWidth=1;
+    ctx.moveTo(x, scaleY(k.h)); ctx.lineTo(x, scaleY(k.l)); ctx.stroke();
+    // Body
+    const bodyTop = scaleY(Math.max(k.o,k.c)), bodyBot = scaleY(Math.min(k.o,k.c));
+    const bodyH = Math.max(1, bodyBot-bodyTop);
+    ctx.fillStyle=color;
+    ctx.fillRect(x-barW/2, bodyTop, barW, bodyH);
+  });
+  // Current price line
+  const curK = visible[visible.length-1];
+  const curY = scaleY(curK.c);
+  ctx.beginPath(); ctx.strokeStyle='#00dc82'; ctx.lineWidth=1; ctx.setLineDash([4,3]);
+  ctx.moveTo(PAD.l,curY); ctx.lineTo(W-PAD.r,curY); ctx.stroke(); ctx.setLineDash([]);
+  // Position lines
+  if (_rp.position) {
+    const pos = _rp.position;
+    const drawLine = (price, color) => {
+      const y = scaleY(price);
+      ctx.beginPath(); ctx.strokeStyle=color; ctx.lineWidth=1.5; ctx.setLineDash([6,3]);
+      ctx.moveTo(PAD.l,y); ctx.lineTo(W-PAD.r,y); ctx.stroke(); ctx.setLineDash([]);
+    };
+    drawLine(pos.entry, pos.side==='BUY'?'#1d9e75':'#e24b4a');
+    drawLine(pos.sl, '#e24b4a');
+    drawLine(pos.tp, '#1d9e75');
+  }
+  // Time axis (last 5 labels)
+  ctx.fillStyle='#888'; ctx.textAlign='center'; ctx.font='9px monospace';
+  [0,0.25,0.5,0.75,1].forEach(pct => {
+    const ki = visible[Math.round(pct*(visible.length-1))];
+    if (!ki) return;
+    const x = PAD.l + Math.round(pct*(visible.length-1)) * (iW/visible.length) + barW/2;
+    const d = new Date(ki.t); const label = (d.getMonth()+1)+'/'+d.getDate()+' '+d.getHours()+':'+String(d.getMinutes()).padStart(2,'0');
+    ctx.fillText(label, x, H-PAD.b+14);
+  });
+}
+
+// Hook replay panel load
+if (typeof _panelLoadHooks !== 'undefined') {
+  _panelLoadHooks.replay = () => {};
+}
+
+
+// ─── REPLAY BOT AUTO (SSE) ────────────────────────────────────────────────────
+let _rpBotEvt = null;  // EventSource for auto bot replay
+
+function replayAutoBot() {
+  const ctrl = document.getElementById('rp-bot-controls');
+  if (ctrl) ctrl.style.display = ctrl.style.display === 'none' ? 'block' : 'none';
+}
+
+function replayStartBot() {
+  if (_rpBotEvt) { _rpBotEvt.close(); _rpBotEvt = null; }
+
+  const symbol   = document.getElementById('rp-symbol')?.value    || 'BTCUSDT';
+  const interval = document.getElementById('rp-interval')?.value  || '15m';
+  const strategy = document.getElementById('rp-strategy')?.value  || 'trend';
+  const rr       = document.getElementById('rp-rr')?.value        || '2.0';
+  const speed    = document.getElementById('rp-bot-speed')?.value || '100';
+
+  // Reset state
+  _rp.klines = []; _rp.idx = 0; _rp.pnl = 0; _rp.wins = 0; _rp.losses = 0; _rp.position = null;
+  const botBtn = document.getElementById('rp-bot-btn');
+  if (botBtn) botBtn.style.background = 'rgba(0,120,255,.3)';
+
+  const url = `/api/replay/auto?symbol=${symbol}&interval=${interval}&strategy=${strategy}&rr=${rr}&speed=${speed}&limit=200`;
+  _rpBotEvt = new EventSource(url);
+  let localKlines = [];
+
+  _rpBotEvt.addEventListener('start', e => {
+    const d = JSON.parse(e.data);
+    showToast(`🤖 Bot Auto: ${d.strategy.toUpperCase()} em ${d.symbol} · ${d.total} velas`);
+    const empty = document.getElementById('rp-empty');
+    if (empty) empty.style.display = 'none';
+  });
+
+  _rpBotEvt.addEventListener('candle', e => {
+    const d = JSON.parse(e.data);
+    // Build klines array for drawing
+    const k = d.k;
+    localKlines.push({ t: Date.now() - (200 - d.i) * 60000, o:k.o, h:k.h, l:k.l, c:k.c, v:k.v });
+    if (localKlines.length > 80) localKlines.shift();
+    _rp.klines = localKlines; _rp.idx = localKlines.length - 1;
+    _rp.position = d.position;
+    _rp.pnl = d.pnl; _rp.wins = d.wins; _rp.losses = d.losses;
+    _replayDraw();
+    _replayUpdateStats();
+    // Update price
+    const rsiEl = document.getElementById('rp-rsi');
+    if (rsiEl) rsiEl.textContent = 'RSI: ' + d.rsi;
+  });
+
+  _rpBotEvt.addEventListener('open', e => {
+    const d = JSON.parse(e.data);
+    const icon = d.side === 'BUY' ? '🟢' : '🔴';
+    const posInfo = document.getElementById('rp-position-info');
+    if (posInfo) {
+      posInfo.style.display = 'block';
+      posInfo.innerHTML = `${icon} <b>${d.side === 'BUY' ? 'LONG' : 'SHORT'}</b> Bot entrou @ <code>$${parseFloat(d.entry).toFixed(2)}</code> · SL: <code>$${parseFloat(d.sl).toFixed(2)}</code> · TP: <code>$${parseFloat(d.tp).toFixed(2)}</code>`;
+    }
+  });
+
+  _rpBotEvt.addEventListener('close', e => {
+    const d = JSON.parse(e.data);
+    const icon = d.pnl >= 0 ? '✅' : '❌';
+    const posInfo = document.getElementById('rp-position-info');
+    if (posInfo) {
+      posInfo.style.display = 'block';
+      posInfo.innerHTML = `${icon} <b>${d.reason}</b> — PnL: <code style="color:${d.pnl>=0?'var(--green)':'var(--red)'}">${d.pnl>=0?'+':''}$${d.pnl}</code> · Total: <code>$${d.total_pnl}</code>`;
+      setTimeout(() => { if(posInfo) posInfo.style.display='none'; }, 3000);
+    }
+    // IA narrativa: comentar o resultado da operação
+    _replayNarrate(d);
+  });
+
+  _rpBotEvt.addEventListener('done', e => {
+    const d = JSON.parse(e.data);
+    const wr = d.wr;
+    const color = d.pnl >= 0 ? 'var(--green)' : 'var(--red)';
+    showToast(`🤖 Bot finalizado: PnL ${d.pnl>=0?'+':''}$${d.pnl} · WR ${wr}% · ROI ${d.roi}%`);
+    if (botBtn) botBtn.style.background = 'rgba(0,120,255,.15)';
+    const posInfo = document.getElementById('rp-position-info');
+    if (posInfo) {
+      posInfo.style.display = 'block';
+      posInfo.innerHTML = `<b>Resultado Final</b> — PnL: <span style="color:${color}">${d.pnl>=0?'+':''}$${d.pnl}</span> · WIN: ${d.wins} · LOSS: ${d.losses} · WR: ${wr}% · ROI: <b>${d.roi}%</b> · Capital final: $${d.capital}`;
+    }
+    _rpBotEvt.close(); _rpBotEvt = null;
+  });
+
+  _rpBotEvt.addEventListener('error', () => {
+    if (_rpBotEvt) { _rpBotEvt.close(); _rpBotEvt = null; }
+    if (botBtn) botBtn.style.background = 'rgba(0,120,255,.15)';
+  });
+}
+
+
+// ─── IA Narrativa no Replay Automático ────────────────────────────────────────
+async function _replayNarrate(tradeData) {
+  const iaEl = document.getElementById('rp-ia-narration');
+  if (!iaEl) return;
+  const strategy = document.getElementById('rp-strategy')?.value || 'trend';
+  const symbol   = document.getElementById('rp-symbol')?.value   || 'BTCUSDT';
+  const isWin    = tradeData.pnl >= 0;
+
+  // Show loading
+  iaEl.style.display = 'block';
+  iaEl.innerHTML = `<div style="display:flex;align-items:center;gap:8px;color:var(--t3)">
+    <div class="status-dot live" style="width:8px;height:8px;border-radius:50%;background:var(--gold);animation:livePulse 1s infinite"></div>
+    <span style="font-size:12px">IA analisando operação...</span>
+  </div>`;
+
+  try {
+    const prompt = `Você é um trader especialista comentando uma operação em tempo real.
+Par: ${symbol} | Estratégia: ${strategy.toUpperCase()}
+Resultado: ${isWin ? 'WIN ✅' : 'LOSS ❌'}
+PnL: ${tradeData.pnl >= 0 ? '+' : ''}$${tradeData.pnl} | Motivo: ${tradeData.reason}
+Trades: ${tradeData.wins} WIN / ${tradeData.losses} LOSS | PnL Total: $${tradeData.total_pnl}
+Capital atual: $${tradeData.capital}
+
+Comente em 2 frases curtas e diretas em português: o que aconteceu e o que o trader deve aprender.`;
+
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 120,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+    const d = await r.json();
+    const text = d?.content?.[0]?.text || '';
+    if (text) {
+      const color = isWin ? 'var(--green)' : 'var(--red)';
+      iaEl.innerHTML = `
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <div style="width:28px;height:28px;border-radius:50%;background:var(--golddim);border:1px solid var(--gold);display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0">IA</div>
+          <div>
+            <div style="font-size:10px;font-weight:600;color:var(--gold);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Narração da IA</div>
+            <div style="font-size:12px;color:var(--t1);line-height:1.6">${escHtml(text)}</div>
+            <div style="font-size:10px;color:var(--t3);margin-top:4px">${symbol} · ${strategy.toUpperCase()} · ${isWin ? '<span style=\"color:var(--green)\">WIN</span>' : '<span style=\"color:var(--red)\">LOSS</span>'}</div>
+          </div>
+        </div>`;
+    } else {
+      iaEl.style.display = 'none';
+    }
+  } catch {
+    iaEl.style.display = 'none';
+  }
+}
+
+function replayStopBot() {
+  if (_rpBotEvt) { _rpBotEvt.close(); _rpBotEvt = null; }
+  const botBtn = document.getElementById('rp-bot-btn');
+  if (botBtn) botBtn.style.background = 'rgba(0,120,255,.15)';
+  showToast('🤖 Bot auto parado');
+}
+
+// ─── COPY TRADING: fechar trade e pagar taxa ao líder ─────────────────────────
+async function closeFollowerTrade(tradeId, currentPrice) {
+  if (!currentPrice) {
+    currentPrice = await showPrompt('Fechar Trade Copiado', 'Informe o preço de saída (USDT) para calcular o PnL.', '', 'Ex: 73500', { icon:'⬛', color:'gold' });
+    if (!currentPrice) return;
+  }
+  try {
+    const r = await fetch('/api/copy/close-follower-trade', {
+      method: 'POST', headers: { ...auth.headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trade_id: tradeId, exit_price: parseFloat(currentPrice) })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      const msg = d.fee_charged > 0
+        ? `✅ Trade fechado: PnL $${d.pnl.toFixed(2)} · Taxa ao líder: $${d.fee_charged.toFixed(2)} · Líquido: $${d.net_pnl.toFixed(2)}`
+        : `✅ Trade fechado: PnL ${d.pnl>=0?'+':''}$${d.pnl.toFixed(2)}`;
+      showToast(msg);
+      loadCopyMyFollows();
+    } else showToast('❌ ' + d.error, true);
+  } catch(e) { showToast('❌ ' + e.message, true); }
+}
+
+// ─── COPY LEADER STATS ────────────────────────────────────────────────────────
+async function loadCopyLeaderStats() {
+  try {
+    const r = await fetch('/api/copy/leader-stats', { headers: auth.headers() });
+    const d = await r.json();
+    const el = document.getElementById('copy-leader-stats');
+    if (!el) return;
+    if (!d.ok || !d.is_leader) {
+      el.innerHTML = '<div style="color:var(--t3)">Você ainda não é um líder. Crie seu perfil acima.</div>';
+      return;
+    }
+    const earned = parseFloat(d.fee_earned || 0);
+    el.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px">
+        <div style="background:var(--bg2);border-radius:6px;padding:8px;text-align:center">
+          <div style="font-size:14px;font-weight:600;color:var(--green)">$${earned.toFixed(2)}</div>
+          <div style="font-size:10px;color:var(--t3)">Taxas recebidas</div>
+        </div>
+        <div style="background:var(--bg2);border-radius:6px;padding:8px;text-align:center">
+          <div style="font-size:14px;font-weight:600">${d.followers?.length || 0}</div>
+          <div style="font-size:10px;color:var(--t3)">Seguidores ativos</div>
+        </div>
+        <div style="background:var(--bg2);border-radius:6px;padding:8px;text-align:center">
+          <div style="font-size:14px;font-weight:600;color:var(--gold)">${d.leader?.copy_fee_pct || 0}%</div>
+          <div style="font-size:10px;color:var(--t3)">Sua taxa</div>
+        </div>
+      </div>
+      ${d.recent_trades?.length ? `
+        <div style="font-size:11px;font-weight:600;color:var(--t3);margin-bottom:6px">Últimas operações</div>
+        ${d.recent_trades.slice(0,5).map(t => `
+          <div style="display:flex;justify-content:space-between;font-size:11px;padding:5px 0;border-bottom:1px solid var(--border)">
+            <span>${t.symbol} ${t.side}</span>
+            <span style="color:${(t.pnl||0)>=0?'var(--green)':'var(--red)'}">${(t.pnl||0)>=0?'+':''}$${parseFloat(t.pnl||0).toFixed(2)}</span>
+          </div>`).join('')}` : '<div style="color:var(--t3);font-size:11px">Nenhum trade ainda</div>'}
+    `;
+  } catch {}
+}
 
 async function botSaveAndApply() {
   const btn = document.querySelector('[onclick="botSaveAndApply()"]');
@@ -3312,6 +3924,8 @@ function enterApp() {
   if (av) av.textContent = auth.user.charAt(0).toUpperCase();
   if (nm) nm.textContent = auth.user;
   initApp();
+  // Init onboarding after app loads
+  setTimeout(() => { if (typeof obInit === 'function') obInit(); }, 800);
 }
 
 async function logout() {
@@ -5004,6 +5618,12 @@ async function saveApiKeys() {
       showToast('✅ Chaves salvas com segurança!');
       if (status) status.textContent = '✅ Salvo';
       loadProfile();
+      // Mark onboarding checklist items
+      if (typeof obMarkDone === 'function') {
+        if (binKey)   { obMarkDone('binance_key'); }
+        if (tgToken)  { obMarkDone('telegram'); }
+        if (typeof obUpdateBadge === 'function') obUpdateBadge();
+      }
       // Clear secret inputs after save
       const bs = document.getElementById('key-binance-secret');
       if (bs) bs.value = '';
@@ -5110,7 +5730,7 @@ async function adminToggleUser(username, newStatus) {
 }
 
 async function adminDeleteUser(username) {
-  const ok = await showConfirm('Excluir usuário', 'Excluir @'+username+' permanentemente? Todos os dados serão perdidos.', 'Excluir', 'Cancelar');
+  const ok = await showDanger('Excluir Usuário', `Excluir @${username} permanentemente?\n\nTodos os dados, trades e configurações serão perdidos. Esta ação não pode ser desfeita.`);
   if (!ok) return;
   try {
     await fetch('/api/admin/users/'+username, { method:'DELETE', headers: auth.headers() });

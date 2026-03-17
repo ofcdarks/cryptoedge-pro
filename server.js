@@ -1550,6 +1550,8 @@ app.post('/api/bot/trade/open', requireAuth, (req, res) => {
       strategy: strategy||'', status: 'open'
     });
     res.json({ ok: true, id });
+    // Broadcast to copy followers (async, non-blocking)
+    _broadcastCopyTrade(req.user, { ...req.body, id }).catch(()=>{});
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
@@ -1825,20 +1827,51 @@ async function _broadcastCopyTrade(leaderUser, tradeData) {
   try {
     const followers = db.all('SELECT * FROM copy_followers WHERE leader=? AND active=1', [leaderUser]);
     if (!followers.length) return;
-    const leaderCapital = parseFloat(tradeData.size || tradeData.qty || 1);
+    const icon = (tradeData.side||tradeData.direction||'').toUpperCase().includes('BUY') || (tradeData.side||'').includes('LONG') ? '🟢' : '🔴';
     for (const f of followers) {
       try {
-        const ratio    = f.capital / (leaderCapital * parseFloat(tradeData.entry||1));
-        const copySize = Math.min(f.capital * f.max_risk_pct/100, f.capital * ratio);
-        const copyTrade = { ...tradeData, size: copySize, username: f.follower,
-          reason: `Copy de @${leaderUser} · ${tradeData.reason||''}` };
-        db.insert('trades', { username:f.follower, pair:tradeData.pair||tradeData.symbol,
-          direction:tradeData.side||tradeData.direction, entry:parseFloat(tradeData.entry||0),
-          size:copySize, reason:copyTrade.reason, result:'pending',
-          pnl:0, leverage:'1x', created_at: new Date().toLocaleString('pt-BR') });
+        // Notificar via Telegram com informações do trade do líder
+        const user = db.get('SELECT telegram_token,telegram_chatid FROM users WHERE username=?',[f.follower]);
+        const tok  = user?.telegram_token || process.env.TELEGRAM_TOKEN || '';
+        const cid  = user?.telegram_chatid || process.env.TELEGRAM_CHAT_ID || '';
+        const side  = tradeData.side || tradeData.direction || '?';
+        const entry = parseFloat(tradeData.entry||0);
+        const sym   = tradeData.symbol || tradeData.pair || 'UNKNOWN';
+        const tradeId = tradeData.id || '';
+        if (tok && cid) {
+          sendNativePush(f.follower, `Copy Trade @${leaderUser}`, `${side} ${sym} @ $${entry.toFixed(2)}`, {type:'copy_trade'}).catch(()=>{});
+          const msg = `${icon} <b>Copy Trade — @${leaderUser}</b>
+
+` +
+            `📊 Par: <code>${sym}</code>
+` +
+            `↕️ Lado: <b>${side}</b>
+` +
+            `💲 Entrada: <code>$${entry.toFixed(2)}</code>
+` +
+            `💰 Capital configurado: <code>$${f.capital}</code>
+
+` +
+            `<i>Acesse o CryptoEdge Pro → Copy Trading para executar.</i>`;
+          await axios.post(`https://api.telegram.org/bot${tok}/sendMessage`,
+            { chat_id:cid, parse_mode:'HTML', text:msg }, {timeout:5000}).catch(()=>{});
+        }
+        // Registrar no diário de trades do seguidor
+        db.insert('trades', { username:f.follower, pair:sym.replace('USDT','/USDT'),
+          direction: side.toUpperCase().includes('BUY')||side.toUpperCase().includes('LONG')?'Long':'Short',
+          entry, size:f.capital, reason:`Copy de @${leaderUser} · ${tradeData.reason||''}`,
+          result:'pending', pnl:0, leverage:'1x', created_at: new Date().toLocaleString('pt-BR') });
         db.run('UPDATE copy_followers SET copied_trades=copied_trades+1 WHERE follower=? AND leader=?',
           [f.follower, leaderUser], true);
       } catch {}
+    }
+    // Atualizar stats do líder
+    const bt = db.all("SELECT pnl FROM bot_trades WHERE username=? AND status='closed'",[leaderUser]);
+    if (bt.length) {
+      const wins = bt.filter(t=>(t.pnl||0)>=0).length;
+      const totalPnl = bt.reduce((a,t)=>a+(t.pnl||0),0);
+      db.run('UPDATE copy_leaders SET total_pnl=?,win_rate=?,trades=? WHERE username=?',
+        [totalPnl, Math.round(wins/bt.length*100), bt.length, leaderUser], true);
     }
   } catch {}
 }
@@ -2052,6 +2085,394 @@ app.post('/api/billing/stripe/checkout', requireAuth, async (req, res) => {
   } catch(e) { res.status(500).json({ ok:false, error:e.message }); }
 });
 
+
+
+// ─── Stripe Webhook (auto-upgrade após pagamento) ─────────────────────────────
+app.post('/api/billing/stripe/webhook', express.raw({type:'application/json'}), async (req, res) => {
+  const stripeKey  = process.env.STRIPE_SECRET_KEY  || '';
+  const webhookSec = process.env.STRIPE_WEBHOOK_SECRET || '';
+  if (!stripeKey) return res.status(400).json({ error:'Stripe não configurado' });
+  let event;
+  try {
+    const stripe = require('stripe')(stripeKey);
+    if (webhookSec) {
+      event = stripe.webhooks.constructEvent(req.body, req.headers['stripe-signature'], webhookSec);
+    } else {
+      event = JSON.parse(req.body.toString());
+    }
+  } catch(e) { return res.status(400).json({ error:'Webhook inválido: ' + e.message }); }
+
+  try {
+    if (event.type === 'checkout.session.completed') {
+      const session  = event.data.object;
+      const username = session.metadata?.username;
+      const plan     = session.metadata?.plan;
+      const PLANS    = { free:{price:0}, pro:{price:97}, expert:{price:197}, trader:{price:397} };
+      if (username && plan && PLANS[plan]) {
+        const expires = new Date(Date.now() + 30*24*60*60*1000).toISOString();
+        db.run("INSERT OR REPLACE INTO subscriptions(id,username,plan,status,price_brl,stripe_id,started_at,expires_at) VALUES(lower(hex(randomblob(8))),?,?,'active',?,?,datetime('now'),?)",
+          [username, plan, PLANS[plan].price, session.id, expires], true);
+        db.run('UPDATE users SET plan=? WHERE username=?', [plan, username], true);
+        // Notificar usuário por Telegram se configurado
+        const user = db.get('SELECT telegram_token,telegram_chatid FROM users WHERE username=?',[username]);
+        const tok = user?.telegram_token || process.env.TELEGRAM_TOKEN || '';
+        const cid = user?.telegram_chatid || process.env.TELEGRAM_CHAT_ID || '';
+        if (tok && cid) {
+          await axios.post(`https://api.telegram.org/bot${tok}/sendMessage`, {
+            chat_id:cid, parse_mode:'HTML',
+            text:`✅ <b>Pagamento confirmado!</b>
+
+Plano <b>${plan.toUpperCase()}</b> ativado até ${expires.slice(0,10)}.
+
+Bem-vindo ao CryptoEdge Pro ${plan}! 🚀`
+          }, {timeout:5000}).catch(()=>{});
+        }
+      }
+    }
+    if (event.type === 'customer.subscription.deleted') {
+      const sub = event.data.object;
+      const username = sub.metadata?.username;
+      if (username) {
+        db.run("UPDATE subscriptions SET status='cancelled' WHERE username=?", [username], true);
+        db.run("UPDATE users SET plan='free' WHERE username=?", [username], true);
+      }
+    }
+  } catch(e) { console.error('Stripe webhook error:', e.message); }
+  res.json({ received: true });
+});
+
+// ─── Stripe: criar customer portal (gerenciar assinatura) ─────────────────────
+app.post('/api/billing/stripe/portal', requireAuth, async (req, res) => {
+  const stripeKey = process.env.STRIPE_SECRET_KEY || '';
+  if (!stripeKey) return res.json({ ok:false, error:'Stripe não configurado' });
+  try {
+    const stripe   = require('stripe')(stripeKey);
+    const sub      = db.get('SELECT stripe_id FROM subscriptions WHERE username=? ORDER BY started_at DESC LIMIT 1',[req.user]);
+    if (!sub?.stripe_id) return res.json({ ok:false, error:'Sem assinatura Stripe ativa' });
+    const session  = await stripe.checkout.sessions.retrieve(sub.stripe_id);
+    const portal   = await stripe.billingPortal.sessions.create({
+      customer: session.customer,
+      return_url: `${process.env.APP_URL||'http://localhost:3000'}/profile`
+    });
+    res.json({ ok:true, url:portal.url });
+  } catch(e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+// ─── Replay histórico tick-a-tick ─────────────────────────────────────────────
+app.get('/api/replay/klines', requireAuth, async (req, res) => {
+  const { symbol='BTCUSDT', interval='1m', limit='200', endTime } = req.query;
+  try {
+    const params = { symbol: symbol.toUpperCase(), interval, limit: Math.min(parseInt(limit),500) };
+    if (endTime) params.endTime = parseInt(endTime);
+    const r = await axios.get('https://api.binance.com/api/v3/klines', { params, timeout:10000 });
+    const klines = r.data.map(k => ({
+      t: k[0], o: parseFloat(k[1]), h: parseFloat(k[2]),
+      l: parseFloat(k[3]), c: parseFloat(k[4]), v: parseFloat(k[5]),
+    }));
+    res.json({ ok:true, klines, symbol, interval });
+  } catch(e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+// ─── Copy Trading: executar ordem real na Binance do seguidor ─────────────────
+app.post('/api/copy/execute', requireAuth, async (req, res) => {
+  const { leader_trade_id, confirm } = req.body;
+  if (!confirm) return res.status(400).json({ ok:false, error:'Confirme a execução com confirm:true' });
+  try {
+    const trade = db.get('SELECT * FROM bot_trades WHERE id=?',[leader_trade_id]);
+    if (!trade) return res.status(404).json({ ok:false, error:'Trade do líder não encontrado' });
+    const follower = db.get('SELECT binance_key,binance_secret,binance_secret_enc FROM users WHERE username=?',[req.user]);
+    if (!follower?.binance_key) return res.status(400).json({ ok:false, error:'Configure suas chaves Binance em Meu Perfil' });
+    const secret = follower.binance_secret_enc ? decryptSecret(follower.binance_secret_enc) : follower.binance_secret;
+    if (!secret) return res.status(400).json({ ok:false, error:'Binance Secret não configurado' });
+    // Buscar follow config
+    const follow = db.get('SELECT * FROM copy_followers WHERE follower=? AND leader=? AND active=1',[req.user, trade.username]);
+    if (!follow) return res.status(400).json({ ok:false, error:'Você não está seguindo este trader' });
+    // Calcular qty proporcional ao capital do seguidor
+    const { execSync } = require('child_process');
+    let ts = Date.now();
+    try { const tr=await axios.get('https://api.binance.com/api/v3/time',{timeout:3000}); ts=tr.data.serverTime||ts; } catch {}
+    const mkSig = q => require('crypto').createHmac('sha256',secret).update(q).digest('hex');
+    // Buscar preço atual
+    const priceR = await axios.get('https://api.binance.com/api/v3/ticker/price',{params:{symbol:trade.symbol},timeout:5000});
+    const price  = parseFloat(priceR.data.price);
+    // Calcular quantidade: capital do seguidor / preço atual
+    const symInfoR = await axios.get('https://api.binance.com/api/v3/exchangeInfo',{params:{symbol:trade.symbol},timeout:8000});
+    const symInfo  = symInfoR.data.symbols?.[0];
+    const lotFilter = symInfo?.filters?.find(f=>f.filterType==='LOT_SIZE');
+    const step = parseFloat(lotFilter?.stepSize||'0.001');
+    const rawQty = follow.capital / price * 0.95;
+    const qty = Math.floor(rawQty/step)*step;
+    if (qty <= 0) return res.status(400).json({ ok:false, error:`Capital insuficiente para ${trade.symbol} (mín ~$10)` });
+    // Executar ordem a mercado
+    const qs = `symbol=${trade.symbol}&side=${trade.side}&type=MARKET&quantity=${qty}&timestamp=${ts}&recvWindow=10000`;
+    const sig = mkSig(qs);
+    const orderR = await axios.post(`https://api.binance.com/api/v3/order?${qs}&signature=${sig}`,{},{
+      headers:{'X-MBX-APIKEY':follower.binance_key}, timeout:10000
+    });
+    const order = orderR.data;
+    // Registrar no bot_trades do seguidor
+    db.insert('bot_trades', { username:req.user, symbol:trade.symbol, side:trade.side,
+      entry:price, qty, strategy:`copy:${trade.username}`, status:'open' });
+    db.run('UPDATE copy_followers SET copied_trades=copied_trades+1 WHERE follower=? AND leader=?',[req.user,trade.username],true);
+    res.json({ ok:true, order_id:order.orderId, symbol:trade.symbol, side:trade.side, qty, price });
+  } catch(e) {
+    res.status(500).json({ ok:false, error: e.response?.data?.msg || e.message });
+  }
+});
+
+
+// ─── Replay Bot Auto (SSE) ────────────────────────────────────────────────────
+// Stream eventos de replay em tempo real via Server-Sent Events
+app.get('/api/replay/auto', requireAuth, async (req, res) => {
+  const { symbol='BTCUSDT', interval='15m', limit='200', strategy='trend',
+          rr='2.0', ema_fast='9', ema_slow='21', min_conf='0.65', speed='100' } = req.query;
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const send = (evt, data) => {
+    if (!res.writableEnded) res.write(`event: ${evt}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+
+  try {
+    // Buscar klines da Binance
+    const klR = await axios.get('https://api.binance.com/api/v3/klines', {
+      params: { symbol: symbol.toUpperCase(), interval, limit: Math.min(parseInt(limit), 300) },
+      timeout: 10000
+    });
+    const klines = klR.data;
+    send('start', { total: klines.length, symbol, interval, strategy });
+
+    // Parâmetros do backtester
+    const cfg = { rr: parseFloat(rr), ema_fast: parseInt(ema_fast), ema_slow: parseInt(ema_slow),
+                  min_conf: parseFloat(min_conf), capital: 1000 };
+
+    // Replicar lógica do Backtester inline (sem subprocess — mais rápido)
+    const closes = [], highs = [], lows = [], vols = [];
+    let capital = 1000, position = null, wins = 0, losses = 0, pnl = 0;
+    let prevMacdHist = 0;
+
+    const calcEMA = (arr, p) => {
+      if (!arr.length) return 0;
+      const k = 2/(p+1); let e = arr[0];
+      for (let i = 1; i < arr.length; i++) e = arr[i]*k + e*(1-k);
+      return e;
+    };
+    const calcRSI = (arr, p=14) => {
+      if (arr.length < p+1) return 50;
+      const vals = arr.slice(-p-1);
+      let ag=0, al=0;
+      for (let i=1;i<vals.length;i++) { const d=vals[i]-vals[i-1]; if(d>0)ag+=d; else al-=d; }
+      ag/=p; al/=p;
+      return al===0 ? 100 : 100 - (100/(1+ag/al));
+    };
+    const calcATR = (h,l,c,p=14) => {
+      if (c.length < 2) return 0;
+      const n = Math.min(p, c.length-1);
+      let s=0;
+      for (let i=c.length-n; i<c.length; i++) {
+        s += Math.max(h[i]-l[i], Math.abs(h[i]-c[i-1]), Math.abs(l[i]-c[i-1]));
+      }
+      return s/n;
+    };
+    const calcMACD = (arr) => {
+      if (arr.length < 35) return [0,0,0];
+      const fast=calcEMA(arr.slice(-12),12), slow=calcEMA(arr.slice(-26),26);
+      const ml=fast-slow;
+      // simplified signal
+      return [ml, ml*0.85, ml*0.15];
+    };
+
+    const WARMUP = 30;
+    const delayMs = Math.max(10, Math.min(500, parseInt(speed)));
+
+    for (let i = 0; i < klines.length; i++) {
+      if (res.writableEnded) break;
+      const k = klines[i];
+      const o=parseFloat(k[1]), h=parseFloat(k[2]), l=parseFloat(k[3]),
+            close=parseFloat(k[4]), v=parseFloat(k[5]);
+      closes.push(close); highs.push(h); lows.push(l); vols.push(v);
+      if (closes.length > 200) { closes.shift(); highs.shift(); lows.shift(); vols.shift(); }
+
+      if (i < WARMUP) { send('candle', { i, k: {o,h,l,c:close,v}, warmup:true }); continue; }
+
+      // Check SL/TP
+      let closedBy = null;
+      if (position) {
+        if (position.side==='BUY') {
+          if (l <= position.sl) closedBy = { price: position.sl, reason: 'STOP LOSS' };
+          else if (h >= position.tp) closedBy = { price: position.tp, reason: 'TAKE PROFIT' };
+        } else {
+          if (h >= position.sl) closedBy = { price: position.sl, reason: 'STOP LOSS' };
+          else if (l <= position.tp) closedBy = { price: position.tp, reason: 'TAKE PROFIT' };
+        }
+        if (closedBy) {
+          const tradePnl = position.side==='BUY'
+            ? (closedBy.price - position.entry) * position.qty
+            : (position.entry - closedBy.price) * position.qty;
+          pnl += tradePnl; capital += tradePnl;
+          if (tradePnl >= 0) wins++; else losses++;
+          send('close', { side:position.side, entry:position.entry, exit:closedBy.price,
+            pnl:parseFloat(tradePnl.toFixed(2)), reason:closedBy.reason, total_pnl:parseFloat(pnl.toFixed(2)), wins, losses, capital:parseFloat(capital.toFixed(2)) });
+          position = null;
+        }
+      }
+
+      // Signal detection
+      let sig = null;
+      if (!position) {
+        const r = calcRSI(closes);
+        const atr = calcATR(highs, lows, closes);
+        const sl_d = Math.max(atr*1.5, close*0.015);
+        const tp_d = sl_d * parseFloat(cfg.rr);
+        const qty  = capital / close * 0.95;
+
+        if (strategy === 'trend') {
+          const ef = calcEMA(closes.slice(-parseInt(cfg.ema_fast)), parseInt(cfg.ema_fast));
+          const es = calcEMA(closes.slice(-parseInt(cfg.ema_slow)), parseInt(cfg.ema_slow));
+          if (ef > es*1.001 && r < 65) sig = { side:'BUY',  sl:close-sl_d, tp:close+tp_d, qty };
+          else if (ef < es*0.999 && r > 35) sig = { side:'SELL', sl:close+sl_d, tp:close-tp_d, qty };
+        } else if (strategy === 'macd') {
+          const [ml,,hist] = calcMACD(closes);
+          if (prevMacdHist < 0 && hist > 0 && r < 65) sig = { side:'BUY',  sl:close-sl_d, tp:close+tp_d, qty };
+          else if (prevMacdHist > 0 && hist < 0 && r > 35) sig = { side:'SELL', sl:close+sl_d, tp:close-tp_d, qty };
+          prevMacdHist = hist;
+        } else if (strategy === 'breakout') {
+          const hiMax = Math.max(...highs.slice(-20));
+          const loMin = Math.min(...lows.slice(-20));
+          if (close > hiMax*1.003) sig = { side:'BUY',  sl:close-sl_d, tp:close+tp_d, qty };
+          else if (close < loMin*0.997) sig = { side:'SELL', sl:close+sl_d, tp:close-tp_d, qty };
+        }
+
+        if (sig) {
+          position = { side:sig.side, entry:close, sl:sig.sl, tp:sig.tp, qty:sig.qty };
+          send('open', { side:sig.side, entry:close, sl:parseFloat(sig.sl.toFixed(2)),
+            tp:parseFloat(sig.tp.toFixed(2)), capital:parseFloat(capital.toFixed(2)) });
+        }
+      }
+
+      // Send candle event
+      const rsi_v = calcRSI(closes);
+      const ema_f = calcEMA(closes.slice(-parseInt(cfg.ema_fast||9)), parseInt(cfg.ema_fast||9));
+      const ema_s = calcEMA(closes.slice(-parseInt(cfg.ema_slow||21)), parseInt(cfg.ema_slow||21));
+      send('candle', { i, k:{o,h,l,c:close,v}, rsi:parseFloat(rsi_v.toFixed(1)),
+        ema_fast:parseFloat(ema_f.toFixed(2)), ema_slow:parseFloat(ema_s.toFixed(2)),
+        position: position ? { side:position.side, entry:position.entry, sl:position.sl, tp:position.tp } : null,
+        pnl:parseFloat(pnl.toFixed(2)), wins, losses, capital:parseFloat(capital.toFixed(2)) });
+
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+
+    // Final summary
+    const total = wins + losses;
+    send('done', { pnl:parseFloat(pnl.toFixed(2)), wins, losses,
+      wr: total > 0 ? Math.round(wins/total*100) : 0,
+      capital:parseFloat(capital.toFixed(2)), roi:parseFloat(((capital-1000)/1000*100).toFixed(2)) });
+    res.end();
+  } catch(e) {
+    send('error', { message: e.message });
+    res.end();
+  }
+});
+
+// ─── Copy Trading: taxa automática ao líder ────────────────────────────────────
+app.post('/api/copy/close-follower-trade', requireAuth, async (req, res) => {
+  const { trade_id, exit_price } = req.body;
+  if (!trade_id || !exit_price) return res.status(400).json({ ok:false, error:'trade_id e exit_price obrigatórios' });
+  try {
+    const trade = db.get('SELECT * FROM bot_trades WHERE id=? AND username=?', [trade_id, req.user]);
+    if (!trade) return res.status(404).json({ ok:false, error:'Trade não encontrado' });
+    const exitP = parseFloat(exit_price);
+    const pnl   = trade.side==='BUY'
+      ? (exitP - trade.entry) * trade.qty
+      : (trade.entry - exitP) * trade.qty;
+
+    // Fechar trade do seguidor
+    db.run("UPDATE bot_trades SET exit_price=?,pnl=?,status='closed',closed_at=datetime('now') WHERE id=?",
+      [exitP, pnl, trade_id], true);
+
+    // Extrair líder do strategy field (ex: "copy:leaderUser")
+    const leaderUser = (trade.strategy||'').replace('copy:','');
+    let feeCharged = 0;
+
+    if (pnl > 0 && leaderUser) {
+      // Cobrar taxa do líder
+      const leader = db.get('SELECT copy_fee_pct FROM copy_leaders WHERE username=?', [leaderUser]);
+      const feePct = parseFloat(leader?.copy_fee_pct||0);
+      if (feePct > 0) {
+        feeCharged = pnl * (feePct/100);
+        // Registrar crédito ao líder
+        db.insert('bot_trades', {
+          username: leaderUser, symbol: trade.symbol, side: 'FEE',
+          entry: 0, qty: 0, pnl: feeCharged, strategy: `fee_from:${req.user}`,
+          status: 'closed', opened_at: new Date().toISOString(), closed_at: new Date().toISOString()
+        });
+        // Atualizar PnL total do líder
+        db.run('UPDATE copy_leaders SET total_pnl=total_pnl+? WHERE username=?', [feeCharged, leaderUser], true);
+        // Notificar líder via Telegram
+        const lUser = db.get('SELECT telegram_token,telegram_chatid FROM users WHERE username=?',[leaderUser]);
+        const tok = lUser?.telegram_token || process.env.TELEGRAM_TOKEN || '';
+        const cid = lUser?.telegram_chatid || process.env.TELEGRAM_CHAT_ID || '';
+        if (tok && cid) {
+          await axios.post(`https://api.telegram.org/bot${tok}/sendMessage`, {
+            chat_id: cid, parse_mode:'HTML',
+            text:`💰 <b>Taxa de cópia recebida!</b>
+
+` +
+                 `Seguidor <code>${req.user}</code> fechou trade com lucro.
+` +
+                 `💵 Sua taxa (${feePct}%): <code>+$${feeCharged.toFixed(2)}</code>
+` +
+                 `📊 PnL do trade: <code>+$${pnl.toFixed(2)}</code>`
+          }, {timeout:5000}).catch(()=>{});
+        }
+      }
+      // Atualizar stats do seguidor
+      db.run('UPDATE copy_followers SET pnl_total=pnl_total+? WHERE follower=? AND leader=?',
+        [pnl - feeCharged, req.user, leaderUser], true);
+    }
+
+    res.json({ ok:true, pnl:parseFloat(pnl.toFixed(2)), fee_charged:parseFloat(feeCharged.toFixed(2)),
+               net_pnl: parseFloat((pnl-feeCharged).toFixed(2)) });
+  } catch(e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+// ─── Copy Leader Dashboard ─────────────────────────────────────────────────────
+app.get('/api/copy/leader-stats', requireAuth, (req, res) => {
+  try {
+    const leader = db.get('SELECT * FROM copy_leaders WHERE username=?', [req.user]);
+    if (!leader) return res.json({ ok:true, is_leader:false });
+    const followers   = db.all('SELECT * FROM copy_followers WHERE leader=? AND active=1', [req.user]);
+    const feeEarned   = db.all("SELECT SUM(pnl) as total FROM bot_trades WHERE username=? AND side='FEE'", [req.user]);
+    const trades      = db.all("SELECT * FROM bot_trades WHERE username=? AND status='closed' AND side!='FEE' ORDER BY closed_at DESC LIMIT 10", [req.user]);
+    res.json({ ok:true, is_leader:true, leader, followers, fee_earned: feeEarned[0]?.total||0, recent_trades:trades });
+  } catch(e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+
+// ─── Capacitor Native Push Token ──────────────────────────────────────────────
+const _nativeTokens = new Map(); // username → { token, platform }
+app.post('/api/push/native-token', requireAuth, (req, res) => {
+  const { token, platform } = req.body;
+  if (token) _nativeTokens.set(req.user, { token, platform: platform||'android' });
+  res.json({ ok: true });
+});
+
+async function sendNativePush(username, title, body, data = {}) {
+  // FCM (Firebase) direct push when running as native app
+  const fcmKey = process.env.FCM_SERVER_KEY || '';
+  const nt = _nativeTokens.get(username);
+  if (!fcmKey || !nt) return;
+  try {
+    await axios.post('https://fcm.googleapis.com/fcm/send', {
+      to: nt.token,
+      notification: { title, body, icon: 'ic_notification' },
+      data
+    }, { headers: { Authorization: 'key=' + fcmKey }, timeout: 5000 });
+  } catch {}
+}
 
 // ─── Health ────────────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => res.json({

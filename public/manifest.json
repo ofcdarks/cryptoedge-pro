@@ -1,8 +1,8 @@
 {
   "name": "CryptoEdge Pro",
   "short_name": "CryptoEdge",
-  "description": "Plataforma profissional de trading com bot automatizado, análise de mercado e gestão de risco.",
-  "start_url": "/",
+  "description": "Plataforma profissional de trading: bot automatizado, copy trading, análise SMC, gestão de risco.",
+  "start_url": "/?pwa=1",
   "display": "standalone",
   "orientation": "any",
   "background_color": "#0d1117",
@@ -12,7 +12,15 @@
     "finance",
     "productivity"
   ],
-  "screenshots": [],
+  "screenshots": [
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Dashboard CryptoEdge Pro"
+    }
+  ],
   "icons": [
     {
       "src": "/icons/icon-72.svg",
@@ -65,28 +73,73 @@
   ],
   "shortcuts": [
     {
-      "name": "Dashboard",
-      "short_name": "Dashboard",
-      "description": "Abrir Dashboard",
-      "url": "/#dashboard",
+      "name": "Bot Control",
+      "short_name": "Bot",
+      "description": "Iniciar/parar o bot de trading",
+      "url": "/?panel=botcontrol",
       "icons": [
         {
-          "src": "/icons/icon-96.png",
-          "sizes": "96x96"
+          "src": "/icon-192.png",
+          "sizes": "192x192"
         }
       ]
     },
     {
-      "name": "Analysis AI",
-      "short_name": "AI",
-      "description": "Analysis AI Engine",
-      "url": "/#analysisai",
+      "name": "Live Trading",
+      "short_name": "Live",
+      "description": "Monitorar trades ao vivo",
+      "url": "/?panel=live",
       "icons": [
         {
-          "src": "/icons/icon-96.png",
-          "sizes": "96x96"
+          "src": "/icon-192.png",
+          "sizes": "192x192"
         }
       ]
+    },
+    {
+      "name": "Replay Histórico",
+      "short_name": "Replay",
+      "description": "Praticar com dados históricos",
+      "url": "/?panel=replay",
+      "icons": [
+        {
+          "src": "/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "IR Fiscal",
+      "short_name": "Fiscal",
+      "description": "Acompanhar IR cripto",
+      "url": "/?panel=fiscal",
+      "icons": [
+        {
+          "src": "/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    }
+  ],
+  "display_override": [
+    "window-controls-overlay",
+    "standalone",
+    "minimal-ui"
+  ],
+  "share_target": {
+    "action": "/api/share",
+    "method": "POST",
+    "enctype": "application/x-www-form-urlencoded",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  },
+  "protocol_handlers": [
+    {
+      "protocol": "web+cryptoedge",
+      "url": "/?action=%s"
     }
   ]
 }

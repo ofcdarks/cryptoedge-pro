@@ -97,3 +97,51 @@ self.addEventListener('notificationclick', event => {
     })
   );
 });
+
+// ─── Install & Cache ──────────────────────────────────────────────────────────
+const CACHE_V = 'cryptoedge-v2.0.0';
+const CORE = ['/', '/css/app.css', '/js/app.js', '/js/features.js', '/offline.html',
+              '/manifest.json', '/icon-192.png', '/icon-512.png'];
+
+self.addEventListener('activate', e => {
+  e.waitUntil(
+    caches.keys().then(keys => Promise.all(
+      keys.filter(k => k !== CACHE_V && k !== CACHE_NAME).map(k => caches.delete(k))
+    ))
+  );
+  return self.clients.claim();
+});
+
+// ─── Background Sync ──────────────────────────────────────────────────────────
+self.addEventListener('sync', event => {
+  if (event.tag === 'sync-trades') {
+    event.waitUntil(fetch('/api/bot/equity').catch(()=>{}));
+  }
+});
+
+// ─── Share Target ─────────────────────────────────────────────────────────────
+self.addEventListener('fetch', event => {
+  const url = new URL(event.request.url);
+  if (url.pathname === '/api/share' && event.request.method === 'POST') {
+    event.respondWith((async () => {
+      const data = await event.request.formData();
+      const title = data.get('title') || '';
+      const text  = data.get('text')  || '';
+      const u     = data.get('url')   || '';
+      return Response.redirect(`/?shared=${encodeURIComponent(title||text||u)}`, 303);
+    })());
+    return;
+  }
+});
+
+// ─── Capacitor Bridge (quando rodando como app nativo) ────────────────────────
+self.addEventListener('message', event => {
+  if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
+  if (event.data?.type === 'CAPACITOR_PUSH') {
+    const { title, body, data } = event.data.payload || {};
+    self.registration.showNotification(title || 'CryptoEdge Pro', {
+      body, icon: '/icon-192.png', badge: '/icon-32.png', data,
+      vibrate: [200, 100, 200], tag: 'cryptoedge'
+    });
+  }
+});
