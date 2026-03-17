@@ -1,5 +1,9 @@
 'use strict';
 
+// ─── Performance Utilities ───────────────────────────────────────────────────
+const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+const throttle = (fn, ms) => { let last = 0; return (...a) => { const now = Date.now(); if (now - last >= ms) { last = now; fn(...a); } }; };
+
 // ─────────────────────────────────────────────────────────────────────────────
 // PWA — Service Worker Registration
 // ─────────────────────────────────────────────────────────────────────────────

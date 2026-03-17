@@ -1,21 +1,25 @@
 """
-CryptoEdge Pro — High Frequency Trading Engine
-================================================
-Faz 20-80 operações por dia em múltiplos pares.
-Lucros pequenos (0.15%–0.5% por trade) acumulados ao longo do dia.
+CryptoEdge Pro — HFT Engine v2.0
+==================================
+Alta frequência: 20-100 operações/dia em múltiplos pares.
 
-Estratégias combinadas:
-  1. EMA Crossover (3/8) em 1m/3m — captura micro-tendências
-  2. RSI Mean Reversion (oversold/overbought extremo)  
-  3. Bollinger Band Squeeze — entra no breakout de volatilidade
-  4. VWAP Deviation — retorno à média institucional
-  5. Momentum burst — volume spike + direcional
+ESTRATÉGIAS (9 total):
+  1. EMA Micro (3/8/21)        — captura micro-tendências
+  2. RSI Mean Reversion        — reversão em extremos
+  3. Bollinger Squeeze         — breakout de volatilidade
+  4. VWAP Deviation            — retorno à média institucional
+  5. Volume Momentum           — spike + direcional
+  6. Stochastic Oscillator     — oversold/overbought com %K/%D
+  7. CCI Divergence            — Commodity Channel Index
+  8. MACD Fast (3/10/5)        — versão rápida para HFT
+  9. Price Action (Pinbar/Engulf) — padrões de 2 velas
 
-Proteção de capital:
-  - Max 3 trades simultâneos por par
-  - Cooldown automático após loss consecutivo
-  - Daily loss limit (para o dia ao atingir X% de perda)
-  - Position sizing automático (1-2% do capital por trade)
+PROTEÇÃO:
+  - Requer 2+ estratégias concordando
+  - Daily Loss Limit automático
+  - Cooldown por par
+  - Time-exit após 8 min
+  - Max 3 posições simultâneas
 """
 
 import logging, time, os, threading
@@ -24,181 +28,262 @@ from decimal import Decimal
 
 log = logging.getLogger('CryptoEdge.HFT')
 
-# ─── Config HFT ───────────────────────────────────────────────────────────────
-HFT_TP_PCT      = float(os.environ.get('HFT_TP_PCT',    '0.35'))  # Take Profit %
-HFT_SL_PCT      = float(os.environ.get('HFT_SL_PCT',    '0.18'))  # Stop Loss %
-HFT_RISK_PCT    = float(os.environ.get('HFT_RISK_PCT',   '1.5'))   # % do capital por trade
-HFT_MAX_TRADES  = int(os.environ.get('HFT_MAX_TRADES',   '3'))     # max trades simultâneos
-HFT_DAILY_LOSS  = float(os.environ.get('HFT_DAILY_LOSS', '3.0'))   # % daily loss limit
-HFT_COOLDOWN    = int(os.environ.get('HFT_COOLDOWN',     '45'))    # segundos entre trades
-HFT_PAIRS       = os.environ.get('HFT_PAIRS',
+# ─── Config ───────────────────────────────────────────────────────────────────
+HFT_TP_PCT      = float(os.environ.get('HFT_TP_PCT',     '0.35'))
+HFT_SL_PCT      = float(os.environ.get('HFT_SL_PCT',     '0.18'))
+HFT_RISK_PCT    = float(os.environ.get('HFT_RISK_PCT',    '1.5'))
+HFT_MAX_TRADES  = int(os.environ.get('HFT_MAX_TRADES',    '3'))
+HFT_DAILY_LOSS  = float(os.environ.get('HFT_DAILY_LOSS',  '3.0'))
+HFT_COOLDOWN    = int(os.environ.get('HFT_COOLDOWN',      '45'))
+HFT_TIME_EXIT   = int(os.environ.get('HFT_TIME_EXIT',     '480'))  # 8 min
+HFT_MIN_SIGNALS = int(os.environ.get('HFT_MIN_SIGNALS',   '2'))    # mínimo de estratégias concordando
+HFT_PAIRS       = [p.strip() for p in os.environ.get('HFT_PAIRS',
     'BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,MATICUSDT,DOTUSDT'
-).split(',')
-HFT_TIMEFRAME   = os.environ.get('HFT_TIMEFRAME', '1m')  # 1m = mais trades, 3m = mais preciso
-HFT_MIN_VOLUME  = float(os.environ.get('HFT_MIN_VOL_USDT', '5000000'))  # Volume 24h mínimo em USDT
+).split(',') if p.strip()]
+HFT_TIMEFRAME   = os.environ.get('HFT_TIMEFRAME', '1m')
+HFT_MIN_VOLUME  = float(os.environ.get('HFT_MIN_VOL_USDT', '5000000'))
+HFT_TESTNET     = os.environ.get('BOT_TESTNET', 'true').lower() == 'true'
 
-# ─── Estado global HFT ────────────────────────────────────────────────────────
+# ─── Engine ───────────────────────────────────────────────────────────────────
 class HFTEngine:
     def __init__(self, capital: float, client, notify_fn=None):
         self.capital        = capital
         self.client         = client
         self.notify         = notify_fn or (lambda *a, **kw: None)
         self.running        = False
-
-        # Posições abertas: {pair: {side, entry, qty, sl, tp, opened_at, trade_id}}
         self.positions: dict = {}
-        # Histórico de trades do dia
         self.trades_today: list = []
-        # P&L acumulado do dia
         self.daily_pnl      = 0.0
         self.daily_wins     = 0
         self.daily_losses   = 0
-        # Último trade por par (timestamp) — cooldown
         self.last_trade_ts: dict = {}
-        # Dados de candles por par
-        self.candles: dict  = {p: deque(maxlen=200) for p in HFT_PAIRS}
         self.closes:  dict  = {p: deque(maxlen=200) for p in HFT_PAIRS}
         self.highs:   dict  = {p: deque(maxlen=200) for p in HFT_PAIRS}
         self.lows:    dict  = {p: deque(maxlen=200) for p in HFT_PAIRS}
         self.volumes: dict  = {p: deque(maxlen=200) for p in HFT_PAIRS}
-        # Cache de sym_info por par
+        self.opens:   dict  = {p: deque(maxlen=200) for p in HFT_PAIRS}
         self._sym_info: dict = {}
-        # Lock para thread safety
         self._lock = threading.Lock()
-        # Consecutive losses tracker
         self.consec_losses  = 0
-        self.paused_until   = 0  # timestamp
+        self.paused_until   = 0
+        # Performance tracking per pair
+        self.pair_stats: dict = {p: {'wins':0,'losses':0,'pnl':0.0} for p in HFT_PAIRS}
 
     # ─── Indicadores ──────────────────────────────────────────────────────────
 
     def _ema(self, values, period):
         vals = list(values)
         if len(vals) < 2: return vals[-1] if vals else 0
-        k = 2 / (period + 1)
-        e = vals[0]
+        k = 2 / (period + 1); e = vals[0]
         for v in vals[1:]: e = v * k + e * (1 - k)
         return e
 
     def _rsi(self, closes, period=7):
-        """RSI rápido com período 7 para HFT (mais sensível)."""
         vals = list(closes)[-(period + 2):]
         if len(vals) < period + 1: return 50
         gains  = [max(vals[i] - vals[i-1], 0) for i in range(1, len(vals))]
         losses = [max(vals[i-1] - vals[i], 0) for i in range(1, len(vals))]
-        ag = sum(gains) / len(gains)
-        al = sum(losses) / len(losses)
+        ag = sum(gains)/len(gains); al = sum(losses)/len(losses)
         return 100 if al == 0 else 100 - (100 / (1 + ag / al))
 
-    def _bollinger(self, closes, period=14, stddev=2.0):
-        """Retorna (upper, mid, lower, %B, bandwidth)."""
+    def _bollinger(self, closes, period=14, std=2.0):
         vals = list(closes)[-period:]
         if len(vals) < period: return None
         mid = sum(vals) / len(vals)
-        std = (sum((v - mid) ** 2 for v in vals) / len(vals)) ** 0.5
-        upper = mid + stddev * std
-        lower = mid - stddev * std
+        sd  = (sum((v - mid)**2 for v in vals) / len(vals))**0.5
+        upper = mid + std * sd; lower = mid - std * sd
         pct_b = (vals[-1] - lower) / (upper - lower) if upper != lower else 0.5
         bw    = (upper - lower) / mid * 100 if mid else 0
         return upper, mid, lower, pct_b, bw
 
     def _vwap(self, closes, volumes, period=20):
-        """VWAP simples."""
-        c = list(closes)[-period:]
-        v = list(volumes)[-period:]
+        c = list(closes)[-period:]; v = list(volumes)[-period:]
         if not c or not v: return c[-1] if c else 0
-        total_vol = sum(v)
-        if total_vol == 0: return c[-1]
-        return sum(ci * vi for ci, vi in zip(c, v)) / total_vol
+        tv = sum(v)
+        return sum(ci*vi for ci,vi in zip(c,v)) / tv if tv > 0 else c[-1]
+
+    def _stochastic(self, closes, highs, lows, k_period=9, d_period=3):
+        """Stochastic %K e %D."""
+        c = list(closes)[-k_period:]; h = list(highs)[-k_period:]; l = list(lows)[-k_period:]
+        if len(c) < k_period: return 50, 50
+        lowest_low  = min(l); highest_high = max(h)
+        if highest_high == lowest_low: return 50, 50
+        k = (c[-1] - lowest_low) / (highest_high - lowest_low) * 100
+        # Smooth %D = SMA of last d_period %K values
+        k_vals = []
+        for i in range(d_period):
+            idx = -(d_period - i)
+            ci = list(closes)[idx-k_period:idx] if idx != 0 else list(closes)[-k_period:]
+            hi = list(highs)[idx-k_period:idx]  if idx != 0 else list(highs)[-k_period:]
+            li = list(lows)[idx-k_period:idx]   if idx != 0 else list(lows)[-k_period:]
+            if not ci or not hi or not li: continue
+            ll = min(li); hh = max(hi)
+            if hh != ll: k_vals.append((ci[-1] - ll) / (hh - ll) * 100)
+        d = sum(k_vals) / len(k_vals) if k_vals else k
+        return k, d
+
+    def _cci(self, closes, highs, lows, period=14):
+        """Commodity Channel Index."""
+        c = list(closes)[-period:]; h = list(highs)[-period:]; l = list(lows)[-period:]
+        if len(c) < period: return 0
+        typical = [(h[i] + l[i] + c[i]) / 3 for i in range(len(c))]
+        mean_tp = sum(typical) / len(typical)
+        mean_dev = sum(abs(t - mean_tp) for t in typical) / len(typical)
+        if mean_dev == 0: return 0
+        return (typical[-1] - mean_tp) / (0.015 * mean_dev)
+
+    def _macd_fast(self, closes):
+        """MACD rápido 3/10/5 para HFT."""
+        vals = list(closes)
+        if len(vals) < 15: return 0, 0, 0
+        ef = self._ema(vals[-3:], 3); es = self._ema(vals[-10:], 10)
+        ml = ef - es
+        mseries = []
+        for i in range(max(0, len(vals)-10), len(vals)):
+            ef_i = self._ema(vals[max(0,i-3):i+1], 3)
+            es_i = self._ema(vals[max(0,i-10):i+1], 10)
+            mseries.append(ef_i - es_i)
+        sl_val = self._ema(mseries[-5:], 5) if len(mseries) >= 5 else ml
+        return ml, sl_val, ml - sl_val
+
+    def _price_action(self, opens, closes, highs, lows):
+        """Detecta pinbar e engulfing de 2 velas."""
+        o = list(opens); c = list(closes); h = list(highs); l = list(lows)
+        if len(c) < 2: return None
+        # Pinbar
+        body = abs(c[-1] - o[-1]); candle_range = h[-1] - l[-1]
+        if candle_range > 0:
+            upper_wick = h[-1] - max(c[-1], o[-1])
+            lower_wick = min(c[-1], o[-1]) - l[-1]
+            if lower_wick > body * 2 and lower_wick > upper_wick * 2: return 'BUY'   # hammer
+            if upper_wick > body * 2 and upper_wick > lower_wick * 2: return 'SELL'  # shooting star
+        # Engulfing
+        prev_body = abs(c[-2] - o[-2])
+        if body > prev_body * 1.5:
+            if c[-1] > o[-1] and c[-2] < o[-2]: return 'BUY'   # bullish engulf
+            if c[-1] < o[-1] and c[-2] > o[-2]: return 'SELL'  # bearish engulf
+        return None
 
     def _atr(self, highs, lows, closes, period=7):
-        h = list(highs)[-(period+1):]
-        l = list(lows)[-(period+1):]
-        c = list(closes)[-(period+1):]
+        h = list(highs)[-(period+1):]; l = list(lows)[-(period+1):]; c = list(closes)[-(period+1):]
         if len(c) < 2: return 0
-        trs = [max(h[i]-l[i], abs(h[i]-c[i-1]), abs(l[i]-c[i-1]))
-               for i in range(1, len(c))]
+        trs = [max(h[i]-l[i], abs(h[i]-c[i-1]), abs(l[i]-c[i-1])) for i in range(1, len(c))]
         return sum(trs) / len(trs) if trs else 0
 
-    # ─── Sinal combinado ──────────────────────────────────────────────────────
+    # ─── Sinal principal — combina 9 estratégias ──────────────────────────────
 
     def _generate_signal(self, pair: str) -> dict:
-        """
-        Combina 5 estratégias e retorna o sinal consolidado.
-        Retorna: {'side': 'BUY'|'SELL'|None, 'score': 0-5, 'reason': str}
-        """
         closes  = self.closes[pair]
         highs   = self.highs[pair]
         lows    = self.lows[pair]
         volumes = self.volumes[pair]
+        opens   = self.opens[pair]
 
         if len(closes) < 30: return {'side': None, 'score': 0, 'reason': 'aguardando dados'}
 
         close   = closes[-1]
-        signals = []  # ('BUY'|'SELL', reason)
+        signals = []  # (side, reason, weight)
 
-        # ── 1. EMA Crossover 3/8 (micro-tendência) ───────────────────────────
-        ema3 = self._ema(list(closes)[-3:], 3)
-        ema8 = self._ema(list(closes)[-8:], 8)
-        ema21= self._ema(list(closes)[-21:], 21)
-
+        # ── 1. EMA Micro (3/8/21) ─────────────────────────────────────────────
+        ema3  = self._ema(list(closes)[-3:],  3)
+        ema8  = self._ema(list(closes)[-8:],  8)
+        ema21 = self._ema(list(closes)[-21:], 21)
         if ema3 > ema8 * 1.0003 and ema8 > ema21:
-            signals.append(('BUY',  f'EMA3>{ema8:.0f} bull'))
+            signals.append(('BUY',  'EMA micro bull', 1.0))
         elif ema3 < ema8 * 0.9997 and ema8 < ema21:
-            signals.append(('SELL', f'EMA3<{ema8:.0f} bear'))
+            signals.append(('SELL', 'EMA micro bear', 1.0))
 
-        # ── 2. RSI extremo (mean reversion) ──────────────────────────────────
+        # ── 2. RSI Extremo (período 7) ───────────────────────────────────────
         rsi_val = self._rsi(closes)
-        if rsi_val < 28:
-            signals.append(('BUY',  f'RSI sobrevendido {rsi_val:.0f}'))
-        elif rsi_val > 72:
-            signals.append(('SELL', f'RSI sobrecomprado {rsi_val:.0f}'))
+        if   rsi_val < 25: signals.append(('BUY',  f'RSI oversold {rsi_val:.0f}',  1.5))
+        elif rsi_val < 32: signals.append(('BUY',  f'RSI low {rsi_val:.0f}',       0.8))
+        elif rsi_val > 75: signals.append(('SELL', f'RSI overbought {rsi_val:.0f}',1.5))
+        elif rsi_val > 68: signals.append(('SELL', f'RSI high {rsi_val:.0f}',      0.8))
 
-        # ── 3. Bollinger Band extremo ─────────────────────────────────────────
+        # ── 3. Bollinger Bands ───────────────────────────────────────────────
         bb = self._bollinger(closes)
         if bb:
             upper, mid, lower, pct_b, bw = bb
-            if pct_b < 0.05 and bw > 0.3:   # tocou banda inferior + volatilidade ok
-                signals.append(('BUY',  f'BB lower pctB={pct_b:.2f}'))
-            elif pct_b > 0.95 and bw > 0.3:  # tocou banda superior
-                signals.append(('SELL', f'BB upper pctB={pct_b:.2f}'))
+            if   pct_b < 0.03 and bw > 0.25: signals.append(('BUY',  f'BB lower {pct_b:.2f}', 1.2))
+            elif pct_b < 0.10 and bw > 0.20: signals.append(('BUY',  f'BB near lower',        0.7))
+            elif pct_b > 0.97 and bw > 0.25: signals.append(('SELL', f'BB upper {pct_b:.2f}', 1.2))
+            elif pct_b > 0.90 and bw > 0.20: signals.append(('SELL', f'BB near upper',        0.7))
 
-        # ── 4. VWAP Deviation ────────────────────────────────────────────────
+        # ── 4. VWAP Deviation ───────────────────────────────────────────────
         vwap = self._vwap(closes, volumes)
         dev  = (close - vwap) / vwap * 100 if vwap else 0
-        if dev < -0.4:   # preço 0.4% abaixo do VWAP → retorno à média
-            signals.append(('BUY',  f'VWAP dev {dev:.2f}%'))
-        elif dev > 0.4:
-            signals.append(('SELL', f'VWAP dev {dev:.2f}%'))
+        if   dev < -0.5: signals.append(('BUY',  f'VWAP dev {dev:.2f}%', 1.2))
+        elif dev < -0.3: signals.append(('BUY',  f'VWAP slight {dev:.2f}%', 0.6))
+        elif dev >  0.5: signals.append(('SELL', f'VWAP dev +{dev:.2f}%', 1.2))
+        elif dev >  0.3: signals.append(('SELL', f'VWAP slight +{dev:.2f}%', 0.6))
 
-        # ── 5. Momentum (volume spike + candle direcional) ───────────────────
-        vols  = list(volumes)
+        # ── 5. Volume Momentum ───────────────────────────────────────────────
+        vols = list(volumes)
         if len(vols) >= 6:
-            avg_vol = sum(vols[-6:-1]) / 5
+            avg_vol  = sum(vols[-6:-1]) / 5
             last_vol = vols[-1]
-            if avg_vol > 0 and last_vol > avg_vol * 2.0:
-                candle_list = list(closes)
-                c_open  = candle_list[-2]
-                c_close = candle_list[-1]
-                if c_close > c_open * 1.001:
-                    signals.append(('BUY',  f'Volume spike {last_vol/avg_vol:.1f}x bull'))
-                elif c_close < c_open * 0.999:
-                    signals.append(('SELL', f'Volume spike {last_vol/avg_vol:.1f}x bear'))
+            if avg_vol > 0 and last_vol > avg_vol * 1.8:
+                cls = list(closes)
+                if cls[-1] > cls[-2] * 1.001:
+                    signals.append(('BUY',  f'Vol spike {last_vol/avg_vol:.1f}x↑', 1.3))
+                elif cls[-1] < cls[-2] * 0.999:
+                    signals.append(('SELL', f'Vol spike {last_vol/avg_vol:.1f}x↓', 1.3))
 
-        # ── Consolidar sinais ─────────────────────────────────────────────────
-        buys  = [r for s, r in signals if s == 'BUY']
-        sells = [r for s, r in signals if s == 'SELL']
+        # ── 6. Stochastic ───────────────────────────────────────────────────
+        if len(closes) >= 12:
+            stk, std = self._stochastic(closes, highs, lows)
+            if   stk < 20 and std < 25 and stk > std * 0.9:
+                signals.append(('BUY',  f'Stoch oversold K={stk:.0f}', 1.1))
+            elif stk > 80 and std > 75 and stk < std * 1.1:
+                signals.append(('SELL', f'Stoch overbought K={stk:.0f}', 1.1))
 
-        # Requer pelo menos 2 sinais na mesma direção para entrar
-        if len(buys) >= 2 and len(buys) > len(sells):
-            return {'side': 'BUY',  'score': len(buys), 'reason': ' + '.join(buys[:3]),
-                    'rsi': rsi_val, 'price': close}
-        if len(sells) >= 2 and len(sells) > len(buys):
-            return {'side': 'SELL', 'score': len(sells), 'reason': ' + '.join(sells[:3]),
-                    'rsi': rsi_val, 'price': close}
+        # ── 7. CCI ──────────────────────────────────────────────────────────
+        if len(closes) >= 14:
+            cci_val = self._cci(closes, highs, lows)
+            if   cci_val < -120: signals.append(('BUY',  f'CCI {cci_val:.0f} oversold', 1.0))
+            elif cci_val >  120: signals.append(('SELL', f'CCI {cci_val:.0f} overbought', 1.0))
 
-        return {'side': None, 'score': 0, 'reason': f'sem consenso (B:{len(buys)} S:{len(sells)})'}
+        # ── 8. MACD Fast (3/10/5) ───────────────────────────────────────────
+        if len(closes) >= 15:
+            ml, sl, hist = self._macd_fast(closes)
+            prev_hist = list(closes)  # need previous candle
+            if hist > 0 and hist > abs(ml) * 0.1:
+                signals.append(('BUY',  f'MACD fast cross↑ {hist:.4f}', 0.9))
+            elif hist < 0 and abs(hist) > abs(ml) * 0.1:
+                signals.append(('SELL', f'MACD fast cross↓ {hist:.4f}', 0.9))
 
-    # ─── Gestão de posição ────────────────────────────────────────────────────
+        # ── 9. Price Action (Pinbar / Engulfing) ────────────────────────────
+        if len(opens) >= 2:
+            pa = self._price_action(opens, closes, highs, lows)
+            if pa == 'BUY':
+                signals.append(('BUY',  'Pinbar/Engulf bullish', 1.4))
+            elif pa == 'SELL':
+                signals.append(('SELL', 'Pinbar/Engulf bearish', 1.4))
+
+        # ── Consolidar com peso ──────────────────────────────────────────────
+        buy_score  = sum(w for s, r, w in signals if s == 'BUY')
+        sell_score = sum(w for s, r, w in signals if s == 'SELL')
+        buy_count  = sum(1 for s, r, w in signals if s == 'BUY')
+        sell_count = sum(1 for s, r, w in signals if s == 'SELL')
+
+        # Detectar divergência (não entra se score dividido)
+        if buy_score > 0 and sell_score > 0:
+            if buy_score / (buy_score + sell_score) < 0.70 and sell_score / (buy_score + sell_score) < 0.70:
+                return {'side': None, 'score': 0, 'reason': f'divergência (B:{buy_score:.1f} S:{sell_score:.1f})'}
+
+        reasons_buy  = [r for s, r, w in signals if s == 'BUY'][:3]
+        reasons_sell = [r for s, r, w in signals if s == 'SELL'][:3]
+
+        if buy_count >= HFT_MIN_SIGNALS and buy_score > sell_score * 1.3:
+            return {'side': 'BUY',  'score': buy_score,  'count': buy_count,
+                    'reason': ' + '.join(reasons_buy), 'rsi': rsi_val, 'price': close}
+        if sell_count >= HFT_MIN_SIGNALS and sell_score > buy_score * 1.3:
+            return {'side': 'SELL', 'score': sell_score, 'count': sell_count,
+                    'reason': ' + '.join(reasons_sell), 'rsi': rsi_val, 'price': close}
+
+        return {'side': None, 'score': 0, 'reason': f'sem consenso (B:{buy_count} S:{sell_count})'}
+
+    # ─── Gestão de ordens ─────────────────────────────────────────────────────
 
     def _get_sym_info(self, pair: str) -> dict:
         if pair not in self._sym_info:
@@ -211,7 +296,7 @@ class HFTEngine:
                     'min_notional': 10.0,
                 }
             except Exception as e:
-                log.warning(f'  HFT: sym_info {pair} falhou: {e}')
+                log.warning(f'  HFT: sym_info {pair} erro: {e}')
                 self._sym_info[pair] = {'min_qty': 0.001, 'step': 0.001, 'min_notional': 10.0}
         return self._sym_info[pair]
 
@@ -220,285 +305,197 @@ class HFTEngine:
         return round(float(Decimal(str(v)) // Decimal(str(step)) * Decimal(str(step))), prec)
 
     def _calc_qty(self, pair: str, price: float) -> float:
-        """Calcula quantidade baseado no % de risco."""
         if price <= 0: return 0
-        info    = self._get_sym_info(pair)
-        budget  = self.capital * (HFT_RISK_PCT / 100)
-        qty     = self._round_step(budget / price, info['step'])
+        info   = self._get_sym_info(pair)
+        budget = self.capital * (HFT_RISK_PCT / 100)
+        qty    = self._round_step(budget / price, info['step'])
         if qty < info['min_qty']:
             qty = self._round_step(info['min_notional'] / price * 1.05, info['step'])
         return qty if qty >= info['min_qty'] else 0
 
-    def _open_position(self, pair: str, side: str, price: float, reason: str):
-        """Abre posição real na Binance."""
-        import time as _time
+    def _open_position(self, pair: str, side: str, price: float, reason: str) -> bool:
         qty = self._calc_qty(pair, price)
-        if qty <= 0:
-            log.warning(f'  HFT {pair}: qty=0 — pulando')
-            return False
+        if qty <= 0: return False
 
-        tp_pct = HFT_TP_PCT / 100
-        sl_pct = HFT_SL_PCT / 100
+        # Dynamic TP/SL based on ATR when available
+        atr_val = self._atr(self.highs[pair], self.lows[pair], self.closes[pair])
+        tp_dist = max(atr_val * 1.5, price * HFT_TP_PCT / 100)
+        sl_dist = max(atr_val * 0.8, price * HFT_SL_PCT / 100)
+
         if side == 'BUY':
-            tp = price * (1 + tp_pct)
-            sl = price * (1 - sl_pct)
+            tp = price + tp_dist; sl = price - sl_dist
         else:
-            tp = price * (1 - tp_pct)
-            sl = price * (1 + sl_pct)
+            tp = price - tp_dist; sl = price + sl_dist
+
+        tp_pct = abs(tp - price) / price * 100
+        sl_pct = abs(sl - price) / price * 100
 
         from binance.enums import SIDE_BUY, SIDE_SELL, ORDER_TYPE_MARKET
         b_side = SIDE_BUY if side == 'BUY' else SIDE_SELL
 
         try:
-            if os.environ.get('BOT_TESTNET', 'true').lower() == 'true':
-                log.info(f'  [TESTNET] HFT {pair} {side} {qty:.6f} @ {price:,.2f}')
-                order_id = int(_time.time())
+            if HFT_TESTNET:
+                log.info(f'  [TESTNET] HFT {pair} {side} {qty:.6f} @ ${price:,.4f} | TP ${tp:,.4f} | SL ${sl:,.4f}')
+                order_id = int(time.time())
             else:
                 order = self.client.create_order(
-                    symbol=pair, side=b_side,
-                    type=ORDER_TYPE_MARKET, quantity=qty
-                )
+                    symbol=pair, side=b_side, type=ORDER_TYPE_MARKET, quantity=qty)
                 order_id = order.get('orderId', 0)
-                price = float(order.get('fills', [{}])[0].get('price', price)) if order.get('fills') else price
+                fills = order.get('fills', [])
+                if fills: price = sum(float(f['price'])*float(f['qty']) for f in fills) / sum(float(f['qty']) for f in fills)
 
-            trade_id = f'hft_{pair}_{int(_time.time())}'
-            self.positions[f'{pair}_{side}'] = {
-                'pair': pair, 'side': side, 'entry': price,
-                'qty': qty, 'sl': sl, 'tp': tp,
-                'opened_at': _time.time(), 'trade_id': trade_id,
+            key = f'{pair}_{int(time.time()*1000)}'
+            self.positions[key] = {
+                'pair': pair, 'side': side, 'entry': price, 'qty': qty,
+                'sl': sl, 'tp': tp, 'opened_at': time.time(),
                 'order_id': order_id, 'reason': reason
             }
-            self.last_trade_ts[pair] = _time.time()
-
-            rr = tp_pct / sl_pct
-            log.info(f'  ✅ HFT ABRIU {side} {pair} @ ${price:,.4f} '
-                     f'| TP ${tp:,.4f} (+{HFT_TP_PCT}%) '
-                     f'| SL ${sl:,.4f} (-{HFT_SL_PCT}%) '
-                     f'| R:R 1:{rr:.1f} | {reason}')
-
+            self.last_trade_ts[pair] = time.time()
+            rr = tp_pct / sl_pct if sl_pct > 0 else 0
+            log.info(f'  ⚡ HFT {side} {pair} @ ${price:,.4f} | TP +{tp_pct:.2f}% | SL -{sl_pct:.2f}% | R:R 1:{rr:.1f} | {reason}')
             self.notify(
-                f'🤖 <b>HFT {side} — {pair}</b>\n'
-                f'💲 Entrada: <code>${price:,.4f}</code>\n'
-                f'🎯 TP: <code>${tp:,.4f}</code> <i>(+{HFT_TP_PCT}%)</i>\n'
-                f'🛡 SL: <code>${sl:,.4f}</code> <i>(-{HFT_SL_PCT}%)</i>\n'
-                f'⚖️ R:R 1:{rr:.1f} | 📦 Qty: {qty}\n'
-                f'💡 {reason}'
+                f'⚡ <b>HFT {side} — {pair}</b>\n'
+                f'💲 <code>${price:,.4f}</code>  🎯 <code>${tp:,.4f}</code> (+{tp_pct:.2f}%)  🛡 <code>${sl:,.4f}</code> (-{sl_pct:.2f}%)\n'
+                f'📦 {qty} | ⚖️ 1:{rr:.1f} | {reason}'
             )
             return True
         except Exception as e:
-            log.error(f'  ❌ HFT {pair}: erro ao abrir: {e}')
+            log.error(f'  ❌ HFT {pair} {side}: {e}')
             return False
 
     def _close_position(self, key: str, price: float, reason: str):
-        """Fecha posição e calcula P&L."""
-        import time as _time
         pos = self.positions.get(key)
         if not pos: return
-
-        pair = pos['pair']
-        side = pos['side']
-        qty  = pos['qty']
+        pair = pos['pair']; side = pos['side']; qty = pos['qty']
 
         from binance.enums import SIDE_BUY, SIDE_SELL, ORDER_TYPE_MARKET
         close_side = SIDE_SELL if side == 'BUY' else SIDE_BUY
 
         try:
-            if os.environ.get('BOT_TESTNET', 'true').lower() == 'true':
-                log.info(f'  [TESTNET] HFT FECHA {pair} {close_side} {qty:.6f} @ {price:,.2f}')
-            else:
-                self.client.create_order(
-                    symbol=pair, side=close_side,
-                    type=ORDER_TYPE_MARKET, quantity=qty
-                )
+            if not HFT_TESTNET:
+                self.client.create_order(symbol=pair, side=close_side, type=ORDER_TYPE_MARKET, quantity=qty)
         except Exception as e:
-            log.error(f'  ❌ HFT {pair}: erro ao fechar: {e}')
+            log.error(f'  ❌ HFT close {pair}: {e}')
 
-        # P&L
-        if side == 'BUY':
-            pnl = (price - pos['entry']) * qty
-        else:
-            pnl = (pos['entry'] - price) * qty
-
+        pnl = (price - pos['entry']) * qty if side == 'BUY' else (pos['entry'] - price) * qty
         self.daily_pnl += pnl
-        duration = _time.time() - pos['opened_at']
-
+        duration = time.time() - pos['opened_at']
         win = pnl > 0
-        if win:
-            self.daily_wins += 1
-            self.consec_losses = 0
-            icon = '✅'
-        else:
-            self.daily_losses += 1
-            self.consec_losses += 1
-            icon = '❌'
+        if win:  self.daily_wins   += 1; self.consec_losses = 0; icon = '✅'
+        else:    self.daily_losses += 1; self.consec_losses += 1; icon = '❌'
 
-        trade_record = {
-            'pair': pair, 'side': side,
-            'entry': pos['entry'], 'exit': price,
-            'qty': qty, 'pnl': pnl,
-            'duration': duration, 'reason': reason,
-            'ts': _time.time()
-        }
-        self.trades_today.append(trade_record)
+        if pair in self.pair_stats:
+            s = self.pair_stats[pair]
+            if win: s['wins'] += 1
+            else:   s['losses'] += 1
+            s['pnl'] += pnl
 
-        total_trades = self.daily_wins + self.daily_losses
-        wr = self.daily_wins / total_trades * 100 if total_trades else 0
-
-        log.info(
-            f'  {icon} HFT FECHOU {side} {pair} | '
-            f'Entrada ${pos["entry"]:,.4f} → Saída ${price:,.4f} | '
-            f'P&L ${pnl:+.4f} | {duration:.0f}s | {reason}\n'
-            f'  📊 Hoje: {self.daily_wins}W/{self.daily_losses}L WR:{wr:.0f}% '
-            f'PnL acumulado: ${self.daily_pnl:+.4f}'
-        )
-
-        self.notify(
-            f'{icon} <b>HFT FECHOU {side} — {pair}</b>\n'
-            f'💰 P&L: <code>${pnl:+.4f}</code>\n'
-            f'⏱ Duração: {int(duration)}s\n'
-            f'📊 Hoje: {self.daily_wins}W/{self.daily_losses}L WR:{wr:.0f}% '
-            f'PnL: <code>${self.daily_pnl:+.4f}</code>\n'
-            f'💡 {reason}'
-        )
-
+        self.trades_today.append({
+            'pair': pair, 'side': side, 'entry': pos['entry'], 'exit': price,
+            'qty': qty, 'pnl': pnl, 'duration': duration, 'reason': reason, 'ts': time.time()
+        })
         del self.positions[key]
 
-        # Cooldown automático após losses consecutivos
+        total = self.daily_wins + self.daily_losses
+        wr    = self.daily_wins / total * 100 if total else 0
+        log.info(f'  {icon} HFT FECHA {pair} | ${pnl:+.4f} | {int(duration)}s | {reason} | Hoje: {total}T WR:{wr:.0f}% PnL:${self.daily_pnl:+.4f}')
+        self.notify(
+            f'{icon} <b>HFT fechou {pair}</b> P&L: <code>${pnl:+.4f}</code> ({int(duration)}s)\n'
+            f'📊 Hoje: {total} trades | WR:{wr:.0f}% | PnL total: <code>${self.daily_pnl:+.4f}</code>'
+        )
+
         if self.consec_losses >= 3:
-            pause = HFT_COOLDOWN * (self.consec_losses - 1)
-            self.paused_until = _time.time() + pause
-            log.warning(f'  ⏸ HFT: {self.consec_losses} losses seguidos — pausando {pause}s')
-            self.notify(f'⏸ <b>HFT pausado por {pause}s</b> ({self.consec_losses} losses seguidos)')
+            pause = HFT_COOLDOWN * self.consec_losses
+            self.paused_until = time.time() + pause
+            log.warning(f'  ⏸ HFT: {self.consec_losses} losses → pausa {pause}s')
+            self.notify(f'⏸ <b>HFT pausado {pause}s</b> ({self.consec_losses} losses seguidos)')
 
     def _check_exit(self, pair: str, price: float):
-        """Verifica se deve fechar posições abertas para este par."""
-        to_close = []
         for key, pos in list(self.positions.items()):
             if pos['pair'] != pair: continue
             side = pos['side']
+            age  = time.time() - pos['opened_at']
             if side == 'BUY':
-                if price >= pos['tp']:
-                    to_close.append((key, price, f'TP atingido +{HFT_TP_PCT}%'))
-                elif price <= pos['sl']:
-                    to_close.append((key, price, f'SL atingido -{HFT_SL_PCT}%'))
-                # Time-based exit: se trade aberto há mais de 8 minutos e não atingiu TP/SL
-                elif price > pos['entry'] * 1.001:
-                    import time as _t
-                    age = _t.time() - pos['opened_at']
-                    if age > 480:
-                        to_close.append((key, price, f'Time-exit +{(price-pos["entry"])/pos["entry"]*100:.2f}%'))
-            else:  # SELL
-                if price <= pos['tp']:
-                    to_close.append((key, price, f'TP atingido +{HFT_TP_PCT}%'))
-                elif price >= pos['sl']:
-                    to_close.append((key, price, f'SL atingido -{HFT_SL_PCT}%'))
-                elif price < pos['entry'] * 0.999:
-                    import time as _t
-                    age = _t.time() - pos['opened_at']
-                    if age > 480:
-                        to_close.append((key, price, f'Time-exit +{(pos["entry"]-price)/pos["entry"]*100:.2f}%'))
-
-        for key, px, reason in to_close:
-            self._close_position(key, px, reason)
-
-    # ─── Loop principal ────────────────────────────────────────────────────────
+                if price >= pos['tp']: self._close_position(key, price, f'TP +{(price/pos["entry"]-1)*100:.2f}%')
+                elif price <= pos['sl']: self._close_position(key, price, f'SL -{(1-price/pos["entry"])*100:.2f}%')
+                elif age > HFT_TIME_EXIT and price > pos['entry']: self._close_position(key, price, f'Time-exit profit')
+                elif age > HFT_TIME_EXIT * 2: self._close_position(key, price, f'Time-exit max')
+            else:
+                if price <= pos['tp']: self._close_position(key, price, f'TP +{(pos["entry"]/price-1)*100:.2f}%')
+                elif price >= pos['sl']: self._close_position(key, price, f'SL -{(price/pos["entry"]-1)*100:.2f}%')
+                elif age > HFT_TIME_EXIT and price < pos['entry']: self._close_position(key, price, f'Time-exit profit')
+                elif age > HFT_TIME_EXIT * 2: self._close_position(key, price, f'Time-exit max')
 
     def on_candle(self, pair: str, open_: float, high: float, low: float,
                   close: float, volume: float, is_closed: bool):
-        """Chamado a cada tick/vela por par. Thread-safe."""
-        import time as _time
+        # Registra dados
+        if pair not in self.closes:
+            self.closes[pair]  = deque(maxlen=200)
+            self.highs[pair]   = deque(maxlen=200)
+            self.lows[pair]    = deque(maxlen=200)
+            self.volumes[pair] = deque(maxlen=200)
+            self.opens[pair]   = deque(maxlen=200)
 
-        # Atualiza dados
         self.closes[pair].append(close)
         self.highs[pair].append(high)
         self.lows[pair].append(low)
         self.volumes[pair].append(volume)
+        self.opens[pair].append(open_)
 
-        # Checa exits a cada tick (não só em vela fechada)
+        # Checa saídas a cada tick
         self._check_exit(pair, close)
+        if not is_closed: return
 
-        if not is_closed: return  # só processa sinais em velas fechadas
+        now = time.time()
 
-        now = _time.time()
-
-        # Checa pausa por losses
-        if self.paused_until > now:
-            remaining = self.paused_until - now
-            log.debug(f'  HFT {pair}: pausado ({remaining:.0f}s restantes)')
-            return
-
-        # Checa daily loss limit
-        daily_loss_pct = abs(self.daily_pnl) / self.capital * 100
-        if self.daily_pnl < 0 and daily_loss_pct >= HFT_DAILY_LOSS:
+        # Guards
+        if not self.running: return
+        if self.paused_until > now: return
+        daily_loss_pct = abs(self.daily_pnl) / self.capital * 100 if self.daily_pnl < 0 else 0
+        if daily_loss_pct >= HFT_DAILY_LOSS:
             if self.running:
-                log.warning(f'  🛑 HFT: Daily loss limit {HFT_DAILY_LOSS}% atingido! '
-                             f'PnL: ${self.daily_pnl:.4f}. Bot parando por hoje.')
-                self.notify(
-                    f'🛑 <b>HFT Daily Loss Limit atingido!</b>\n'
-                    f'Perda do dia: <code>${self.daily_pnl:.4f}</code> ({daily_loss_pct:.1f}%)\n'
-                    f'Limite: {HFT_DAILY_LOSS}%\n'
-                    f'Bot pausado até meia-noite. Reinicie amanhã.'
-                )
                 self.running = False
+                self.notify(f'🛑 <b>HFT Daily Loss {HFT_DAILY_LOSS}% atingido</b> | PnL: ${self.daily_pnl:.4f}\nBot pausado até amanhã.')
             return
+        if now - self.last_trade_ts.get(pair, 0) < HFT_COOLDOWN: return
+        if sum(1 for k in self.positions if k.startswith(pair)) >= 1: return
+        if len(self.positions) >= HFT_MAX_TRADES: return
 
-        # Cooldown por par
-        last_ts = self.last_trade_ts.get(pair, 0)
-        if now - last_ts < HFT_COOLDOWN:
-            return
-
-        # Max trades ativos
-        active_on_pair = sum(1 for k in self.positions if k.startswith(pair))
-        total_active   = len(self.positions)
-        if active_on_pair >= 1 or total_active >= HFT_MAX_TRADES:
-            return
-
-        # Gera sinal
         with self._lock:
-            signal = self._generate_signal(pair)
+            sig = self._generate_signal(pair)
 
-        if signal['side'] is None:
-            return
-
-        # Abre posição
-        log.info(f'  📡 HFT SINAL {signal["side"]} {pair} | '
-                 f'score={signal["score"]} | {signal["reason"]}')
-        self._open_position(pair, signal['side'], close, signal['reason'])
+        if sig['side']:
+            log.info(f'  📡 HFT {sig["side"]} {pair} score={sig["score"]:.1f} ({sig["count"]} sinals) | {sig["reason"]}')
+            self._open_position(pair, sig['side'], close, sig['reason'])
 
     def get_stats(self) -> dict:
-        """Retorna estatísticas do dia."""
         total = self.daily_wins + self.daily_losses
-        wr    = self.daily_wins / total * 100 if total else 0
         return {
-            'daily_pnl':    self.daily_pnl,
-            'daily_wins':   self.daily_wins,
-            'daily_losses': self.daily_losses,
-            'win_rate':     wr,
-            'total_trades': total,
+            'daily_pnl':   round(self.daily_pnl, 4),
+            'daily_wins':  self.daily_wins,
+            'daily_losses':self.daily_losses,
+            'win_rate':    round(self.daily_wins / total * 100, 1) if total else 0,
+            'total_trades':total,
             'open_positions': len(self.positions),
-            'pairs': list(set(p['pair'] for p in self.positions.values())),
+            'pairs':       list(set(p['pair'] for p in self.positions.values())),
+            'pair_stats':  self.pair_stats,
+            'consec_losses': self.consec_losses,
         }
 
     def reset_daily(self):
-        """Reset de contadores para o novo dia."""
-        log.info(f'  🔄 HFT: Reset diário. Fechando {len(self.positions)} posições abertas.')
-        self.daily_pnl      = 0.0
-        self.daily_wins     = 0
-        self.daily_losses   = 0
-        self.trades_today   = []
-        self.consec_losses  = 0
-        self.paused_until   = 0
-        self.running        = True
-        log.info('  ✅ HFT: Novo dia iniciado!')
+        log.info(f'  🔄 HFT reset diário | Fechando {len(self.positions)} posições')
+        self.daily_pnl = 0.0; self.daily_wins = 0; self.daily_losses = 0
+        self.trades_today = []; self.consec_losses = 0; self.paused_until = 0
+        self.pair_stats = {p: {'wins':0,'losses':0,'pnl':0.0} for p in HFT_PAIRS}
+        self.running = True
+        log.info('  ✅ HFT novo dia iniciado')
 
 
-# ─── Instância global (criada em gridbot.main) ─────────────────────────────────
+# ─── Singleton ────────────────────────────────────────────────────────────────
 _hft_engine: HFTEngine = None
 
-def get_hft_engine() -> HFTEngine:
-    return _hft_engine
-
-def init_hft(capital: float, client, notify_fn=None) -> HFTEngine:
+def get_hft_engine() -> HFTEngine: return _hft_engine
+def init_hft(capital, client, notify_fn=None) -> HFTEngine:
     global _hft_engine
     _hft_engine = HFTEngine(capital, client, notify_fn)
     _hft_engine.running = True

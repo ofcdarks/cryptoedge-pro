@@ -9,6 +9,7 @@ const crypto       = require('crypto');
 const bcrypt       = require('bcrypt');
 const rateLimit    = require('express-rate-limit');
 const helmet       = require('helmet');
+const compression  = require('compression');
 const nodemailer   = require('nodemailer');
 const { execSync, execFile, spawn } = require('child_process');
 
@@ -43,6 +44,7 @@ const emailTpls = require('./templates/email');
 if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
 
 // ─── Security Headers ──────────────────────────────────────────────────────────
+app.use(compression({ threshold: 1024 }));
 app.use(helmet({
   contentSecurityPolicy: false, // TradingView requires relaxed CSP
   crossOriginEmbedderPolicy: false,
