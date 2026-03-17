@@ -56,6 +56,18 @@
     }
     // Handle deep links from shortcuts
     const urlP = new URLSearchParams(location.search);
+    // Auto-fill invite code from URL
+    const invParam = urlP.get('invite');
+    if (invParam) {
+      document.addEventListener('DOMContentLoaded', () => {
+        const field = document.getElementById('reg-invite');
+        if (field) { field.value = invParam.toUpperCase(); }
+        // Switch to register tab if present
+        const regTab = document.getElementById('tab-register');
+        if (regTab) regTab.click();
+      });
+    }
+
     const panel = urlP.get('panel');
     if (panel) { document.addEventListener('DOMContentLoaded', () => {
       const nav = document.querySelector('[data-panel="'+panel+'"]');
@@ -560,6 +572,13 @@
           <div style="position:relative;height:150px"><canvas id="equity-canvas"></canvas></div>
         </div>
 
+        <!-- HFT Live Banner (only when HFT running) -->
+        <div id="hft-live-banner" style="display:none;padding:10px 14px;background:rgba(83,63,171,.1);border:1px solid rgba(83,63,171,.3);border-radius:8px;margin-bottom:10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <div style="display:flex;align-items:center;gap:6px"><div style="width:8px;height:8px;border-radius:50%;background:#533FAB;animation:pulse 1.5s infinite" id="hft-live-dot"></div><span style="font-size:12px;font-weight:600;color:#8b7fff">⚡ HFT ATIVO</span></div>
+          <div style="font-size:12px;color:var(--t2)">Hoje: <b id="hft-dash-trades">0</b> trades · <b id="hft-dash-wr" style="color:var(--green)">—</b> WR · PnL: <b id="hft-dash-pnl" style="color:var(--green)">$0.00</b></div>
+          <a onclick="document.querySelector('[data-panel=hft]').click()" style="margin-left:auto;font-size:11px;color:#8b7fff;cursor:pointer">Ver painel →</a>
+        </div>
+
         <!-- Metric strip -->
         <div class="grid g4" style="margin-bottom:10px">
           <div class="metric"><label>P&L Hoje</label><div class="val green" id="d-pnl">$0.00</div><div class="sub" id="d-trades-sub">0 trades</div></div>
@@ -570,6 +589,34 @@
             <div class="sub" id="d-bal-sub">Clique para carregar</div>
           </div>
           <div class="metric"><label>Fear & Greed</label><div class="val" id="d-fng-val">—</div><div class="sub" id="d-fng-label">Carregando...</div></div>
+        </div>
+
+        <!-- Performance Stats Strip -->
+        <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-bottom:8px">
+          <div style="background:var(--bg2);border-radius:6px;padding:8px;text-align:center;cursor:pointer" title="Retorno ajustado ao risco. >1 bom, >2 excelente">
+            <div id="ps-sharpe" style="font-family:var(--mono);font-size:13px;font-weight:600">—</div>
+            <div style="font-size:9px;color:var(--t3);margin-top:1px">Sharpe</div>
+          </div>
+          <div style="background:var(--bg2);border-radius:6px;padding:8px;text-align:center" title="Lucro total ÷ Perda total. >1.5 é bom">
+            <div id="ps-pf" style="font-family:var(--mono);font-size:13px;font-weight:600">—</div>
+            <div style="font-size:9px;color:var(--t3);margin-top:1px">Profit Factor</div>
+          </div>
+          <div style="background:var(--bg2);border-radius:6px;padding:8px;text-align:center">
+            <div id="ps-avg-win" style="font-family:var(--mono);font-size:13px;font-weight:600;color:var(--green)">—</div>
+            <div style="font-size:9px;color:var(--t3);margin-top:1px">Avg Win</div>
+          </div>
+          <div style="background:var(--bg2);border-radius:6px;padding:8px;text-align:center">
+            <div id="ps-avg-loss" style="font-family:var(--mono);font-size:13px;font-weight:600;color:var(--red)">—</div>
+            <div style="font-size:9px;color:var(--t3);margin-top:1px">Avg Loss</div>
+          </div>
+          <div style="background:var(--bg2);border-radius:6px;padding:8px;text-align:center" title="Maior sequência de wins consecutivos">
+            <div id="ps-streak" style="font-family:var(--mono);font-size:13px;font-weight:600;color:var(--gold)">—</div>
+            <div style="font-size:9px;color:var(--t3);margin-top:1px">Best Streak</div>
+          </div>
+          <div style="background:var(--bg2);border-radius:6px;padding:8px;text-align:center">
+            <div id="ps-avg-dur" style="font-family:var(--mono);font-size:13px;font-weight:600">—</div>
+            <div style="font-size:9px;color:var(--t3);margin-top:1px">Avg Duração</div>
+          </div>
         </div>
 
         <!-- Main: Big chart + sidebar -->
@@ -1623,6 +1670,7 @@
                 <select id="bt-strategy" onchange="btStratChange()">
                   <option value="trend">Trend (EMA Cross)</option>
                   <option value="macd">MACD</option>
+                  <option value="hft">⚡ HFT (Multi-indicador)</option>
                   <option value="breakout">Breakout</option>
                   <option value="scalping">Scalping RSI</option>
                   <option value="pattern">Pattern AI</option>
@@ -1661,6 +1709,20 @@
             </div>
             <div id="bt-sp-breakout" style="display:none">
               <div class="field" style="margin-bottom:10px"><label>Lookback (velas S/R)</label><input type="number" id="bt-lookback" value="20"></div>
+            </div>
+
+            <!-- HFT-specific params (shown when strategy=hft) -->
+            <div id="bt-hft-params" style="display:none;margin-bottom:10px;padding:10px;border-radius:6px;background:rgba(83,63,171,.08);border:1px solid rgba(83,63,171,.3)">
+              <div style="font-size:11px;font-weight:600;color:#8b7fff;margin-bottom:8px">⚡ Parâmetros HFT</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+                <div class="field"><label>Take Profit (%)</label><input type="number" id="bt-hft-tp" value="0.35" step="0.05" min="0.1"></div>
+                <div class="field"><label>Stop Loss (%)</label><input type="number" id="bt-hft-sl" value="0.18" step="0.05" min="0.05"></div>
+                <div class="field"><label>Min Sinais</label><select id="bt-hft-minsig">
+                  <option value="2">2 — agressivo</option>
+                  <option value="3" selected>3 — moderado</option>
+                  <option value="4">4 — conservador</option>
+                </select></div>
+              </div>
             </div>
 
             <button class="btn btn-gold btn-full" id="bt-run-btn" onclick="runBacktest()">
@@ -2356,6 +2418,20 @@
               </div>
             </div>
           </div>
+          <!-- Invite link generator -->
+          <div class="card" style="margin-bottom:10px;border-color:rgba(240,185,11,.25)">
+            <div class="card-title" style="margin-bottom:10px">🔗 Gerar Link de Convite Direto</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+              <div class="field"><label>E-mail do convidado (opcional)</label><input type="email" id="inv-link-email" placeholder="cliente@email.com"></div>
+              <div class="field"><label>Expira em (dias)</label><input type="number" id="inv-link-days" value="7" min="1" max="90"></div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <button onclick="generateInviteLink()" style="padding:8px 18px;background:var(--gold);color:#000;font-weight:700;border:none;border-radius:6px;cursor:pointer;font-size:12px">🔗 Gerar Link</button>
+              <div id="inv-link-output" style="flex:1;font-size:11px;font-family:var(--mono);color:var(--blue);word-break:break-all;padding:6px 10px;background:var(--bg2);border-radius:4px;min-height:32px;display:none"></div>
+              <button id="inv-link-copy" onclick="copyInviteLink()" style="display:none;padding:6px 12px;background:var(--bg3);border:1px solid var(--border);color:var(--t2);border-radius:4px;cursor:pointer;font-size:11px">📋 Copiar</button>
+            </div>
+          </div>
+
           <div class="card">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
               <div class="card-title" style="margin:0">Códigos Gerados</div>
@@ -2683,6 +2759,7 @@
               <div class="field"><label style="font-size:10px">Estratégia</label>
                 <select id="rp-strategy" style="font-size:11px;padding:4px;background:var(--bg2);border:1px solid var(--border);color:var(--t2);border-radius:4px">
                   <option value="trend">Trend (EMA)</option>
+                <option value="hft">⚡ HFT (9 indicadores)</option>
                   <option value="macd">MACD</option>
                   <option value="breakout">Breakout</option>
                 </select>

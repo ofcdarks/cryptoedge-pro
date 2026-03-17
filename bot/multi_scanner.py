@@ -96,13 +96,17 @@ def _broadcast(signal: dict, app_url: str, signal_token: str):
         headers = {'Content-Type': 'application/json'}
         if signal_token:
             headers['X-Signal-Token'] = signal_token
+        # Skip broadcast to localhost (container networking issue)
+        if 'localhost' in app_url or '127.0.0.1' in app_url:
+            log.debug(f'  Scanner: sinal gerado (broadcast local desabilitado)')
+            return
         req = _req.Request(f'{app_url}/api/signals/broadcast',
                            data=payload, headers=headers, method='POST')
         _req.urlopen(req, timeout=5)
         log.info(f'  📡 Broadcast enviado: {signal["symbol"]} {signal["direction"].upper()} '
                  f'conf={signal["confidence"]:.0%}')
     except Exception as e:
-        log.warning(f'  Broadcast erro: {e}')
+        log.debug(f'  Broadcast (non-fatal): {e}')  # servidor pode não estar acessível do container
 
 
 def _scanner_loop(api_key: str, secret_key: str, pairs: list,

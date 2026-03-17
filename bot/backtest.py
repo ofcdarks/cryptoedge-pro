@@ -29,6 +29,24 @@ def rsi(closes, period=14):
     ag = sum(gains)/period; al = sum(losses)/period
     return 100 if al==0 else 100-(100/(1+ag/al))
 
+def bollinger(closes, period=14, std=2.0):
+    vals = list(closes)[-period:]
+    if len(vals) < period: return None, None, None
+    mid = sum(vals)/len(vals)
+    sd  = (sum((v-mid)**2 for v in vals)/len(vals))**0.5
+    return mid+std*sd, mid, mid-std*sd
+
+def vwap_calc(closes, volumes, period=20):
+    c=list(closes)[-period:]; v=list(volumes)[-period:]
+    if not c or not v: return c[-1] if c else 0
+    tv=sum(v); return sum(ci*vi for ci,vi in zip(c,v))/tv if tv>0 else c[-1]
+
+def stoch(closes, highs, lows, k=9):
+    c=list(closes)[-k:]; h=list(highs)[-k:]; l=list(lows)[-k:]
+    if len(c)<k: return 50
+    ll=min(l); hh=max(h)
+    return (c[-1]-ll)/(hh-ll)*100 if hh!=ll else 50
+
 def macd_calc(closes, fast=12, slow=26, sig=9):
     vals = list(closes)
     if len(vals) < slow+sig: return 0,0,0
@@ -62,6 +80,7 @@ class Backtester:
         self.lows     = deque(maxlen=200)
         self.vols     = deque(maxlen=200)
         self.prev_macd_hist = 0
+        self.opens    = deque(maxlen=200)
 
     def run(self):
         warmup = max(50, int(self.cfg.get('warmup', 50)))
@@ -170,6 +189,45 @@ class Backtester:
                 return {'side':'BUY',  'qty':qty,'sl':close-sl,'tp':close+tp}
             if pred.get('direction') == 'down' and r > 30:
                 return {'side':'SELL', 'qty':qty,'sl':close+sl,'tp':close-tp}
+
+        elif self.strategy == 'hft':
+            # Replica as 9 estratégias do HFT engine
+            tp_pct = float(self.cfg.get('hft_tp_pct', 0.35)) / 100
+            sl_pct = float(self.cfg.get('hft_sl_pct', 0.18)) / 100
+            min_sig = int(self.cfg.get('hft_min_signals', 2))
+            buys = 0; sells = 0
+            # 1. EMA micro
+            e3=ema(list(self.closes)[-3:],3); e8=ema(list(self.closes)[-8:],8); e21=ema(list(self.closes)[-21:],21)
+            if e3>e8*1.0003 and e8>e21: buys+=1
+            elif e3<e8*0.9997 and e8<e21: sells+=1
+            # 2. RSI
+            if r<28: buys+=2
+            elif r<32: buys+=1
+            elif r>72: sells+=2
+            elif r>68: sells+=1
+            # 3. Bollinger
+            bb_u,bb_m,bb_l = bollinger(self.closes)
+            if bb_l and close<bb_l: buys+=1
+            elif bb_u and close>bb_u: sells+=1
+            # 4. VWAP
+            vw=vwap_calc(self.closes,self.vols)
+            dev=(close-vw)/vw*100 if vw else 0
+            if dev<-0.4: buys+=1
+            elif dev>0.4: sells+=1
+            # 5. Volume spike
+            vls=list(self.vols); av=sum(vls[-6:-1])/5 if len(vls)>=6 else 0
+            if av>0 and vol>av*1.8:
+                if close>list(self.closes)[-2]: buys+=1
+                else: sells+=1
+            # 6. Stochastic
+            sk=stoch(self.closes,self.highs,self.lows)
+            if sk<20: buys+=1
+            elif sk>80: sells+=1
+            # Decision
+            if buys>=min_sig and buys>sells:
+                return {'side':'BUY','qty':qty,'sl':close*(1-sl_pct),'tp':close*(1+tp_pct)}
+            if sells>=min_sig and sells>buys:
+                return {'side':'SELL','qty':qty,'sl':close*(1+sl_pct),'tp':close*(1-tp_pct)}
         return None
 
     def _open(self, sig, price, ts):

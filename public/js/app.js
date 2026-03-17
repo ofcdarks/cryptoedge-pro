@@ -450,7 +450,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
       const autoBtn = document.getElementById('bc-auto-btn');
       if (autoBtn) autoBtn.textContent = 'Auto OFF';
     }
-    if (item.dataset.panel === 'dashboard') { loadTrades(); loadFearGreed(); }
+    if (item.dataset.panel === 'dashboard') { loadTrades(); loadFearGreed(); loadPerformanceStats(); loadHFTDashBanner(); }
     if (item.dataset.panel === 'calculator') { calcLev(); }
     if (item.dataset.panel === 'risk') { calcRisk(); }
     if (_panelLoadHooks[item.dataset.panel]) { _panelLoadHooks[item.dataset.panel](); }
@@ -3305,6 +3305,8 @@ function btStratChange() {
     const p = document.getElementById('bt-sp-' + x);
     if (p) p.style.display = s === x ? 'block' : 'none';
   });
+  const hftP = document.getElementById('bt-hft-params');
+  if (hftP) hftP.style.display = strat === 'hft' ? 'block' : 'none';
 }
 
 async function runBacktest() {
@@ -3336,6 +3338,10 @@ async function runBacktest() {
     rsi_sell:   document.getElementById('bt-rsi-sell')?.value  || '70',
     min_conf:   document.getElementById('bt-min-conf')?.value  || '0.65',
     lookback:   document.getElementById('bt-lookback')?.value  || '20',
+    // HFT params
+    hft_tp_pct:      document.getElementById('bt-hft-tp')?.value      || '0.35',
+    hft_sl_pct:      document.getElementById('bt-hft-sl')?.value      || '0.18',
+    hft_min_signals: document.getElementById('bt-hft-minsig')?.value  || '3',
   };
 
   try {
@@ -5833,6 +5839,37 @@ function copyInviteCode() {
   navigator.clipboard.writeText(code).then(() => showToast('📋 Código copiado: ' + code));
 }
 
+let _lastInviteLink = '';
+
+async function generateInviteLink() {
+  // Read from existing invite form (plan, maxUses) + new email/days fields
+  const plan     = document.getElementById('inv-plan')?.value    || document.getElementById('adm-inv-plan')?.value || 'pro';
+  const maxUses  = parseInt(document.getElementById('inv-max-uses')?.value || document.getElementById('adm-inv-max')?.value || '1');
+  const days     = parseInt(document.getElementById('inv-link-days')?.value || '7');
+  const email    = document.getElementById('inv-link-email')?.value?.trim() || '';
+
+  const r = await fetch('/api/admin/invite/link', {
+    method: 'POST',
+    headers: { ...auth.headers(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ plan, maxUses, expireDays: days, email })
+  });
+  const d = await r.json();
+  if (!d.ok) { showToast('❌ ' + (d.error || 'Erro'), true); return; }
+
+  _lastInviteLink = d.link;
+  const out  = document.getElementById('inv-link-output');
+  const copy = document.getElementById('inv-link-copy');
+  if (out)  { out.textContent = d.link; out.style.display = 'block'; }
+  if (copy) copy.style.display = 'inline';
+  showToast(`✅ Link ${d.plan.toUpperCase()} gerado!${email ? ' E-mail enviado.' : ''}`);
+  loadAdminInvites();
+}
+
+function copyInviteLink() {
+  if (!_lastInviteLink) return;
+  navigator.clipboard.writeText(_lastInviteLink).then(() => showToast('✅ Link copiado!'));
+}
+
 async function loadAdminInvites() {
   try {
     const r = await fetch('/api/admin/invites', { headers: auth.headers() });
@@ -6734,6 +6771,9 @@ function initApp() {
   }
   tryInitTV(0);
 
+  // Load performance stats and HFT status on init
+  setTimeout(() => { loadPerformanceStats(30); refreshHFTDashboard(); }, 2000);
+
   fetchPricesREST().then(() => {
     updateDashboardRankings();
     filterMarkets();
@@ -6751,7 +6791,8 @@ function initApp() {
       const pb = document.getElementById('tb-pair');
       if (pb) { const p=PAIRS.find(x=>x.sym===state.activePair); pb.textContent=(p?p.base:'BTC')+'/USDT'; }
     }
-    setInterval(() => {
+    setInterval(() => { if (document.getElementById('panel-dashboard')?.classList.contains('active')) { refreshHFTDashboard(); } }, 10000);
+  setInterval(() => {
       updateDashboardRankings();
       renderWatchlistSidebar();
       // Re-apply topbar if still empty
@@ -6859,6 +6900,40 @@ function showPanel(panelName) {
   if (panelName === 'profile') loadProfile();
 }
 
+async function loadPerformanceStats(days=30) {
+  try {
+    const r = await fetch(`/api/performance/stats?days=${days}`, {headers:auth.headers()});
+    const d = await r.json();
+    if (!d.ok || d.empty) return;
+    const set=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v;};
+    const sharpeEl=document.getElementById('ps-sharpe');
+    if(sharpeEl){sharpeEl.textContent=d.sharpe.toFixed(2);sharpeEl.style.color=d.sharpe>=2?'var(--green)':d.sharpe>=1?'var(--gold)':d.sharpe<0?'var(--red)':'var(--t2)';}
+    const pfEl=document.getElementById('ps-pf');
+    if(pfEl){pfEl.textContent=d.pf>=999?'∞':d.pf.toFixed(2);pfEl.style.color=d.pf>=1.5?'var(--green)':d.pf>=1?'var(--gold)':'var(--red)';}
+    set('ps-avg-win',d.avg_win>0?`+$${parseFloat(d.avg_win).toFixed(3)}`:'—');
+    set('ps-avg-loss',d.avg_loss<0?`-$${Math.abs(parseFloat(d.avg_loss)).toFixed(3)}`:'—');
+    set('ps-streak',d.best_streak>0?`${d.best_streak}W`:'—');
+    const dur=d.avg_duration_sec;
+    set('ps-avg-dur',dur>=3600?`${Math.round(dur/3600)}h`:dur>=60?`${Math.round(dur/60)}m`:`${dur}s`);
+  } catch(e){}
+}
+
+async function refreshHFTDashboard() {
+  try {
+    const sd=(await(await fetch('/api/bot/status',{headers:auth.headers()})).json());
+    const banner=document.getElementById('hft-live-banner');
+    if(!banner)return;
+    if(sd.running&&sd.strategy==='hft'){
+      banner.style.display='flex';
+      const d=(await(await fetch('/api/hft/stats',{headers:auth.headers()})).json());
+      if(d.ok){const s=d.today;const set=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v;};
+        set('hft-dash-trades',s.total||0);set('hft-dash-wr',s.wr?s.wr+'%':'—');
+        const pe=document.getElementById('hft-dash-pnl');if(pe){const p=parseFloat(s.pnl||0);pe.textContent=`$${p.toFixed(4)}`;pe.style.color=p>=0?'var(--green)':'var(--red)';}
+      }
+    } else { banner.style.display='none'; }
+  } catch(e){}
+}
+
 // ─── HFT BOT ──────────────────────────────────────────────────────────────────
 const HFT_PAIRS_DEFAULT = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT',
   'DOGEUSDT','ADAUSDT','AVAXUSDT','MATICUSDT','DOTUSDT'];
@@ -6892,6 +6967,23 @@ function initHFTPanel() {
 
 async function loadHFTStats() {
   try {
+    // Primeiro: checar status real do bot
+    const statusR = await fetch('/api/bot/status', { headers: auth.headers() });
+    const statusD = await statusR.json();
+    const isHFT   = statusD.strategy === 'hft';
+    const isRunning = statusD.running && isHFT;
+
+    const dot  = document.getElementById('hft-status-dot');
+    const txt  = document.getElementById('hft-status-text');
+    const badge = document.getElementById('hft-badge');
+    if (dot)   dot.style.background = isRunning ? 'var(--green)' : statusD.running ? 'var(--gold)' : 'var(--t3)';
+    if (txt) {
+      if (isRunning)        { txt.textContent = 'Rodando (HFT)'; txt.style.color = 'var(--green)'; }
+      else if (statusD.running) { txt.textContent = `Rodando (${statusD.strategy?.toUpperCase() || '?'}) — não é HFT`; txt.style.color = 'var(--gold)'; }
+      else                  { txt.textContent = 'Parado'; txt.style.color = 'var(--t3)'; }
+    }
+    if (badge) badge.style.display = isRunning ? 'inline' : 'none';
+
     const r = await fetch('/api/hft/stats', { headers: auth.headers() });
     const d = await r.json();
     if (!d.ok) return;
@@ -6931,6 +7023,8 @@ async function loadHFTStats() {
 }
 
 async function hftStart() {
+  const startBtn = document.getElementById('hft-start-btn');
+  if (startBtn?.disabled) return;
   const pairs = [...document.querySelectorAll('.hft-pair-btn[data-active="1"]')]
     .map(b => b.dataset.pair);
   if (pairs.length === 0) { showToast('❌ Selecione pelo menos 1 par', true); return; }
@@ -6952,20 +7046,28 @@ async function hftStart() {
     `O bot vai operar AUTOMATICAMENTE nos ${pairs.length} pares selecionados.\n\nTP: ${config.hft_tp_pct}% | SL: ${config.hft_sl_pct}% | Daily Loss Limit: ${config.hft_daily_loss}%\n\nSem confirmação manual — cada sinal é executado imediatamente.`);
   if (!ok) return;
 
-  const r = await fetch('/api/bot/start', {
-    method: 'POST',
-    headers: { ...auth.headers(), 'Content-Type': 'application/json' },
-    body: JSON.stringify(config)
-  });
-  const d = await r.json();
-  if (d.ok) {
-    showToast('⚡ HFT Bot iniciado!');
-    document.getElementById('hft-status-dot').style.background = 'var(--green)';
-    document.getElementById('hft-status-text').textContent = 'Rodando';
-    document.getElementById('hft-status-text').style.color = 'var(--green)';
-    document.getElementById('hft-badge').style.display = 'inline';
-  } else {
-    showToast('❌ ' + (d.error || 'Erro ao iniciar'), true);
+  // Disable button + show loading
+  if (startBtn) { startBtn.disabled = true; startBtn.textContent = '⏳ Iniciando...'; }
+  try {
+    const r = await fetch('/api/bot/start', {
+      method: 'POST',
+      headers: { ...auth.headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(config)
+    });
+    const d = await r.json();
+    if (d.ok) {
+      showToast('⚡ HFT Bot iniciado! Aguarde 30s para os primeiros sinais.');
+      setTimeout(loadHFTStats, 3000);
+    } else {
+      showToast('❌ ' + (d.error || 'Erro ao iniciar'), true);
+      if (startBtn) { startBtn.disabled = false; startBtn.textContent = '⚡ Iniciar HFT'; }
+    }
+  } catch(e) {
+    showToast('❌ ' + e.message, true);
+    if (startBtn) { startBtn.disabled = false; startBtn.textContent = '⚡ Iniciar HFT'; }
+  } finally {
+    // Re-enable after 10s regardless
+    setTimeout(() => { if (startBtn) { startBtn.disabled = false; startBtn.textContent = '⚡ Iniciar HFT'; } }, 10000);
   }
 }
 
@@ -6981,4 +7083,56 @@ async function hftStop() {
     document.getElementById('hft-status-text').style.color = 'var(--t3)';
     document.getElementById('hft-badge').style.display = 'none';
   }
+}
+
+// ─── Dashboard: Performance Stats ─────────────────────────────────────────────
+async function loadPerformanceStats(days=30) {
+  try {
+    const r = await fetch(`/api/performance/stats?days=${days}`, { headers: auth.headers() });
+    const d = await r.json();
+    if (!d.ok || d.empty) return;
+    const set = (id, v, color) => {
+      const e = document.getElementById(id);
+      if (!e) return;
+      e.textContent = v;
+      if (color) e.style.color = color;
+    };
+    const sharpe = d.sharpe;
+    set('ps-sharpe', sharpe.toFixed(2),
+        sharpe >= 2 ? 'var(--green)' : sharpe >= 1 ? 'var(--gold)' : 'var(--red)');
+    set('ps-pf', d.pf >= 999 ? '∞' : d.pf.toFixed(2),
+        d.pf >= 1.5 ? 'var(--green)' : d.pf >= 1 ? 'var(--gold)' : 'var(--red)');
+    set('ps-avg-win',  d.avg_win  > 0 ? `+$${d.avg_win.toFixed(2)}`  : '—', 'var(--green)');
+    set('ps-avg-loss', d.avg_loss < 0 ? `-$${Math.abs(d.avg_loss).toFixed(2)}` : '—', 'var(--red)');
+    set('ps-streak', d.best_streak > 0 ? `${d.best_streak}W` : '—', 'var(--gold)');
+    const dur = d.avg_duration_sec;
+    set('ps-avg-dur', dur < 60 ? `${dur}s` : dur < 3600 ? `${Math.round(dur/60)}m` : `${(dur/3600).toFixed(1)}h`);
+  } catch {}
+}
+
+// ─── Dashboard: HFT live banner ───────────────────────────────────────────────
+async function loadHFTDashBanner() {
+  try {
+    const [statusR, statsR] = await Promise.all([
+      fetch('/api/bot/status', { headers: auth.headers() }),
+      fetch('/api/hft/stats',  { headers: auth.headers() })
+    ]);
+    const status = await statusR.json();
+    const stats  = await statsR.json();
+    const banner = document.getElementById('hft-live-banner');
+    if (!banner) return;
+    const isHFT = status.running && status.strategy === 'hft';
+    banner.style.display = isHFT ? 'flex' : 'none';
+    if (!isHFT || !stats.ok) return;
+    const s = stats.today;
+    const pnl = parseFloat(s.pnl);
+    const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+    set('hft-dash-trades', s.total);
+    set('hft-dash-wr', s.wr + '%');
+    const pnlEl = document.getElementById('hft-dash-pnl');
+    if (pnlEl) {
+      pnlEl.textContent = `$${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)}`;
+      pnlEl.style.color = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+    }
+  } catch {}
 }

@@ -301,8 +301,11 @@ class HFTEngine:
         return self._sym_info[pair]
 
     def _round_step(self, v, step):
-        prec = len(str(step).rstrip('0').split('.')[-1]) if '.' in str(step) else 0
-        return round(float(Decimal(str(v)) // Decimal(str(step)) * Decimal(str(step))), prec)
+        v_d    = Decimal(str(v))
+        qty_d  = (v_d // step_d) * step_d
+        sign, digits, exp = step_d.as_tuple()
+        prec = max(0, -exp)
+        return float(round(qty_d, prec))
 
     def _calc_qty(self, pair: str, price: float) -> float:
         if price <= 0: return 0

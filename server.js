@@ -785,10 +785,14 @@ function _botPid() {
 }
 
 async function _killAll() {
+  // Send graceful SIGTERM first
   try { execSync('pkill -SIGTERM -f gridbot.py 2>/dev/null || true',{timeout:3000}); } catch {}
-  await new Promise(r=>setTimeout(r,2000));
+  // Wait 3s for graceful shutdown (avoids killing newly spawned bot)
+  await new Promise(r=>setTimeout(r,3000));
+  // Force kill any remaining
   try { execSync('pkill -SIGKILL -f gridbot.py 2>/dev/null || true',{timeout:2000}); } catch {}
-  await new Promise(r=>setTimeout(r,500));
+  // Extra buffer before spawning new process
+  await new Promise(r=>setTimeout(r,1000));
 }
 
 // Lança Python totalmente desacoplado do Node (spawn nativo com detached:true)
@@ -820,6 +824,17 @@ function _getBotAutostart() {
 
 app.get('/api/bot/status', requireAuth, (req, res) => {
   const pid = _botPid();
+  // Read current strategy from .bot.env
+  let currentStrategy = 'pattern';
+  let currentTF = '15m';
+  let currentTestnet = true;
+  try {
+    const envContent = require('fs').readFileSync(BOT_ENV_PATH, 'utf8');
+    const match = (k) => (envContent.match(new RegExp(`^${k}=(.+)$`, 'm')) || [])[1];
+    if (match('BOT_STRATEGY')) currentStrategy = match('BOT_STRATEGY');
+    if (match('BOT_TIMEFRAME')) currentTF = match('BOT_TIMEFRAME');
+    if (match('BOT_TESTNET')) currentTestnet = match('BOT_TESTNET') !== 'false';
+  } catch {}
   res.json({
     running:   pid!==null,
     status:    pid ? 'online' : 'stopped',
@@ -827,6 +842,9 @@ app.get('/api/bot/status', requireAuth, (req, res) => {
     mode:      'nativo',
     pm2_found: false,
     starting:  _botStarting,
+    strategy:  currentStrategy,
+    timeframe: currentTF,
+    testnet:   currentTestnet,
   });
 });
 
@@ -876,6 +894,21 @@ app.post('/api/bot/start', requireAuth, async (req, res) => {
     if (body.hft_cooldown)   env['HFT_COOLDOWN']    = String(body.hft_cooldown);
     if (body.hft_daily_loss) env['HFT_DAILY_LOSS']  = String(body.hft_daily_loss);
     if (body.hft_pairs)      env['HFT_PAIRS']       = body.hft_pairs;
+
+    // ── Salva config efetiva para que restarts usem a mesma estratégia ──────────
+    const cfgToSave = [
+      '# CryptoEdge Pro — Bot config gerado automaticamente',
+      '# ' + new Date().toLocaleString('pt-BR'), '',
+    ];
+    const botEnvKeys = ['BOT_STRATEGY','BOT_TIMEFRAME','BOT_TRADE_MODE','BOT_TESTNET',
+      'BOT_CAPITAL','BOT_SYMBOL','BOT_STOP_LOSS','BOT_SESSION_GAIN','BOT_SESSION_LOSS',
+      'BOT_MIN_CONF','BOT_SL_ATR','BOT_TP_RR','BOT_MARKET','BOT_TZ_OFFSET',
+      'HFT_PAIRS','HFT_TIMEFRAME','HFT_TP_PCT','HFT_SL_PCT','HFT_RISK_PCT',
+      'HFT_MAX_TRADES','HFT_COOLDOWN','HFT_DAILY_LOSS','HFT_MIN_SIGNALS',
+      'BOT_SCAN_ENABLED','BOT_SCAN_PAIRS','BOT_SCAN_INTERVAL','BOT_SCAN_MIN_CONF',
+    ];
+    botEnvKeys.forEach(k => { if (env[k] !== undefined) cfgToSave.push(`${k}=${env[k]}`); });
+    try { require('fs').writeFileSync(BOT_ENV_PATH, cfgToSave.join('\n') + '\n'); } catch {}
 
     // ── Lança Python com spawn nativo Node (detached:true + unref) ─────────────
     const botScript = path.join(__dirname,'bot','gridbot.py');
@@ -1175,12 +1208,41 @@ app.delete('/api/admin/users/:username', requireAuth, requireAdmin, (req, res) =
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── Generate invite link ────────────────────────────────────────────────────
+app.post('/api/admin/invite/link', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const { plan='pro', maxUses=1, expireDays=7, email='' } = req.body;
+    const code = require('crypto').randomBytes(5).toString('hex').toUpperCase();
+    const expiresAt = new Date(Date.now() + expireDays*86400000).toISOString().replace('T',' ').slice(0,19);
+    db.run('INSERT INTO invite_codes(code,created_by,max_uses,plan,expires_at) VALUES(?,?,?,?,?)',
+      [code, req.user, maxUses, plan, expiresAt]);
+    const baseUrl = process.env.APP_URL || `http://localhost:${process.env.PORT||3000}`;
+    const link = `${baseUrl}/?invite=${code}`;
+    // Send email if provided
+    if (email) {
+      const { sendInviteEmail } = require('./templates/email');
+      const emailTransporter = require('nodemailer').createTransport({
+        host: process.env.SMTP_HOST||'smtp.gmail.com', port: parseInt(process.env.SMTP_PORT||'587'),
+        secure: process.env.SMTP_SECURE==='true',
+        auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+      });
+      emailTransporter.sendMail({
+        from: process.env.SMTP_USER, to: email,
+        subject: 'Seu convite para o CryptoEdge Pro',
+        html: `<h2>Você foi convidado!</h2><p>Clique para criar sua conta:</p><a href="${link}" style="background:#F0B90B;color:#000;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold">Acessar CryptoEdge Pro</a><p>Código: <b>${code}</b></p><p>Expira em ${expireDays} dias | Plano: ${plan.toUpperCase()}</p>`
+      }).catch(()=>{});
+    }
+    res.json({ ok:true, code, link, plan, expires_at:expiresAt });
+  } catch(e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
 app.post('/api/admin/invite', requireAuth, requireAdmin, (req, res) => {
   try {
     const { plan='basic', maxUses=1, expiresInDays=30 } = req.body || {};
     const code      = crypto.randomBytes(6).toString('hex').toUpperCase();
     const expiresAt = new Date(Date.now()+(expiresInDays||30)*24*60*60*1000).toISOString();
     db.run('INSERT INTO invite_codes (code,created_by,max_uses,plan,expires_at) VALUES (?,?,?,?,?)', [code, req.user, maxUses, plan, expiresAt]);
+    const appUrl = process.env.APP_URL || `http://localhost:${process.env.PORT||3000}`;
     res.json({ ok: true, code, plan, maxUses, expiresAt });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -2533,6 +2595,42 @@ app.post('/api/bot/test-telegram', requireAuth, async (req, res) => {
     res.status(500).json({ ok: false, error: e.response?.data?.description || e.message });
   }
 });
+
+// ── Performance + HFT stats ───────────────────────────────────────────────────
+app.get('/api/performance/stats', requireAuth, (req, res) => {
+  try {
+    const days = parseInt(req.query.days||'30');
+    const rows = db.all(`SELECT pnl,(julianday(COALESCE(closed_at,datetime('now')))-julianday(opened_at))*86400 AS dur FROM bot_trades WHERE closed_at IS NOT NULL AND opened_at>=datetime('now','-'||?||' days') ORDER BY opened_at`,[days]);
+    if(!rows.length) return res.json({ok:true,empty:true});
+    const wins=rows.filter(r=>r.pnl>0),losses=rows.filter(r=>r.pnl<=0),n=rows.length;
+    const tot=rows.reduce((s,r)=>s+(r.pnl||0),0);
+    const gW=wins.reduce((s,r)=>s+(r.pnl||0),0),gL=Math.abs(losses.reduce((s,r)=>s+(r.pnl||0),0));
+    const pnls=rows.map(r=>r.pnl||0),mean=tot/n;
+    const std=Math.sqrt(pnls.reduce((s,p)=>s+(p-mean)**2,0)/n||0);
+    let best=0,cur=0; rows.forEach(r=>{if(r.pnl>0){cur++;best=Math.max(best,cur);}else cur=0;});
+    res.json({ok:true,
+      sharpe:+(std>0?(mean/std)*Math.sqrt(252):0).toFixed(2),
+      pf:+(gL>0?gW/gL:gW>0?999:0).toFixed(2),
+      avg_win:+(wins.length?gW/wins.length:0).toFixed(4),
+      avg_loss:+(losses.length?-gL/losses.length:0).toFixed(4),
+      best_streak:best,
+      avg_duration_sec:Math.round(rows.reduce((s,r)=>s+(r.dur||0),0)/n),
+      win_rate:+(wins.length/n*100).toFixed(1),
+      total_pnl:+tot.toFixed(4),total_trades:n});
+  } catch(e){res.json({ok:false,error:e.message});}
+});
+
+app.get('/api/hft/stats', requireAuth, (req, res) => {
+  try {
+    const trades = db.all("SELECT * FROM bot_trades WHERE strategy='hft' AND DATE(opened_at)=DATE('now') ORDER BY opened_at DESC");
+    const wins=trades.filter(t=>t.pnl>0).length,losses=trades.filter(t=>t.pnl<=0&&t.closed_at).length;
+    const pnl=trades.reduce((s,t)=>s+(t.pnl||0),0),wr=wins+losses>0?wins/(wins+losses)*100:0;
+    const open=trades.filter(t=>!t.closed_at);
+    res.json({ok:true,today:{wins,losses,pnl:pnl.toFixed(4),wr:wr.toFixed(1),total:trades.length,open_positions:open.length,pairs:[...new Set(open.map(t=>t.pair))]},trades:trades.slice(0,20)});
+  } catch(e){res.json({ok:false,error:e.message});}
+});
+
+// ─── Performance & HFT stats ─────────────────────────────────────────────────
 
 app.get('/api/health', (req, res) => res.json({
   status:'ok', model: process.env.AI_MODEL||'qwen3-30b-a3b', env: process.env.NODE_ENV||'development',

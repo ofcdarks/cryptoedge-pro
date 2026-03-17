@@ -296,8 +296,13 @@ def get_real_usdt_balance() -> float:
         return _usdt_balance_cache if _usdt_balance_cache is not None else -1.0
 
 def round_step(v, step):
-    prec = len(str(step).rstrip('0').split('.')[-1]) if '.' in str(step) else 0
-    return round(float(Decimal(str(v))//Decimal(str(step))*Decimal(str(step))), prec)
+    step_d = _D(str(step)).normalize()
+    v_d    = _D(str(v))
+    qty_d  = (v_d // step_d) * step_d
+    # Extrai precisão do Decimal normalizado (funciona com 1e-05, 0.001, etc.)
+    sign, digits, exp = step_d.as_tuple()
+    prec = max(0, -exp)
+    return float(round(qty_d, prec))
 
 def safe_qty(capital: float, price: float) -> float:
     """Calcula qty válida para a Binance respeitando saldo real, minQty, stepSize e notional mínimo."""
