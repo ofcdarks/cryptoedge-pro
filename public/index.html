@@ -592,7 +592,7 @@
             </div>
 
             <!-- TradingView Chart — LARGE -->
-            <div style="background:var(--bg1);border:1px solid var(--border);border-radius:var(--r2);overflow:hidden;position:relative">
+            <div style="background:var(--bg1);border:1px solid var(--border);border-radius:var(--r2);overflow:hidden;position:relative;height:min(380px, calc(100vh - 420px));min-height:180px;">
               <div id="tradingview-widget" style="height:min(420px, calc(100vh - 400px))"></div>
               <div id="tv-loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:var(--bg0);flex-direction:column;gap:8px;pointer-events:none">
                 <div style="width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--gold);border-radius:50%;animation:spin 0.8s linear infinite"></div>
@@ -719,7 +719,7 @@
         <!-- Full table -->
         <div class="card">
           <div class="card-title">Tabela de mercado — <span id="mkt-table-count">0</span> pares</div>
-          <div class="table-wrap" style="max-height:calc(100vh - 280px);overflow-y:auto">
+          <div class="table-wrap" style="max-height:calc(100vh - var(--top) - 120px);overflow-y:auto">
             <table>
               <thead style="position:sticky;top:0;background:var(--bg1);z-index:1">
                 <tr>
@@ -1712,11 +1712,11 @@
               <button class="btn btn-outline" onclick="exportReport('csv')"   style="font-size:10px;padding:5px 10px" title="Exportar CSV">📥 CSV</button>
             </div>
           </div>
-          <canvas id="pnl-cumulative-chart" height="100"></canvas>
+          <canvas id="pnl-cumulative-chart" style="width:100%;height:200px;display:block"></canvas>
         </div>
         <div class="card">
           <div class="card-title" style="margin-bottom:12px">PnL Diário</div>
-          <canvas id="pnl-daily-chart" height="80"></canvas>
+          <canvas id="pnl-daily-chart" style="width:100%;height:160px;display:block"></canvas>
         </div>
       </div>
 
@@ -2618,7 +2618,7 @@
       <!-- ──────────── LIVE TRADING ──────────── -->
       <div id="panel-live" class="panel">
         <!-- Header bar -->
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:10px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:10px;flex-shrink:0">
           <div style="display:flex;align-items:center;gap:12px">
             <div id="live-dot" style="width:10px;height:10px;border-radius:50%;background:var(--t3)"></div>
             <div>
@@ -2660,7 +2660,7 @@
             </div>
 
             <!-- Session stats bar -->
-            <div class="card" style="padding:10px 14px">
+            <div class="card" style="padding:10px 14px;flex-shrink:0;">
               <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;text-align:center">
                 <div><div style="font-size:10px;color:var(--t3)">Trades</div><div id="ls-trades" style="font-family:var(--mono);font-weight:600">0</div></div>
                 <div><div style="font-size:10px;color:var(--t3)">Wins</div><div id="ls-wins" style="font-family:var(--mono);font-weight:600;color:var(--green)">0</div></div>
