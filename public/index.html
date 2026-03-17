@@ -34,6 +34,7 @@
         transform: translateY(-2px);
       }
       </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 </head>
 <body>
 <!-- ── Cookie Consent Banner ── -->
@@ -436,6 +437,37 @@
 
       <!-- ──────────── DASHBOARD ──────────── -->
       <div id="panel-dashboard" class="panel active">
+        <div class="card" style="margin-bottom:12px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+            <div class="card-title">📈 Equity Curve ao Vivo</div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <select id="equity-range" onchange="loadEquityCurve(this.value)" style="font-size:11px;padding:4px 8px;background:var(--bg2);border:1px solid var(--border);color:var(--t2);border-radius:4px">
+                <option value="7">7 dias</option><option value="30" selected>30 dias</option><option value="90">90 dias</option>
+              </select>
+              <button onclick="downloadPerformanceReport()" style="font-size:11px;padding:4px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--t2);cursor:pointer">📄 Relatório</button>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px">
+            <div style="background:var(--bg2);border-radius:6px;padding:10px;text-align:center">
+              <div id="eq-pnl" style="font-family:var(--mono);font-size:15px;font-weight:600;color:var(--green)">—</div>
+              <div style="font-size:10px;color:var(--t3);margin-top:2px">PnL Total</div>
+            </div>
+            <div style="background:var(--bg2);border-radius:6px;padding:10px;text-align:center">
+              <div id="eq-wr" style="font-family:var(--mono);font-size:15px;font-weight:600">—</div>
+              <div style="font-size:10px;color:var(--t3);margin-top:2px">Win Rate</div>
+            </div>
+            <div style="background:var(--bg2);border-radius:6px;padding:10px;text-align:center">
+              <div id="eq-trades" style="font-family:var(--mono);font-size:15px;font-weight:600">0</div>
+              <div style="font-size:10px;color:var(--t3);margin-top:2px">Trades</div>
+            </div>
+            <div style="background:var(--bg2);border-radius:6px;padding:10px;text-align:center">
+              <div id="eq-maxdd" style="font-family:var(--mono);font-size:15px;font-weight:600;color:var(--red)">—</div>
+              <div style="font-size:10px;color:var(--t3);margin-top:2px">Max Drawdown</div>
+            </div>
+          </div>
+          <div id="equity-empty" style="display:none;text-align:center;padding:20px;font-size:12px;color:var(--t3)">Sem trades registrados ainda. Inicie o bot para ver a equity curve ao vivo.</div>
+          <div style="position:relative;height:180px"><canvas id="equity-canvas"></canvas></div>
+        </div>
 
         <!-- Metric strip -->
         <div class="grid g4" style="margin-bottom:10px">
@@ -1373,7 +1405,7 @@
               <div class="form-row g2">
                 <div class="field"><label>Stop Global (USDT, 0=off)</label><input type="number" id="bc-stopglobal" value="0"></div>
                 <div class="field"><label>Testnet</label>
-                  <select id="bc-testnet"><option value="true" selected>✅ Testnet (seguro)</option><option value="false">🔴 Real (dinheiro real)</option></select>
+                  <select id="bc-testnet" onchange="updateBotModeWarning(this.value)"><option value="true" selected>🧪 Testnet (Binance Test)</option><option value="paper">📋 Paper Trading (simulado)</option><option value="false">🔴 Real (dinheiro real)</option></select>
                 </div>
               </div>
 
@@ -1556,7 +1588,13 @@
             <div id="bt-results-empty" style="color:var(--t3);font-size:12px;text-align:center;padding:40px 0">
               Configure e execute um backtest para ver os resultados.
             </div>
-            <div id="bt-results" style="display:none">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;margin-bottom:8px">
+                  <button onclick="runWalkForward()" style="padding:8px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r1);color:var(--blue);cursor:pointer;font-size:12px;font-weight:600">🔄 Walk-Forward (anti-overfitting)</button>
+                  <button onclick="runOptimize()" style="padding:8px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r1);color:var(--gold);cursor:pointer;font-size:12px;font-weight:600">⚙️ Otimizar Parâmetros</button>
+                </div>
+                <div id="wf-results" style="display:none;margin-bottom:8px"></div>
+                <div id="opt-results" style="display:none;margin-bottom:8px"></div>
+              <div id="bt-results" style="display:none">
               <div class="grid g3" style="margin-bottom:12px" id="bt-metrics"></div>
               <div class="divider"></div>
               <div class="card-title">Curva de Capital</div>
@@ -1955,6 +1993,29 @@
 
       <!-- ──────────── PERFIL DO USUÁRIO ──────────── -->
       <div id="panel-profile" class="panel">
+        <div class="card" style="margin-bottom:12px">
+          <div class="card-title" style="margin-bottom:12px">💳 Plano & Assinatura</div>
+          <div id="profile-plan-info" style="font-size:13px;color:var(--t2);line-height:1.9;margin-bottom:12px">Carregando plano...</div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:10px">
+            <div onclick="upgradePlan('free')" style="cursor:pointer;padding:12px;border-radius:var(--r2);border:1px solid var(--border);background:var(--bg2);text-align:center">
+              <div style="font-size:20px">🌱</div><div style="font-weight:600;font-size:12px;margin:4px 0">Free</div>
+              <div style="font-size:18px;font-weight:700;color:var(--t1)">R$0</div>
+              <div style="font-size:10px;color:var(--t3)">Análises básicas</div>
+            </div>
+            <div onclick="upgradePlan('pro')" style="cursor:pointer;padding:12px;border-radius:var(--r2);border:2px solid var(--green);background:rgba(0,220,130,.04);text-align:center">
+              <div style="font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:4px;margin-bottom:6px;font-weight:700;display:inline-block">POPULAR</div>
+              <div style="font-weight:600;font-size:12px;margin:2px 0">Pro</div>
+              <div style="font-size:18px;font-weight:700;color:var(--green)">R$97/mês</div>
+              <div style="font-size:10px;color:var(--t3)">Bot + Scanner + Telegram</div>
+            </div>
+            <div onclick="upgradePlan('expert')" style="cursor:pointer;padding:12px;border-radius:var(--r2);border:1px solid var(--gold);background:rgba(240,192,64,.04);text-align:center">
+              <div style="font-size:20px">🔥</div><div style="font-weight:600;font-size:12px;margin:4px 0">Expert</div>
+              <div style="font-size:18px;font-weight:700;color:var(--gold)">R$197/mês</div>
+              <div style="font-size:10px;color:var(--t3)">Multi-par + Walk-Forward + PDF</div>
+            </div>
+          </div>
+          <div style="font-size:11px;color:var(--t3)">Após o pagamento via PIX/cartão, você receberá um código de ativação por email. Clique no plano desejado para inserir o código.</div>
+        </div>
         <!-- Admin quick access bar (shown only for admin) -->
         <div id="prof-admin-bar" style="display:none;background:rgba(240,185,11,0.08);border:1px solid rgba(240,185,11,0.3);border-radius:10px;padding:12px 16px;margin-bottom:12px;display:flex;align-items:center;gap:12px">
           <span style="font-size:20px">⚙️</span>

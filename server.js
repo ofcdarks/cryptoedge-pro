@@ -1539,6 +1539,230 @@ app.get('/api/admin/signals/subscribers', requireAuth, requireAdmin, (req, res) 
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+
+// ─── Bot Live Trades (equity curve ao vivo) ───────────────────────────────────
+app.post('/api/bot/trade/open', requireAuth, (req, res) => {
+  try {
+    const { symbol, side, entry, qty, sl, tp, strategy } = req.body;
+    const id = db.insert('bot_trades', {
+      username: req.user, symbol, side, entry: parseFloat(entry),
+      qty: parseFloat(qty), sl: parseFloat(sl||0), tp: parseFloat(tp||0),
+      strategy: strategy||'', status: 'open'
+    });
+    res.json({ ok: true, id });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post('/api/bot/trade/close', requireAuth, (req, res) => {
+  try {
+    const { id, exit_price, pnl, reason } = req.body;
+    db.run(
+      "UPDATE bot_trades SET exit_price=?,pnl=?,reason=?,status='closed',closed_at=datetime('now') WHERE id=? AND username=?",
+      [parseFloat(exit_price), parseFloat(pnl), reason||'', id, req.user], true
+    );
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/bot/equity', requireAuth, (req, res) => {
+  try {
+    const days = parseInt(req.query.days||'30');
+    const trades = db.all(
+      `SELECT * FROM bot_trades WHERE username=? AND status='closed' AND closed_at >= datetime('now',?) ORDER BY closed_at ASC`,
+      [req.user, `-${days} days`]
+    );
+    if (!trades.length) return res.json({ ok:true, equity:[], stats:{pnl:0,wins:0,losses:0,wr:0,maxDD:0,trades:0} });
+    let cum=0, peak=0, maxDD=0;
+    const equity = trades.map(t => {
+      cum += (t.pnl||0);
+      if (cum > peak) peak = cum;
+      const dd = peak - cum; if (dd > maxDD) maxDD = dd;
+      return { ts: t.closed_at, pnl: parseFloat((t.pnl||0).toFixed(2)), cumPnl: parseFloat(cum.toFixed(2)), symbol: t.symbol, side: t.side };
+    });
+    const wins = trades.filter(t => (t.pnl||0) >= 0).length;
+    res.json({ ok:true, equity, stats:{ pnl: parseFloat(cum.toFixed(2)), wins, losses: trades.length-wins,
+      wr: trades.length > 0 ? Math.round(wins/trades.length*100) : 0, maxDD: parseFloat(maxDD.toFixed(2)), trades: trades.length }});
+  } catch(e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+// ─── Paper Trading ─────────────────────────────────────────────────────────────
+app.get('/api/paper/account', requireAuth, (req, res) => {
+  try {
+    let acc = db.get('SELECT * FROM paper_accounts WHERE username=?', [req.user]);
+    if (!acc) {
+      db.run('INSERT OR IGNORE INTO paper_accounts(username,balance,initial) VALUES(?,1000,1000)', [req.user], true);
+      acc = db.get('SELECT * FROM paper_accounts WHERE username=?', [req.user]);
+    }
+    const open = db.all("SELECT * FROM bot_trades WHERE username=? AND status='open' AND strategy='paper'", [req.user]);
+    res.json({ ok:true, account:acc, open_trades:open });
+  } catch(e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+app.post('/api/paper/reset', requireAuth, (req, res) => {
+  try {
+    const initial = parseFloat(req.body.initial||'1000');
+    db.run('INSERT OR REPLACE INTO paper_accounts(username,balance,initial,pnl_total,wins,losses) VALUES(?,?,?,0,0,0)', [req.user,initial,initial], true);
+    db.run("DELETE FROM bot_trades WHERE username=? AND strategy='paper'", [req.user], true);
+    res.json({ ok:true, balance:initial });
+  } catch(e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+app.post('/api/paper/trade', requireAuth, (req, res) => {
+  try {
+    const { action, symbol, side, price, qty, sl, tp, trade_id, pnl } = req.body;
+    const acc = db.get('SELECT * FROM paper_accounts WHERE username=?', [req.user]);
+    if (!acc) return res.status(400).json({ ok:false, error:'Paper account não encontrada. Reinicie o paper trading.' });
+    if (action === 'open') {
+      const cost = parseFloat(price) * parseFloat(qty);
+      if (cost > acc.balance) return res.status(400).json({ ok:false, error:`Saldo insuficiente: $${acc.balance.toFixed(2)}` });
+      const id = db.insert('bot_trades', { username:req.user, symbol, side, entry:parseFloat(price), qty:parseFloat(qty), sl:parseFloat(sl||0), tp:parseFloat(tp||0), strategy:'paper', status:'open' });
+      db.run("UPDATE paper_accounts SET balance=balance-?,updated_at=datetime('now') WHERE username=?", [cost, req.user], true);
+      res.json({ ok:true, id, balance: acc.balance - cost });
+    } else if (action === 'close') {
+      const trade = db.get('SELECT * FROM bot_trades WHERE id=? AND username=?', [trade_id, req.user]);
+      if (!trade) return res.status(404).json({ ok:false, error:'Trade não encontrado' });
+      const finalPnl = parseFloat(pnl||0);
+      const returnAmt = trade.entry * trade.qty + finalPnl;
+      const won = finalPnl >= 0;
+      db.run("UPDATE bot_trades SET exit_price=?,pnl=?,status='closed',closed_at=datetime('now') WHERE id=?", [parseFloat(price), finalPnl, trade_id], true);
+      db.run(`UPDATE paper_accounts SET balance=balance+?,pnl_total=pnl_total+?,wins=wins+${won?1:0},losses=losses+${won?0:1},updated_at=datetime('now') WHERE username=?`, [returnAmt, finalPnl, req.user], true);
+      const newAcc = db.get('SELECT * FROM paper_accounts WHERE username=?', [req.user]);
+      res.json({ ok:true, pnl:finalPnl, balance:newAcc.balance });
+    }
+  } catch(e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+// ─── Billing & Subscriptions ───────────────────────────────────────────────────
+const PLANS = {
+  free:   { name:'Free',   price:0,   features:['Mercados ao vivo','Analysis AI (3/dia)','Calculadoras','Dashboard'] },
+  pro:    { name:'Pro',    price:97,  features:['Tudo do Free','Bot 1 par','Scanner 15 pares','Telegram ilimitado','Backtesting','Session Manager'] },
+  expert: { name:'Expert', price:197, features:['Tudo do Pro','Bot multi-par','Paper trading','Walk-forward','Relatórios PDF','Suporte prioritário'] },
+};
+
+app.get('/api/billing/plans', (req, res) => res.json({ ok:true, plans:PLANS }));
+
+app.get('/api/billing/subscription', requireAuth, (req, res) => {
+  try {
+    let sub = db.get('SELECT * FROM subscriptions WHERE username=? ORDER BY started_at DESC LIMIT 1', [req.user]);
+    if (!sub) {
+      db.run("INSERT OR IGNORE INTO subscriptions(username,plan,status,price_brl) VALUES(?,'free','active',0)", [req.user], true);
+      sub = db.get('SELECT * FROM subscriptions WHERE username=?', [req.user]);
+    }
+    res.json({ ok:true, subscription:sub, plan: PLANS[sub?.plan] || PLANS.free });
+  } catch(e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+app.post('/api/billing/upgrade', requireAuth, (req, res) => {
+  try {
+    const { plan, activation_code } = req.body;
+    if (!PLANS[plan]) return res.status(400).json({ ok:false, error:'Plano inválido' });
+    const KEY = process.env.BILLING_ACTIVATION_KEY || '';
+    if (KEY && activation_code !== KEY) return res.status(403).json({ ok:false, error:'Código de ativação inválido. Entre em contato com o suporte.' });
+    const expires = new Date(Date.now() + 30*24*60*60*1000).toISOString();
+    db.run("INSERT OR REPLACE INTO subscriptions(id,username,plan,status,price_brl,started_at,expires_at) VALUES(lower(hex(randomblob(8))),?,?,'active',?,datetime('now'),?)",
+      [req.user, plan, PLANS[plan].price, expires], true);
+    db.run('UPDATE users SET plan=? WHERE username=?', [plan, req.user], true);
+    res.json({ ok:true, message:`Plano ${PLANS[plan].name} ativado até ${expires.slice(0,10)}`, plan, expires });
+  } catch(e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+// ─── Performance Report (HTML download) ────────────────────────────────────────
+app.get('/api/reports/performance', requireAuth, (req, res) => {
+  try {
+    const user   = db.get('SELECT username FROM users WHERE username=?', [req.user]);
+    const trades = db.all("SELECT * FROM bot_trades WHERE username=? AND status='closed' ORDER BY closed_at DESC LIMIT 200", [req.user]);
+    const sub    = db.get('SELECT plan FROM subscriptions WHERE username=? ORDER BY started_at DESC LIMIT 1', [req.user]);
+    const wins = trades.filter(t => (t.pnl||0) >= 0).length;
+    const losses = trades.length - wins;
+    const totalPnl = trades.reduce((a,t) => a+(t.pnl||0), 0);
+    const wr = trades.length > 0 ? Math.round(wins/trades.length*100) : 0;
+    const avgWin  = wins   > 0 ? trades.filter(t=>(t.pnl||0)>=0).reduce((a,t)=>a+(t.pnl||0),0)/wins   : 0;
+    const avgLoss = losses > 0 ? Math.abs(trades.filter(t=>(t.pnl||0)<0).reduce((a,t)=>a+(t.pnl||0),0)/losses) : 0;
+    const pf = avgLoss > 0 ? (avgWin*wins)/(avgLoss*losses) : 0;
+    let cumPnl=0, peak=0, maxDD=0;
+    [...trades].reverse().forEach(t => { cumPnl+=(t.pnl||0); if(cumPnl>peak)peak=cumPnl; const dd=peak-cumPnl; if(dd>maxDD)maxDD=dd; });
+    const now = new Date().toLocaleDateString('pt-BR');
+    const rows = trades.slice(0,50).map(t =>
+      `<tr><td>${(t.closed_at||'').slice(0,16)}</td><td>${t.symbol}</td><td>${t.side}</td>
+       <td>$${parseFloat(t.entry||0).toFixed(2)}</td><td>$${parseFloat(t.exit_price||0).toFixed(2)}</td>
+       <td style="color:${(t.pnl||0)>=0?'#1d9e75':'#e24b4a'}">${(t.pnl||0)>=0?'+':''}$${parseFloat(t.pnl||0).toFixed(2)}</td>
+       <td>${t.reason||'—'}</td></tr>`
+    ).join('');
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Relatório CryptoEdge</title>
+<style>body{font-family:Arial,sans-serif;color:#1a1a1a;padding:40px;max-width:900px;margin:0 auto}
+h1{font-size:22px;font-weight:700}h2{font-size:15px}
+.sub{color:#666;font-size:13px;margin-bottom:28px}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:28px}
+.card{background:#f5f5f5;border-radius:8px;padding:12px}
+.val{font-size:20px;font-weight:700}.lbl{font-size:11px;color:#888;margin-top:3px}
+.green{color:#1d9e75}.red{color:#e24b4a}
+table{width:100%;border-collapse:collapse;font-size:12px;margin-top:16px}
+th{background:#f0f0f0;padding:7px;text-align:left;font-size:11px;text-transform:uppercase}
+td{padding:6px 7px;border-bottom:1px solid #eee}
+.warn{background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:10px;font-size:12px;margin-bottom:20px}
+.footer{margin-top:32px;font-size:11px;color:#999;border-top:1px solid #eee;padding-top:12px}</style></head><body>
+<h1>CryptoEdge Pro — Relatório de Performance</h1>
+<div class="sub">Gerado em ${now} · ${user.username} · Plano: ${(sub?.plan||'free').toUpperCase()}</div>
+<div class="grid">
+  <div class="card"><div class="val ${totalPnl>=0?'green':'red'}">${totalPnl>=0?'+':''}$${totalPnl.toFixed(2)}</div><div class="lbl">PnL Total</div></div>
+  <div class="card"><div class="val">${trades.length}</div><div class="lbl">Total Trades</div></div>
+  <div class="card"><div class="val">${wr}%</div><div class="lbl">Win Rate</div></div>
+  <div class="card"><div class="val">${pf>0?pf.toFixed(2):'—'}</div><div class="lbl">Profit Factor</div></div>
+  <div class="card"><div class="val green">${wins}</div><div class="lbl">Trades WIN</div></div>
+  <div class="card"><div class="val red">${losses}</div><div class="lbl">Trades LOSS</div></div>
+  <div class="card"><div class="val green">+$${avgWin.toFixed(2)}</div><div class="lbl">Ganho médio</div></div>
+  <div class="card"><div class="val red">-$${avgLoss.toFixed(2)}</div><div class="lbl">Perda média</div></div>
+</div>
+<div class="warn">⚠️ Informe fiscal: ganhos com cripto acima de R$35.000/mês devem ser declarados no IR (alíquota 15%). Consulte um contador.</div>
+<h2>Histórico de Operações (últimas 50)</h2>
+<table><thead><tr><th>Data/Hora</th><th>Par</th><th>Lado</th><th>Entrada</th><th>Saída</th><th>PnL</th><th>Motivo</th></tr></thead>
+<tbody>${rows}</tbody></table>
+<div class="footer">CryptoEdge Pro · ${now} · Gerado automaticamente.</div></body></html>`;
+    res.setHeader('Content-Type','text/html; charset=utf-8');
+    res.setHeader('Content-Disposition',`attachment; filename="performance-${req.user}-${new Date().toISOString().slice(0,10)}.html"`);
+    res.send(html);
+  } catch(e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+// ─── Walk-Forward & Optimize Backtest ──────────────────────────────────────────
+app.post('/api/backtest/walkforward', requireAuth, (req, res) => {
+  const params = req.body || {};
+  const pyCmd  = process.platform==='win32' ? 'python' : 'python3';
+  execFile(pyCmd, [path.join(__dirname,'bot','backtest.py'), JSON.stringify(params), '--mode=walkforward'],
+    { timeout:180000, encoding:'utf8' },
+    (err, out, err2) => {
+      if (err) return res.status(500).json({ ok:false, error:(err2||err.message).slice(0,400) });
+      try { res.json({ ok:true, ...JSON.parse(out) }); } catch { res.status(500).json({ ok:false, error:'parse error' }); }
+    });
+});
+
+app.post('/api/backtest/optimize', requireAuth, (req, res) => {
+  const params = req.body || {};
+  const pyCmd  = process.platform==='win32' ? 'python' : 'python3';
+  execFile(pyCmd, [path.join(__dirname,'bot','backtest.py'), JSON.stringify(params), '--mode=optimize'],
+    { timeout:300000, encoding:'utf8' },
+    (err, out, err2) => {
+      if (err) return res.status(500).json({ ok:false, error:(err2||err.message).slice(0,400) });
+      try { res.json({ ok:true, results:JSON.parse(out) }); } catch { res.status(500).json({ ok:false, error:'parse error' }); }
+    });
+});
+
+// ─── Web Push Notifications ────────────────────────────────────────────────────
+const VAPID_PUBLIC  = process.env.VAPID_PUBLIC_KEY  || '';
+const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY || '';
+let webpush = null;
+if (VAPID_PUBLIC && VAPID_PRIVATE) {
+  try { webpush = require('web-push'); webpush.setVapidDetails(`mailto:${process.env.VAPID_EMAIL||'admin@cryptoedge.com'}`, VAPID_PUBLIC, VAPID_PRIVATE); } catch {}
+}
+const _pushSubs = new Map();
+
+app.post('/api/push/subscribe', requireAuth, (req, res) => {
+  if (!req.body?.subscription) return res.status(400).json({ ok:false });
+  _pushSubs.set(req.user, req.body.subscription);
+  res.json({ ok:true });
+});
+app.get('/api/push/vapid-public', (req, res) => res.json({ ok:true, key:VAPID_PUBLIC, enabled:!!webpush }));
+
 // ─── Health ────────────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => res.json({
   status:'ok', model: process.env.AI_MODEL||'qwen3-30b-a3b', env: process.env.NODE_ENV||'development',

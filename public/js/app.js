@@ -442,7 +442,9 @@ document.querySelectorAll('.nav-item').forEach(item => {
     if (item.dataset.panel === 'gridbot') { calcGrid(); }
     if (item.dataset.panel === 'journal')     { loadTrades(); loadStats(); }
     if (item.dataset.panel === 'botcontrol')  {
-      loadBotStatus(); loadBotLogs(); loadBotConfig(); checkBotKeysWarning();
+      loadBotStatus();
+  loadSubscription();
+  setTimeout(() => loadEquityCurve(30), 1000); loadBotLogs(); loadBotConfig(); checkBotKeysWarning();
       // Auto-inicia o polling de status ao abrir o painel
       if (!_botAutoRefresh) {
         _botAutoRefresh = setInterval(() => { loadBotLogs(); loadBotStatus(); }, 10000);
@@ -2085,6 +2087,193 @@ function updateSessionPreview() {
     (parseFloat(rr) < 1.5 ? `<br><span style="color:var(--red)">⚠ R:R baixo — considere aumentar o gain ou reduzir o loss</span>` : '');
 }
 
+
+// ─── Equity Curve ao Vivo ──────────────────────────────────────────────────────
+async function loadEquityCurve(days) {
+  days = days || document.getElementById('equity-range')?.value || 30;
+  try {
+    const r = await fetch(`/api/bot/equity?days=${days}`, { headers: auth.headers() });
+    const d = await r.json();
+    const emptyEl = document.getElementById('equity-empty');
+    if (!d.ok || !d.equity.length) {
+      if (emptyEl) emptyEl.style.display = 'block';
+      return;
+    }
+    if (emptyEl) emptyEl.style.display = 'none';
+    const { equity, stats } = d;
+    const setEl = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+    const pnlColor = stats.pnl >= 0 ? 'var(--green)' : 'var(--red)';
+    const pnlEl = document.getElementById('eq-pnl');
+    if (pnlEl) { pnlEl.textContent = (stats.pnl>=0?'+':'')+'$'+stats.pnl.toFixed(2); pnlEl.style.color = pnlColor; }
+    setEl('eq-wr', stats.wr+'%');
+    setEl('eq-trades', stats.trades);
+    setEl('eq-maxdd', '-$'+stats.maxDD.toFixed(2));
+    const canvas = document.getElementById('equity-canvas');
+    if (!canvas || typeof Chart === 'undefined') return;
+    if (window._eqChart) window._eqChart.destroy();
+    window._eqChart = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: equity.map(e => (e.ts||'').slice(5,16)),
+        datasets: [{ label: 'PnL Acumulado', data: equity.map(e => e.cumPnl),
+          borderColor: stats.pnl>=0 ? '#1d9e75' : '#e24b4a',
+          backgroundColor: stats.pnl>=0 ? 'rgba(29,158,117,.08)' : 'rgba(226,75,74,.08)',
+          borderWidth: 2, fill: true, tension: 0.3, pointRadius: 2 }]
+      },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { maxTicksLimit: 8, font: { size: 10 }, color: '#888' }, grid: { color: 'rgba(128,128,128,.08)' } },
+          y: { ticks: { callback: v => '$'+v.toFixed(0), font: { size: 10 }, color: '#888' }, grid: { color: 'rgba(128,128,128,.08)' } }
+        }
+      }
+    });
+  } catch(e) {}
+}
+
+// ─── Performance PDF Export ────────────────────────────────────────────────────
+function downloadPerformanceReport() { window.open('/api/reports/performance', '_blank'); }
+
+// ─── Billing / Subscriptions ───────────────────────────────────────────────────
+async function loadSubscription() {
+  try {
+    const r = await fetch('/api/billing/subscription', { headers: auth.headers() });
+    const d = await r.json();
+    if (!d.ok) return;
+    const colors = { free:'var(--t3)', pro:'var(--green)', expert:'var(--gold)', admin:'var(--blue)' };
+    const planInfo = document.getElementById('profile-plan-info');
+    if (planInfo) {
+      const exp = d.subscription?.expires_at ? ` · expira ${d.subscription.expires_at.slice(0,10)}` : '';
+      planInfo.innerHTML = `Plano atual: <b style="color:${colors[d.subscription?.plan]||'var(--t3)'}">${d.plan?.name||'Free'}</b>${exp}<br><small style="color:var(--t3)">${(d.plan?.features||[]).join(' · ')}</small>`;
+    }
+    const badge = document.getElementById('user-plan-badge');
+    if (badge) { badge.textContent = (d.subscription?.plan||'free').toUpperCase(); badge.style.color = colors[d.subscription?.plan]||'var(--t3)'; }
+  } catch {}
+}
+
+async function upgradePlan(plan) {
+  const code = prompt(`Insira o código de ativação para o plano ${plan.toUpperCase()}:
+(Recebido após o pagamento)`);
+  if (!code) return;
+  try {
+    const r = await fetch('/api/billing/upgrade', {
+      method: 'POST', headers: { ...auth.headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plan, activation_code: code })
+    });
+    const d = await r.json();
+    if (d.ok) { showToast('✅ ' + d.message); loadSubscription(); }
+    else showToast('❌ ' + d.error, true);
+  } catch(e) { showToast('❌ ' + e.message, true); }
+}
+
+// ─── Walk-Forward & Optimize ───────────────────────────────────────────────────
+function getBtConfig() {
+  return {
+    symbol:    document.getElementById('bt-symbol')?.value    || 'BTCUSDT',
+    timeframe: document.getElementById('bt-tf')?.value        || '15m',
+    limit:     document.getElementById('bt-limit')?.value     || '500',
+    capital:   document.getElementById('bt-capital')?.value   || '300',
+    rr:        document.getElementById('bt-rr')?.value        || '2.0',
+    strategy:  document.getElementById('bt-strategy')?.value  || 'trend',
+    ema_fast:  document.getElementById('bt-ema-fast')?.value  || '9',
+    ema_slow:  document.getElementById('bt-ema-slow')?.value  || '21',
+    testnet: 'true',
+  };
+}
+
+async function runWalkForward() {
+  const btn = document.querySelector('[onclick="runWalkForward()"]');
+  if (btn) { btn.textContent = '⏳ Analisando...'; btn.disabled = true; }
+  try {
+    const r = await fetch('/api/backtest/walkforward', {
+      method: 'POST', headers: { ...auth.headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...getBtConfig(), folds: 4 })
+    });
+    const d = await r.json();
+    if (!d.ok) { showToast('❌ ' + (d.error||'Erro no walk-forward'), true); return; }
+    const el = document.getElementById('wf-results');
+    if (!el) return;
+    el.style.display = 'block';
+    const vc = d.consistent ? 'var(--green)' : d.positive_folds > 1 ? 'var(--gold)' : 'var(--red)';
+    let html = `<div style="background:var(--bg2);border-radius:var(--r2);padding:12px;border:1px solid var(--border)">
+      <div style="font-size:11px;font-weight:700;color:var(--t3);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Walk-Forward Analysis (4 folds)</div>
+      <div style="font-size:13px;font-weight:600;color:${vc};margin-bottom:10px">${d.verdict||''}</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px">
+        <div style="text-align:center"><div style="font-size:14px;font-weight:600">${d.avg_wr||0}%</div><div style="font-size:10px;color:var(--t3)">Win Rate médio</div></div>
+        <div style="text-align:center"><div style="font-size:14px;font-weight:600">${d.avg_sharpe||0}</div><div style="font-size:10px;color:var(--t3)">Sharpe médio</div></div>
+        <div style="text-align:center"><div style="font-size:14px;font-weight:600">${d.positive_folds||0}/${d.total_folds||0}</div><div style="font-size:10px;color:var(--t3)">Folds positivos</div></div>
+      </div>`;
+    (d.folds||[]).forEach(f => {
+      const fc = f.pnl >= 0 ? 'var(--green)' : 'var(--red)';
+      html += `<div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 0;border-top:1px solid var(--border)">
+        <span style="color:var(--t3)">Fold ${f.fold}</span>
+        <span>${f.trades} trades · WR: ${f.win_rate}%</span>
+        <span style="color:${fc};font-weight:600">${f.pnl>=0?'+':''}$${parseFloat(f.pnl||0).toFixed(2)}</span></div>`;
+    });
+    html += '</div>';
+    el.innerHTML = html;
+  } catch(e) { showToast('❌ ' + e.message, true); }
+  finally { if (btn) { btn.textContent = '🔄 Walk-Forward (anti-overfitting)'; btn.disabled = false; } }
+}
+
+async function runOptimize() {
+  const btn = document.querySelector('[onclick="runOptimize()"]');
+  if (btn) { btn.textContent = '⏳ Otimizando...'; btn.disabled = true; }
+  try {
+    const r = await fetch('/api/backtest/optimize', {
+      method: 'POST', headers: { ...auth.headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(getBtConfig())
+    });
+    const d = await r.json();
+    if (!d.ok) { showToast('❌ ' + (d.error||'Erro'), true); return; }
+    const el = document.getElementById('opt-results');
+    if (!el) return;
+    el.style.display = 'block';
+    let html = `<div style="background:var(--bg2);border-radius:var(--r2);padding:12px;border:1px solid var(--border)">
+      <div style="font-size:11px;font-weight:700;color:var(--t3);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Top Configurações por Sharpe</div>`;
+    (d.results||[]).forEach((res, i) => {
+      const p = Object.entries(res.params).map(([k,v])=>`${k}=${v}`).join(' · ');
+      html += `<div style="padding:6px 0;border-top:1px solid var(--border);font-size:11px">
+        <div style="display:flex;justify-content:space-between">
+          <span style="color:var(--gold);font-weight:600">#${i+1} ${p}</span>
+          <span style="color:var(--blue)">Sharpe: ${res.sharpe||0}</span>
+        </div>
+        <div style="color:var(--t3);margin-top:2px">WR: ${res.win_rate||0}% · Trades: ${res.trades||0} · PnL: $${parseFloat(res.total_pnl||0).toFixed(2)}</div>
+      </div>`;
+    });
+    html += '</div>';
+    el.innerHTML = html;
+  } catch(e) { showToast('❌ ' + e.message, true); }
+  finally { if (btn) { btn.textContent = '⚙️ Otimizar Parâmetros'; btn.disabled = false; } }
+}
+
+// ─── Paper Trading UI ──────────────────────────────────────────────────────────
+function updateBotModeWarning(val) {
+  const warn = document.getElementById('bc-testnet-warn');
+  if (!warn) return;
+  if (val === 'false') {
+    warn.style.display = 'flex'; warn.className = 'alert alert-danger';
+    warn.innerHTML = '<span class="alert-icon">⚠</span><span>Modo REAL — ordens reais com dinheiro real!</span>';
+  } else if (val === 'paper') {
+    warn.style.display = 'flex'; warn.className = 'alert alert-info';
+    warn.innerHTML = '<span class="alert-icon">📋</span><span>Paper Trading — simulação local, sem ordens reais na Binance. <button onclick="resetPaperAccount()" style="margin-left:8px;font-size:11px;padding:2px 6px;cursor:pointer;border:1px solid var(--border);background:var(--bg3);color:var(--t2);border-radius:4px">Resetar Conta</button></span>';
+  } else {
+    warn.style.display = 'none';
+  }
+}
+
+async function resetPaperAccount() {
+  const v = prompt('Capital inicial para paper trading ($):', '1000');
+  if (!v) return;
+  const r = await fetch('/api/paper/reset', {
+    method: 'POST', headers: { ...auth.headers(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ initial: parseFloat(v) })
+  });
+  const d = await r.json();
+  showToast(d.ok ? `✅ Paper account resetada: $${d.balance}` : '❌ ' + d.error, !d.ok);
+}
+
+// ─── Init extras on panel switch ──────────────────────────────────────────────
 async function botSaveAndApply() {
   const btn = document.querySelector('[onclick="botSaveAndApply()"]');
   if (btn) { btn.textContent = '⏳ Salvando...'; btn.disabled = true; }

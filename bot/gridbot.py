@@ -38,6 +38,30 @@ def _live_event(etype, data=None):
     except Exception:
         pass  # Não fatal — bot continua mesmo se servidor não responder
 
+_open_trade_id = None
+
+def _save_trade_open(side, sym, entry, qty, sl, tp, strat=''):
+    global _open_trade_id
+    try:
+        import urllib.request, json as _j
+        p = _j.dumps({'symbol':sym,'side':side,'entry':entry,'qty':qty,'sl':sl,'tp':tp,'strategy':strat}).encode()
+        req = urllib.request.Request(f'{_APP_URL}/api/bot/trade/open', data=p,
+            headers={'Content-Type':'application/json','X-Bot-Token':_BOT_TOKEN}, method='POST')
+        _open_trade_id = _j.loads(urllib.request.urlopen(req, timeout=3).read()).get('id')
+    except: pass
+
+def _save_trade_close(exit_p, pnl, reason=''):
+    global _open_trade_id
+    if not _open_trade_id: return
+    try:
+        import urllib.request, json as _j
+        p = _j.dumps({'id':_open_trade_id,'exit_price':exit_p,'pnl':pnl,'reason':reason}).encode()
+        req = urllib.request.Request(f'{_APP_URL}/api/bot/trade/close', data=p,
+            headers={'Content-Type':'application/json','X-Bot-Token':_BOT_TOKEN}, method='POST')
+        urllib.request.urlopen(req, timeout=3); _open_trade_id = None
+    except: pass
+
+
 
 
 load_dotenv()
@@ -247,6 +271,7 @@ def open_long(price, qty, sl, tp, reason=''):
     conf = state.get('last_prediction', {}).get('confidence', 0)
     notify_entry('BUY', SYMBOL, price, qty, sl, tp, reason, confidence=conf, patterns=pats)
     _live_event('position_open', {'side':'BUY','pair':SYMBOL,'entry':price,'sl':sl,'tp':tp,'qty':qty,'reason':reason})
+    _save_trade_open('BUY', SYMBOL, price, qty, sl, tp, STRATEGY)
 
 def open_short(price, qty, sl, tp, reason=''):
     log.info(f"  🔴 SHORT {qty:.6f} @ ${price:,.2f} | SL ${sl:,.2f} | TP ${tp:,.2f} | {reason}")
@@ -256,6 +281,7 @@ def open_short(price, qty, sl, tp, reason=''):
     conf = state.get('last_prediction', {}).get('confidence', 0)
     notify_entry('SELL', SYMBOL, price, qty, sl, tp, reason, confidence=conf, patterns=pats)
     _live_event('position_open', {'side':'SELL','pair':SYMBOL,'entry':price,'sl':sl,'tp':tp,'qty':qty,'reason':reason})
+    _save_trade_open('SELL', SYMBOL, price, qty, sl, tp, STRATEGY)
 
 def close_position(current_price, reason=''):
     pos = state['position']
@@ -274,6 +300,7 @@ def close_position(current_price, reason=''):
     notify_exit(pos['side'], SYMBOL, pos['entry'], current_price, pnl, reason,
                 wins=state['wins'], losses=state['losses'], total_pnl=state['pnl'])
     _live_event('position_close', {'pair':SYMBOL,'side':pos['side'],'entry':pos['entry'],'exit':current_price,'pnl':pnl,'reason':reason})
+    _save_trade_close(current_price, pnl, reason)
     state['position'] = None
 
 def check_sl_tp(price):

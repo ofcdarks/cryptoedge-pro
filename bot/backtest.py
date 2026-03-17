@@ -270,27 +270,63 @@ class Backtester:
 
 
 # ─── CLI entry point (used by server.js via child_process) ────────────────────
-if __name__ == '__main__':
-    try:
-        params  = json.loads(sys.argv[1]) if len(sys.argv) > 1 else {}
-        symbol  = params.get('symbol',   'BTCUSDT')
-        tf      = params.get('timeframe','1h')
-        limit   = int(params.get('limit', 500))
-        strategy= params.get('strategy', 'trend')
-        config  = params.get('config',   {})
 
-        client = Client(
-            os.environ.get('BINANCE_API_KEY',''),
-            os.environ.get('BINANCE_SECRET_KEY',''),
-            testnet=False
-        )
-        klines = client.get_klines(symbol=symbol, interval=tf, limit=limit)
-        bt     = Backtester(klines, strategy=strategy, config=config)
-        result = bt.run()
-        result['symbol']    = symbol
-        result['timeframe'] = tf
-        result['strategy']  = strategy
-        result['candles']   = limit
-        print(json.dumps(result))
-    except Exception as e:
-        print(json.dumps({'error': str(e)}))
+
+# ─── Walk-Forward Analysis ─────────────────────────────────────────────────────
+def walk_forward(klines, strategy='trend', config=None, folds=4):
+    n = len(klines); fold_size = n // (folds + 1); results = []
+    for i in range(folds):
+        test_klines = klines[fold_size*(i+1):fold_size*(i+2)]
+        if len(test_klines) < 10: continue
+        bt = Backtester(test_klines, strategy=strategy, config=config); m = bt.run()
+        results.append({'fold':i+1,'trades':m.get('trades',0),'win_rate':m.get('win_rate',0),
+                        'pnl':m.get('total_pnl',0),'sharpe':m.get('sharpe',0),'roi':m.get('roi',0)})
+    if not results: return {'folds':[],'consistent':False,'avg_wr':0,'avg_sharpe':0,'avg_roi':0,'verdict':'Dados insuficientes'}
+    pos = sum(1 for r in results if r['pnl'] >= 0)
+    consistent = pos == len(results)
+    return {'folds':results,'consistent':consistent,'positive_folds':pos,'total_folds':len(results),
+            'avg_wr':round(sum(r['win_rate'] for r in results)/len(results),1),
+            'avg_sharpe':round(sum(r['sharpe'] for r in results)/len(results),2),
+            'avg_roi':round(sum(r['roi'] for r in results)/len(results),2),
+            'verdict':'Consistente ✅' if consistent else
+                      f'Parcialmente consistente ({pos}/{len(results)} folds) ⚠️' if pos > len(results)//2
+                      else 'Inconsistente ❌ — possível overfitting'}
+
+def optimize_params(klines, strategy='trend', config=None):
+    cfg = config or {}
+    if strategy == 'trend':
+        grid = [{'ema_fast':f,'ema_slow':s,'rr':cfg.get('rr',2)} for f in [5,9,14] for s in [21,34,50] if f < s]
+    elif strategy == 'macd':
+        grid = [{'macd_fast':f,'macd_slow':s,'macd_signal':g,'rr':cfg.get('rr',2)} for f in [8,12] for s in [21,26] for g in [7,9] if f < s]
+    else:
+        grid = [{'rr':r} for r in [1.5,2.0,2.5,3.0]]
+    results = []
+    for params in grid:
+        try:
+            merged = {**cfg, **params}
+            bt = Backtester(klines, strategy=strategy, config=merged); m = bt.run()
+            if m.get('trades',0) >= 3: results.append({'params':params, **m})
+        except: continue
+    results.sort(key=lambda x: x.get('sharpe',0), reverse=True)
+    return results[:5]
+
+if __name__ == '__main__':
+    import sys, json
+    from binance.client import Client
+    from dotenv import load_dotenv
+    load_dotenv()
+    params = json.loads(sys.argv[1]) if len(sys.argv) > 1 else {}
+    mode   = next((a.split('=',1)[1] for a in sys.argv[2:] if a.startswith('--mode=')), '')
+    cl = Client(os.environ.get('BINANCE_API_KEY',''), os.environ.get('BINANCE_SECRET_KEY',''), testnet=True)
+    symbol    = params.get('symbol','BTCUSDT')
+    timeframe = params.get('timeframe','15m')
+    limit     = int(params.get('limit',500))
+    strategy  = params.get('strategy','trend')
+    klines    = cl.get_klines(symbol=symbol, interval=timeframe, limit=limit)
+    if mode == 'walkforward':
+        print(json.dumps(walk_forward(klines, strategy=strategy, config=params, folds=int(params.get('folds',4)))))
+    elif mode == 'optimize':
+        print(json.dumps(optimize_params(klines, strategy=strategy, config=params)))
+    else:
+        bt = Backtester(klines, strategy=strategy, config=params)
+        print(json.dumps(bt.run()))

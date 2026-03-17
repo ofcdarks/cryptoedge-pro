@@ -221,6 +221,36 @@ async function init() {
 
   // Indexes
   _db.run('CREATE INDEX IF NOT EXISTS idx_trades_user ON trades(username, created_at)');
+
+  _db.run(`CREATE TABLE IF NOT EXISTS bot_trades (
+    id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
+    username TEXT NOT NULL, symbol TEXT NOT NULL, side TEXT NOT NULL,
+    entry REAL NOT NULL, exit_price REAL, qty REAL NOT NULL,
+    sl REAL DEFAULT 0, tp REAL DEFAULT 0, pnl REAL DEFAULT 0,
+    reason TEXT DEFAULT '', strategy TEXT DEFAULT '', status TEXT DEFAULT 'open',
+    opened_at TEXT DEFAULT (datetime('now')), closed_at TEXT
+  )`);
+  _db.run('CREATE INDEX IF NOT EXISTS idx_bot_trades_u ON bot_trades(username, opened_at)');
+
+  _db.run(`CREATE TABLE IF NOT EXISTS paper_accounts (
+    username TEXT PRIMARY KEY, balance REAL DEFAULT 1000, initial REAL DEFAULT 1000,
+    pnl_total REAL DEFAULT 0, wins INTEGER DEFAULT 0, losses INTEGER DEFAULT 0,
+    updated_at TEXT DEFAULT (datetime('now'))
+  )`);
+
+  _db.run(`CREATE TABLE IF NOT EXISTS subscriptions (
+    id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
+    username TEXT NOT NULL, plan TEXT DEFAULT 'free', status TEXT DEFAULT 'active',
+    price_brl REAL DEFAULT 0, started_at TEXT DEFAULT (datetime('now')), expires_at TEXT
+  )`);
+  _db.run('CREATE INDEX IF NOT EXISTS idx_subs_u ON subscriptions(username)');
+
+  const alertCols = all("PRAGMA table_info(alerts)").map(c => c.name);
+  if (!alertCols.includes('auto_execute')) {
+    try { _db.run("ALTER TABLE alerts ADD COLUMN auto_execute INTEGER DEFAULT 0"); } catch {}
+    try { _db.run("ALTER TABLE alerts ADD COLUMN execute_side TEXT DEFAULT ''"); } catch {}
+    try { _db.run("ALTER TABLE alerts ADD COLUMN execute_capital REAL DEFAULT 0"); } catch {}
+  }
   _db.run('CREATE INDEX IF NOT EXISTS idx_analysis_user ON analysis_history(username, month)');
   _db.run('CREATE INDEX IF NOT EXISTS idx_alerts_user ON alerts(username, triggered)');
   _db.run('CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)');
