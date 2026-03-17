@@ -231,24 +231,81 @@ def get_sym_info():
     log.info(f"  SymInfo: minQty={_sym_info_cache['min_qty']} step={_sym_info_cache['step']}")
     return _sym_info_cache
 
+# Saldo em cache (atualizado antes de cada ordem real)
+_usdt_balance_cache = None
+_usdt_balance_ts    = 0
+
+# BOT_MARKET: 'spot' (padrão) ou 'futures' — define onde o saldo está
+MARKET_TYPE = os.environ.get('BOT_MARKET', 'spot').lower()  # 'spot' | 'futures'
+
+def get_real_usdt_balance() -> float:
+    """Consulta saldo USDT real — Spot ou Futures USD-M conforme BOT_MARKET."""
+    global _usdt_balance_cache, _usdt_balance_ts
+    import time
+    now = time.time()
+    if _usdt_balance_cache is not None and now - _usdt_balance_ts < 30:
+        return _usdt_balance_cache
+    try:
+        if MARKET_TYPE == 'futures':
+            # Futures USD-M: usa futures_account_balance
+            balances = client.futures_account_balance()
+            usdt = next((b for b in balances if b.get('asset') == 'USDT'), None)
+            free = float(usdt.get('availableBalance', 0)) if usdt else 0.0
+        else:
+            # Spot padrão
+            bal = client.get_asset_balance(asset='USDT')
+            free = float(bal.get('free', 0)) if bal else 0.0
+        _usdt_balance_cache = free
+        _usdt_balance_ts    = now
+        log.info(f"  💰 Saldo USDT [{MARKET_TYPE.upper()}]: ${free:.2f}")
+        return free
+    except Exception as e:
+        log.warning(f"  ⚠ Não foi possível verificar saldo: {e}")
+        return _usdt_balance_cache or 0.0
+
 def round_step(v, step):
     prec = len(str(step).rstrip('0').split('.')[-1]) if '.' in str(step) else 0
     return round(float(Decimal(str(v))//Decimal(str(step))*Decimal(str(step))), prec)
 
 def safe_qty(capital: float, price: float) -> float:
-    """Calcula qty válida para a Binance: respeita minQty, stepSize e notional mínimo."""
+    """Calcula qty válida para a Binance respeitando saldo real, minQty, stepSize e notional mínimo."""
     if price <= 0: return 0
     info = get_sym_info()
-    qty  = round_step(capital / price * 0.95, info['step'])
+
+    # ── Verificar saldo real (apenas em modo não-testnet) ──────────────────────
+    effective_capital = capital
+    if not TESTNET:
+        real_balance = get_real_usdt_balance()
+        if real_balance <= 0:
+            log.error(f"  ❌ Saldo USDT zerado ou indisponível — ordem bloqueada")
+            return 0
+        if real_balance < capital:
+            log.warning(f"  ⚠ Capital configurado (${capital:.2f}) > saldo real (${real_balance:.2f})")
+            log.warning(f"  ↳ Ajustando para 90% do saldo real: ${real_balance * 0.90:.2f}")
+            effective_capital = real_balance * 0.90  # usar 90% do que tem
+        if real_balance < 10:
+            log.error(f"  ❌ Saldo insuficiente: ${real_balance:.2f} (mínimo ~$10 para operar)")
+            _notify_low_balance(real_balance)
+            return 0
+
+    qty  = round_step(effective_capital / price * 0.95, info['step'])
     # Garante notional mínimo (qty * price >= $10)
     min_notional_qty = round_step(info['min_notional'] / price * 1.05, info['step'])
     qty = max(qty, min_notional_qty)
     if qty < info['min_qty']:
-        log.warning(f"  ⚠ qty={qty} < minQty={info['min_qty']} — capital ${capital:.2f} insuficiente para {SYMBOL}")
+        log.warning(f"  ⚠ qty={qty} < minQty={info['min_qty']} — capital ${effective_capital:.2f} insuficiente para {SYMBOL}")
         return 0
     if qty > info['max_qty']:
         qty = round_step(info['max_qty'], info['step'])
     return qty
+
+def _notify_low_balance(balance: float):
+    """Notifica via Telegram quando saldo é insuficiente para operar."""
+    try:
+        from telegram_notify import notify_error
+        notify_error(f"💸 Saldo USDT insuficiente para operar!\n\nSaldo atual: ${balance:.2f}\nMínimo necessário: ~$10\n\nRecarregue sua conta para retomar as operações.")
+    except Exception: pass
+    log.error(f"  🚨 SALDO INSUFICIENTE: ${balance:.2f} — bot aguardando recarga")
 
 def place_order(side, qty, price=None, otype=ORDER_TYPE_MARKET):
     info = get_sym_info()
@@ -261,7 +318,35 @@ def place_order(side, qty, price=None, otype=ORDER_TYPE_MARKET):
     p = dict(symbol=SYMBOL, side=side, type=otype, quantity=qty)
     if price and otype==ORDER_TYPE_LIMIT:
         p['timeInForce']=TIME_IN_FORCE_GTC; p['price']=f'{price:.2f}'
-    return client.create_order(**p)
+    try:
+        # Limpar cache de saldo antes de ordem real (força re-leitura na próxima vez)
+        global _usdt_balance_cache, _usdt_balance_ts
+        _usdt_balance_cache = None
+        if MARKET_TYPE == 'futures':
+            result = client.futures_create_order(**p)
+        else:
+            result = client.create_order(**p)
+        log.info(f"  ✅ Ordem executada: {result.get('orderId')} {side} {qty}")
+        return result
+    except Exception as e:
+        err = str(e)
+        if '-2010' in err or 'insufficient balance' in err.lower():
+            # Saldo real insuficiente — limpa cache e notifica
+            _usdt_balance_cache = None
+            real_bal = get_real_usdt_balance()
+            log.error(f"  ❌ Saldo insuficiente ao executar ordem! Saldo atual: ${real_bal:.2f}")
+            _notify_low_balance(real_bal)
+            # Não re-lança — bot continua rodando, apenas não operou
+            return None
+        elif '-1121' in err or 'invalid symbol' in err.lower():
+            log.error(f"  ❌ Símbolo inválido: {SYMBOL}")
+            return None
+        elif '-1013' in err or 'notional' in err.lower():
+            log.error(f"  ❌ Valor da ordem abaixo do mínimo (notional) — qty={qty} preço≈{price}")
+            return None
+        else:
+            log.error(f"  ❌ Erro ao criar ordem: {e}")
+            raise  # re-lança erros desconhecidos para log
 
 def open_long(price, qty, sl, tp, reason=''):
     log.info(f"  🟢 LONG {qty:.6f} @ ${price:,.2f} | SL ${sl:,.2f} | TP ${tp:,.2f} | {reason}")
@@ -510,10 +595,22 @@ def scalping_on_tick(price):
     if qty<=0: return
     if r<SCALP_RSI_BUY:
         sl=price*(1-SCALP_SL_PCT/100); tp=price*(1+SCALP_TP_PCT/100)
-        open_long(price,qty,sl,tp,f"RSI {r:.0f}")
+        reason=f"RSI {r:.0f}"
+        if TRADE_MODE=='manual':
+            confirmed=request_entry_confirmation_v2('BUY',SYMBOL,price,qty,sl,tp,reason,timeout=60)
+            if confirmed: open_long(price,qty,sl,tp,reason)
+            else: log.info('  🖐 Scalp LONG cancelado (manual)')
+        else:
+            open_long(price,qty,sl,tp,reason)
     elif r>SCALP_RSI_SELL:
         sl=price*(1+SCALP_SL_PCT/100); tp=price*(1-SCALP_TP_PCT/100)
-        open_short(price,qty,sl,tp,f"RSI {r:.0f}")
+        reason=f"RSI {r:.0f}"
+        if TRADE_MODE=='manual':
+            confirmed=request_entry_confirmation_v2('SELL',SYMBOL,price,qty,sl,tp,reason,timeout=60)
+            if confirmed: open_short(price,qty,sl,tp,reason)
+            else: log.info('  🖐 Scalp SHORT cancelado (manual)')
+        else:
+            open_short(price,qty,sl,tp,reason)
 
 def trend_on_candle(close):
     if len(state['raw_closes'])<TREND_SLOW+5: return
@@ -526,9 +623,27 @@ def trend_on_candle(close):
     qty=safe_qty(CAPITAL, close)
     if qty<=0: return
     if ef>es*1.001 and r<65:
-        open_long(close,qty,close-sl_d,close+tp_d,f"EMA{TREND_FAST}>{TREND_SLOW} RSI{r:.0f}")
+        reason=f"EMA{TREND_FAST}>{TREND_SLOW} RSI{r:.0f}"
+        if TRADE_MODE == 'manual':
+            confirmed = request_entry_confirmation_v2(
+                'BUY', SYMBOL, close, qty, close-sl_d, close+tp_d, reason, timeout=60)
+            if confirmed:
+                open_long(close,qty,close-sl_d,close+tp_d,reason)
+            else:
+                log.info('  🖐 Entrada LONG (Trend) cancelada pelo usuário (modo manual)')
+        else:
+            open_long(close,qty,close-sl_d,close+tp_d,reason)
     elif ef<es*0.999 and r>35:
-        open_short(close,qty,close+sl_d,close-tp_d,f"EMA{TREND_FAST}<{TREND_SLOW} RSI{r:.0f}")
+        reason=f"EMA{TREND_FAST}<{TREND_SLOW} RSI{r:.0f}"
+        if TRADE_MODE == 'manual':
+            confirmed = request_entry_confirmation_v2(
+                'SELL', SYMBOL, close, qty, close+sl_d, close-tp_d, reason, timeout=60)
+            if confirmed:
+                open_short(close,qty,close+sl_d,close-tp_d,reason)
+            else:
+                log.info('  🖐 Entrada SHORT (Trend) cancelada pelo usuário (modo manual)')
+        else:
+            open_short(close,qty,close+sl_d,close-tp_d,reason)
 
 def macd_on_candle(close):
     if len(state['raw_closes'])<MACD_SLOW+MACD_SIGNAL+5: return
@@ -540,9 +655,21 @@ def macd_on_candle(close):
     if qty<=0: return
     if not state['position']:
         if prev<0 and hist>0 and r<65:
-            open_long(close,qty,close-sl_d,close+sl_d*2,f"MACD cross↑ RSI{r:.0f}")
+            reason=f"MACD cross↑ RSI{r:.0f}"
+            if TRADE_MODE=='manual':
+                confirmed=request_entry_confirmation_v2('BUY',SYMBOL,close,qty,close-sl_d,close+sl_d*2,reason,timeout=60)
+                if confirmed: open_long(close,qty,close-sl_d,close+sl_d*2,reason)
+                else: log.info('  🖐 MACD LONG cancelado (manual)')
+            else:
+                open_long(close,qty,close-sl_d,close+sl_d*2,reason)
         elif prev>0 and hist<0 and r>35:
-            open_short(close,qty,close+sl_d,close-sl_d*2,f"MACD cross↓ RSI{r:.0f}")
+            reason=f"MACD cross↓ RSI{r:.0f}"
+            if TRADE_MODE=='manual':
+                confirmed=request_entry_confirmation_v2('SELL',SYMBOL,close,qty,close+sl_d,close-sl_d*2,reason,timeout=60)
+                if confirmed: open_short(close,qty,close+sl_d,close-sl_d*2,reason)
+                else: log.info('  🖐 MACD SHORT cancelado (manual)')
+            else:
+                open_short(close,qty,close+sl_d,close-sl_d*2,reason)
     state['macd_prev_hist']=hist
 
 def breakout_on_candle(close):
@@ -559,9 +686,21 @@ def breakout_on_candle(close):
     if qty<=0: return
     vol_ok=last_v>avg_v*1.2 if avg_v else True
     if close>res*(1+0.003) and vol_ok:
-        open_long(close,qty,close-sl_d,close+sl_d*2,f"Break resistência ${res:,.0f}")
+        reason=f"Break resistência ${res:,.0f}"
+        if TRADE_MODE=='manual':
+            confirmed=request_entry_confirmation_v2('BUY',SYMBOL,close,qty,close-sl_d,close+sl_d*2,reason,timeout=60)
+            if confirmed: open_long(close,qty,close-sl_d,close+sl_d*2,reason)
+            else: log.info('  🖐 Breakout LONG cancelado (manual)')
+        else:
+            open_long(close,qty,close-sl_d,close+sl_d*2,reason)
     elif close<sup*(1-0.003) and vol_ok:
-        open_short(close,qty,close+sl_d,close-sl_d*2,f"Break suporte ${sup:,.0f}")
+        reason=f"Break suporte ${sup:,.0f}"
+        if TRADE_MODE=='manual':
+            confirmed=request_entry_confirmation_v2('SELL',SYMBOL,close,qty,close+sl_d,close-sl_d*2,reason,timeout=60)
+            if confirmed: open_short(close,qty,close+sl_d,close-sl_d*2,reason)
+            else: log.info('  🖐 Breakout SHORT cancelado (manual)')
+        else:
+            open_short(close,qty,close+sl_d,close-sl_d*2,reason)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # WebSocket Handlers
