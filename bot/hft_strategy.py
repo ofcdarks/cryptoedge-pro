@@ -301,6 +301,7 @@ class HFTEngine:
         return self._sym_info[pair]
 
     def _round_step(self, v, step):
+        step_d = Decimal(str(step)).normalize()
         v_d    = Decimal(str(v))
         qty_d  = (v_d // step_d) * step_d
         sign, digits, exp = step_d.as_tuple()
@@ -468,8 +469,15 @@ class HFTEngine:
             sig = self._generate_signal(pair)
 
         if sig['side']:
-            log.info(f'  📡 HFT {sig["side"]} {pair} score={sig["score"]:.1f} ({sig["count"]} sinals) | {sig["reason"]}')
+            log.info(f'  📡 HFT SINAL {sig["side"]} {pair} score={sig["score"]:.1f} ({sig.get("count",0)} sinais) | {sig["reason"]}')
             self._open_position(pair, sig['side'], close, sig['reason'])
+        else:
+            # Log a cada 15 velas fechadas para confirmar que está vivo e monitorando
+            n_closes = len(self.closes.get(pair, []))
+            if n_closes > 0 and n_closes % 15 == 0:
+                rsi_val = self._rsi(self.closes[pair]) if n_closes >= 9 else 50
+                n_pos = len(self.positions)
+                log.info(f'  📊 HFT {pair} | velas={n_closes} RSI={rsi_val:.0f} | {sig["reason"]} | posições abertas: {n_pos}')
 
     def get_stats(self) -> dict:
         total = self.daily_wins + self.daily_losses

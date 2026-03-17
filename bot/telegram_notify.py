@@ -96,8 +96,14 @@ def _start_poller():
     log.info('  📲 Telegram poller iniciado (modo manual)')
 
 def _stop_poller():
-    global _poller_running
+    global _poller_running, _pending
     _poller_running = False
+    # Cancel all pending confirmations so their threads exit immediately
+    with _pending_lock:
+        for ev in _pending.values():
+            try: ev.set()
+            except: pass
+        _pending.clear()
 
 def _poll_loop():
     offset = 0
@@ -146,14 +152,37 @@ def notify_start(symbol: str, strategy: str, capital: float, testnet: bool):
     mode_icon = '🧪' if testnet else '🚀'
     trade_mode = os.environ.get('BOT_TRADE_MODE', 'manual')
     mode_label = '🖐 MANUAL (você confirma cada trade)' if trade_mode == 'manual' else '🤖 AUTO (bot entra sozinho)'
-    # Log diagnostic so admin can verify Telegram config
     token   = _token()
     chat_id = _chat_id()
     if not token or not chat_id:
         log.error(f'  ❌ TELEGRAM NÃO CONFIGURADO — token={bool(token)} chat_id={bool(chat_id)}')
-        log.error(f'     Configure TELEGRAM_TOKEN e TELEGRAM_CHAT_ID no EasyPanel → Environment')
     else:
-        log.info(f'  📲 Telegram configurado → chat_id={chat_id[:6]}...  token=...{token[-8:]}')
+        log.info(f'  📲 Telegram configurado → chat_id={chat_id[:6]}...')
+
+    # HFT: mostrar todos os pares monitorados
+    if strategy.lower() == 'hft':
+        pairs_str = os.environ.get('HFT_PAIRS', symbol)
+        pairs_list = [p.strip() for p in pairs_str.split(',')]
+        tf  = os.environ.get('HFT_TIMEFRAME', '1m')
+        tp  = os.environ.get('HFT_TP_PCT', '0.35')
+        sl  = os.environ.get('HFT_SL_PCT', '0.18')
+        dl  = os.environ.get('HFT_DAILY_LOSS', '3.0')
+        pairs_display = ', '.join(p.replace('USDT','') for p in pairs_list[:5])
+        if len(pairs_list) > 5: pairs_display += f' +{len(pairs_list)-5}'
+        _send(
+            f'{mode_icon} <b>HFT Bot Iniciado ⚡</b>\n'
+            f'{SEP}\n'
+            f'🌐 Pares:  <code>{pairs_display}</code> ({len(pairs_list)} total)\n'
+            f'⏱ TF:     <code>{tf}</code>  |  🎮 <code>{"TESTNET" if testnet else "REAL ⚠️"}</code>\n'
+            f'💰 Capital: <code>${capital:,.2f} USDT</code>  (1.5% por trade)\n'
+            f'🎯 TP: <code>{tp}%</code>  🛡 SL: <code>{sl}%</code>  🛑 Daily: <code>{dl}%</code>\n'
+            f'{SEP}\n'
+            f'<i>⚡ Monitorando {len(pairs_list)} pares em AUTO...</i>\n'
+            f'🕐 <i>{_ts()}</i>'
+        )
+        # HFT é sempre AUTO — não precisa do poller de confirmação manual
+        return
+
     _send(
         f'{mode_icon} <b>CryptoEdge Bot Iniciado</b>\n'
         f'{SEP}\n'

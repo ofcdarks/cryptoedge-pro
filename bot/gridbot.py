@@ -5,7 +5,8 @@ Opera vela a vela identificando padrões históricos e prevendo o próximo movim
 """
 
 import os, time, json, logging, signal, sys, math
-from hft_strategy import init_hft, get_hft_engine, HFT_PAIRS, HFT_TIMEFRAME
+from hft_strategy import (init_hft, get_hft_engine, HFT_PAIRS, HFT_TIMEFRAME,
+    HFT_TP_PCT, HFT_SL_PCT, HFT_RISK_PCT, HFT_COOLDOWN, HFT_DAILY_LOSS, HFT_MIN_SIGNALS)
 from decimal import Decimal
 from collections import deque
 from binance.client import Client
@@ -1007,6 +1008,9 @@ def main():
             except Exception as _he:
                 log.warning(f"    ⚠ {_hp}: {_he}")
         log.info(f"  ✅ HFT pronto — monitorando {len(HFT_PAIRS)} pares em {HFT_TIMEFRAME}")
+        log.info(f"  📋 Pares: {', '.join(HFT_PAIRS)}")
+        log.info(f"  ⚡ Config: TP={HFT_TP_PCT}% | SL={HFT_SL_PCT}% | Risk={HFT_RISK_PCT}% | Cooldown={HFT_COOLDOWN}s")
+        log.info(f"  🛡 Daily Loss Limit: {HFT_DAILY_LOSS}% | Min Sinais: {HFT_MIN_SIGNALS}")
 
     from binance import ThreadedWebsocketManager
 
@@ -1016,8 +1020,12 @@ def main():
     while state['running'] and ws_reconnects < MAX_WS_RECONNECTS:
         try:
             log.info(f"  📡 Conectando WebSocket (tentativa {ws_reconnects+1})...")
+            # WebSocket sempre usa Binance LIVE para dados de preço
+            # Apenas a execução de ordens usa testnet (via client)
+            # WebSocket SEMPRE usa Binance Live (testnet WS não tem todos os pares)
+            # Execução de ordens continua usando testnet quando BOT_TESTNET=true
             twm = ThreadedWebsocketManager(api_key=api_key, api_secret=secret_key,
-                                           testnet=TESTNET)
+                                           testnet=False)
             twm.start()
 
             if STRATEGY == 'scalping':
