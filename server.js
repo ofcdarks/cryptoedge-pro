@@ -857,8 +857,23 @@ app.post('/api/bot/start', requireAuth, async (req, res) => {
     if (tgToken)  env['TELEGRAM_TOKEN']   = tgToken;
     if (tgChatId) env['TELEGRAM_CHAT_ID'] = tgChatId;
     env['APP_URL'] = process.env.APP_URL || `http://localhost:${process.env.PORT||3000}`;
-    // Modo de trade: 'manual' (padrão) ou 'auto'
-    env['BOT_TRADE_MODE'] = process.env.BOT_TRADE_MODE || 'manual';
+    // ── Parâmetros vindos do frontend (Bot Control ou HFT Panel) ───────────────
+    const body = req.body || {};
+    // Estratégia e modo de trade
+    if (body.strategy)   env['BOT_STRATEGY']   = body.strategy;
+    if (body.timeframe)  env['BOT_TIMEFRAME']  = body.timeframe;
+    env['BOT_TRADE_MODE'] = body.trade_mode || process.env.BOT_TRADE_MODE || 'manual';
+    if (body.testnet !== undefined) env['BOT_TESTNET'] = String(body.testnet);
+    if (body.capital)    env['BOT_CAPITAL']    = String(body.capital);
+    if (body.symbol)     env['BOT_SYMBOL']     = body.symbol.toUpperCase();
+
+    // HFT específicos
+    if (body.hft_risk_pct)   env['HFT_RISK_PCT']   = String(body.hft_risk_pct);
+    if (body.hft_tp_pct)     env['HFT_TP_PCT']      = String(body.hft_tp_pct);
+    if (body.hft_sl_pct)     env['HFT_SL_PCT']      = String(body.hft_sl_pct);
+    if (body.hft_cooldown)   env['HFT_COOLDOWN']    = String(body.hft_cooldown);
+    if (body.hft_daily_loss) env['HFT_DAILY_LOSS']  = String(body.hft_daily_loss);
+    if (body.hft_pairs)      env['HFT_PAIRS']       = body.hft_pairs;
 
     // ── Lança Python com spawn nativo Node (detached:true + unref) ─────────────
     const botScript = path.join(__dirname,'bot','gridbot.py');

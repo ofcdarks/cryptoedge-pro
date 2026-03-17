@@ -890,7 +890,17 @@ def main():
     log.info(f"\n{'═'*62}")
     log.info(f"  🚀 CryptoEdge Pro — {STRATEGY.upper()}")
     log.info(f"  Par: {SYMBOL} | Capital: ${CAPITAL} | Testnet: {TESTNET}")
-    notify_start(SYMBOL, STRATEGY, CAPITAL, TESTNET)
+    # Só notifica no primeiro start, não nos restarts silenciosos
+    if os.environ.get('_BOT_FIRST_RUN', '1') == '1':
+        notify_start(SYMBOL, STRATEGY, CAPITAL, TESTNET)
+    else:
+        log.info("  🔄 Reconectando (sem notificação Telegram)...")
+        # Reinicia o poller do Telegram se modo manual
+        if TRADE_MODE == 'manual':
+            try:
+                from telegram_notify import _start_poller
+                _start_poller()
+            except Exception: pass
     log.info(f"  Timeframe: {TIMEFRAME} | Stop global: ${STOP_LOSS:,.0f}")
     if SESSION_GAIN > 0 or SESSION_LOSS > 0:
         log.info(f"  🎯 Session Manager: GAIN +${SESSION_GAIN:.2f} | LOSS -${SESSION_LOSS:.2f}")
@@ -947,7 +957,8 @@ def main():
         log.info(f'  🔭 Scanner ativo — {len(scan_pairs) if scan_pairs else 15} pares | '
                  f'intervalo={SCAN_INTERVAL}s')
 
-    warm_up()
+    if STRATEGY != 'hft':
+        warm_up()
     if STRATEGY=='grid': grid_init()
 
     # ── HFT: inicializa engine e agenda reset diário ─────────────────────────
@@ -974,6 +985,23 @@ def main():
                     get_hft_engine().reset_daily()
 
         threading.Thread(target=_hft_daily_reset, daemon=True).start()
+
+        # Pre-load historical klines for all HFT pairs (need ≥30 candles to signal)
+        log.info(f"  📦 HFT: Carregando histórico ({HFT_TIMEFRAME}) para {len(HFT_PAIRS)} pares...")
+        for _hp in HFT_PAIRS:
+            try:
+                _kl = client.get_klines(symbol=_hp, interval=HFT_TIMEFRAME, limit=60)
+                _eng = get_hft_engine()
+                if _eng:
+                    for _k in _kl[:-1]:
+                        _eng.closes[_hp].append(float(_k[4]))
+                        _eng.highs[_hp].append(float(_k[2]))
+                        _eng.lows[_hp].append(float(_k[3]))
+                        _eng.volumes[_hp].append(float(_k[5]))
+                log.info(f"    ✅ {_hp}: {len(_kl)-1} velas")
+            except Exception as _he:
+                log.warning(f"    ⚠ {_hp}: {_he}")
+        log.info(f"  ✅ HFT pronto — monitorando {len(HFT_PAIRS)} pares em {HFT_TIMEFRAME}")
 
     from binance import ThreadedWebsocketManager
 
@@ -1067,10 +1095,14 @@ if __name__=='__main__':
     MAX_RETRIES = 10   # máximo de tentativas de reconexão
     retry_count = 0
     retry_delay = 15   # segundos entre tentativas (começa em 15s)
+    _first_run = True  # só envia notify_start na primeira vez
 
     while retry_count < MAX_RETRIES:
         try:
             state['running'] = True
+            import os as _os
+            _os.environ['_BOT_FIRST_RUN'] = '1' if _first_run else '0'
+            _first_run = False
             main()
         except SystemExit as e:
             # exit(2) = erro de configuração — não reinicia
