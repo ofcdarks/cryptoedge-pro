@@ -28,7 +28,7 @@ RUN pip3 install --break-system-packages --no-cache-dir \
 
 # Install Node dependencies (production)
 COPY package*.json ./
-RUN npm ci --only=production --no-audit --no-fund && npm cache clean --force
+RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
 
 # Copy application source
 COPY . .
