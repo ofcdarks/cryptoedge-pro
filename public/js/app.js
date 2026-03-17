@@ -441,18 +441,6 @@ document.querySelectorAll('.nav-item').forEach(item => {
       // Always reset scroll to top on panel switch
       panel.scrollTop = 0;
     }
-    // FIX: TradingView iframe tem compositing layer proprio e vaza sobre outros paineis.
-    // Esconde o widget ao sair do dashboard e mostra ao retornar.
-    const tvWidget = document.getElementById('tradingview-widget');
-    if (tvWidget) {
-      if (item.dataset.panel === 'dashboard') {
-        tvWidget.style.visibility = 'visible';
-        tvWidget.style.pointerEvents = 'auto';
-      } else {
-        tvWidget.style.visibility = 'hidden';
-        tvWidget.style.pointerEvents = 'none';
-      }
-    }
     // Para polling do bot ao sair do painel
     if (item.dataset.panel !== 'hft' && _hftRefreshTimer) {
       clearInterval(_hftRefreshTimer); _hftRefreshTimer = null;
