@@ -22,6 +22,20 @@ function getStripe(key) {
 }
 
 const app = express();
+
+// ── Production safety checks ──────────────────────────────────────────────────
+if (process.env.NODE_ENV === 'production') {
+  const enc = process.env.ENCRYPTION_KEY || '';
+  if (!enc || enc === 'mude_esta_chave_antes_do_deploy_obrigatorio' || enc.length < 16) {
+    console.error('❌ FATAL: ENCRYPTION_KEY não configurada ou inválida!');
+    console.error('   Gere uma chave: node -e "console.log(require(\'crypto\').randomBytes(16).toString(\'hex\'))"');
+    process.exit(1);
+  }
+  if (!process.env.ALLOWED_ORIGIN || process.env.ALLOWED_ORIGIN === '*') {
+    console.warn('⚠️  ALLOWED_ORIGIN não configurado — usando * (inseguro em produção)');
+  }
+}
+
 const db  = require('./db');
 const emailTpls = require('./templates/email');
 

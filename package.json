@@ -1,7 +1,7 @@
 {
   "name": "cryptoedge-pro",
-  "version": "2.0.0",
-  "description": "CryptoEdge Pro v2.0 — Plataforma profissional de day trade cripto com IA (Segurança reforçada)",
+  "version": "3.0.0",
+  "description": "CryptoEdge Pro v3.0 — Plataforma profissional de day trade cripto com IA + HFT Bot",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
