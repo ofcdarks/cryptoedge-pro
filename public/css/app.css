@@ -417,6 +417,16 @@ td.green{color:var(--green)}td.red{color:var(--red)}td.gold{color:var(--gold)}td
 /* All panels: prevent black space / scroll residue */
 .panel.active { min-height: auto; }
 
+/* Full-height panels that need special treatment */
+#panel-live.active,
+#panel-ai.active {
+  /* These panels manage their own height internally */
+  overflow: visible;
+}
+
+/* Live panel: prevent header bar from pushing content */
+#panel-live { padding: 0; }
+
 /* Fix admin panel black space */
 #panel-admin { padding-top: 0; }
 #panel-admin > div:first-child { margin-top: 0; }

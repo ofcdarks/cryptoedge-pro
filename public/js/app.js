@@ -2652,10 +2652,23 @@ EasyPanel → seu serviço → Environment Variables`, { icon:'⚙️', color:'g
 }
 
 async function stripePortal() {
-  const r = await fetch('/api/billing/stripe/portal', { method:'POST', headers:auth.headers() });
-  const d = await r.json();
-  if (d.ok && d.url) window.open(d.url,'_blank');
-  else showToast('❌ ' + (d.error||'Sem assinatura Stripe ativa'), true);
+  try {
+    const r = await fetch('/api/billing/stripe/portal', { method:'POST', headers:auth.headers() });
+    const d = await r.json();
+    if (d.ok && d.url) {
+      window.open(d.url, '_blank');
+    } else if (d.error?.includes('Módulo stripe')) {
+      await showAlert('Stripe não instalado', 'Faça redeploy no EasyPanel para instalar o módulo stripe.', { icon:'📦', color:'blue' });
+    } else if (d.error?.includes('não configurado')) {
+      await showAlert('Stripe não configurado', 'Configure STRIPE_SECRET_KEY nas variáveis do EasyPanel.\n\nEste botão só funciona após pagamento via Stripe.', { icon:'⚙️', color:'gold' });
+    } else if (d.error?.includes('Sem assinatura')) {
+      await showAlert('Sem assinatura Stripe', 'Você ainda não tem uma assinatura ativa via Stripe.\n\nUse o botão "Pagar com Cartão" para criar uma assinatura.', { icon:'💳' });
+    } else {
+      showToast('❌ ' + (d.error || 'Erro ao abrir portal'), true);
+    }
+  } catch(e) {
+    showToast('❌ ' + e.message, true);
+  }
 }
 
 // ─── COPY TRADING: EXECUTAR ORDEM REAL ────────────────────────────────────────

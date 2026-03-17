@@ -2141,7 +2141,7 @@
             <button onclick="stripeCheckout()" style="flex:1;padding:10px;background:var(--blue);color:#fff;font-weight:700;border:none;border-radius:6px;cursor:pointer;font-size:12px">💳 Pagar com Cartão (Stripe)</button>
             <button onclick="pixCheckout()" style="flex:1;padding:10px;background:rgba(0,180,80,.15);border:1px solid var(--green);color:var(--green);font-weight:700;border-radius:6px;cursor:pointer;font-size:12px">🟢 Pagar com PIX</button>
           </div>
-          <button onclick="stripePortal()" style="margin-top:8px;width:100%;padding:8px;background:var(--bg3);border:1px solid var(--border);color:var(--t3);border-radius:6px;cursor:pointer;font-size:11px">⚙️ Gerenciar assinatura Stripe</button>
+          <button onclick="stripePortal()" id="stripe-portal-btn" style="margin-top:8px;width:100%;padding:8px;background:var(--bg3);border:1px solid var(--border);color:var(--t3);border-radius:6px;cursor:pointer;font-size:11px" title="Somente para assinaturas pagas via cartão Stripe">⚙️ Gerenciar assinatura Stripe</button>
         </div>
         <!-- Admin quick access bar (shown only for admin) -->
         <div id="prof-admin-bar" style="display:none;background:rgba(240,185,11,0.08);border:1px solid rgba(240,185,11,0.3);border-radius:10px;padding:12px 16px;margin-bottom:12px;display:flex;align-items:center;gap:12px">
@@ -2672,7 +2672,7 @@
         </div>
 
         <!-- Main grid: chart + sidebar -->
-        <div style="display:grid;grid-template-columns:1fr 340px;gap:12px;height:calc(100vh - 180px);min-height:500px">
+        <div style="display:grid;grid-template-columns:1fr 340px;gap:12px;height:calc(100vh - var(--top) - 100px);min-height:400px">
 
           <!-- Left: chart + position overlay -->
           <div style="display:flex;flex-direction:column;gap:10px;min-height:0">
