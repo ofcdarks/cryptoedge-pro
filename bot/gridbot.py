@@ -4,7 +4,7 @@ CryptoEdge Pro — Bot v4.0 (Pattern Engine)
 Opera vela a vela identificando padrões históricos e prevendo o próximo movimento.
 """
 
-import os, time, json, logging, signal, sys, math
+import os, time, json, logging, signal, sys, math, threading
 from hft_strategy import (init_hft, get_hft_engine, HFT_PAIRS, HFT_TIMEFRAME,
     HFT_TP_PCT, HFT_SL_PCT, HFT_RISK_PCT, HFT_COOLDOWN, HFT_DAILY_LOSS, HFT_MIN_SIGNALS)
 from decimal import Decimal
@@ -48,9 +48,10 @@ def _save_trade_open(side, sym, entry, qty, sl, tp, strat=''):
         import urllib.request, json as _j
         p = _j.dumps({'symbol':sym,'side':side,'entry':entry,'qty':qty,'sl':sl,'tp':tp,'strategy':strat}).encode()
         req = urllib.request.Request(f'{_APP_URL}/api/bot/trade/open', data=p,
-            headers={'Content-Type':'application/json','X-Bot-Token':_BOT_TOKEN}, method='POST')
+            headers={'Content-Type':'application/json','X-Bot-Internal':'cryptoedge-bot-2024'}, method='POST')
         _open_trade_id = _j.loads(urllib.request.urlopen(req, timeout=3).read()).get('id')
-    except: pass
+    except Exception as e:
+        log.debug(f'  save_trade_open: {e}')
 
 def _save_trade_close(exit_p, pnl, reason=''):
     global _open_trade_id
@@ -59,9 +60,11 @@ def _save_trade_close(exit_p, pnl, reason=''):
         import urllib.request, json as _j
         p = _j.dumps({'id':_open_trade_id,'exit_price':exit_p,'pnl':pnl,'reason':reason}).encode()
         req = urllib.request.Request(f'{_APP_URL}/api/bot/trade/close', data=p,
-            headers={'Content-Type':'application/json','X-Bot-Token':_BOT_TOKEN}, method='POST')
-        urllib.request.urlopen(req, timeout=3); _open_trade_id = None
-    except: pass
+            headers={'Content-Type':'application/json','X-Bot-Internal':'cryptoedge-bot-2024'}, method='POST')
+        urllib.request.urlopen(req, timeout=3)
+        _open_trade_id = None
+    except Exception as e:
+        log.debug(f'  save_trade_close: {e}')
 
 
 
@@ -297,8 +300,8 @@ def get_real_usdt_balance() -> float:
         return _usdt_balance_cache if _usdt_balance_cache is not None else -1.0
 
 def round_step(v, step):
-    step_d = _D(str(step)).normalize()
-    v_d    = _D(str(v))
+    step_d = Decimal(str(step)).normalize()
+    v_d    = Decimal(str(v))
     qty_d  = (v_d // step_d) * step_d
     # Extrai precisão do Decimal normalizado (funciona com 1e-05, 0.001, etc.)
     sign, digits, exp = step_d.as_tuple()

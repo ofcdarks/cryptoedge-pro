@@ -188,41 +188,41 @@ class HFTEngine:
         ema3  = self._ema(list(closes)[-3:],  3)
         ema8  = self._ema(list(closes)[-8:],  8)
         ema21 = self._ema(list(closes)[-21:], 21)
-        if ema3 > ema8 * 1.0003 and ema8 > ema21:
+        if ema3 > ema8 * 1.0001 and ema8 > ema21 * 0.9998:
             signals.append(('BUY',  'EMA micro bull', 1.0))
-        elif ema3 < ema8 * 0.9997 and ema8 < ema21:
+        elif ema3 < ema8 * 0.9999 and ema8 < ema21 * 1.0002:
             signals.append(('SELL', 'EMA micro bear', 1.0))
 
         # ── 2. RSI Extremo (período 7) ───────────────────────────────────────
         rsi_val = self._rsi(closes)
-        if   rsi_val < 25: signals.append(('BUY',  f'RSI oversold {rsi_val:.0f}',  1.5))
-        elif rsi_val < 32: signals.append(('BUY',  f'RSI low {rsi_val:.0f}',       0.8))
-        elif rsi_val > 75: signals.append(('SELL', f'RSI overbought {rsi_val:.0f}',1.5))
-        elif rsi_val > 68: signals.append(('SELL', f'RSI high {rsi_val:.0f}',      0.8))
+        if   rsi_val < 30: signals.append(('BUY',  f'RSI oversold {rsi_val:.0f}',  1.5))
+        elif rsi_val < 40: signals.append(('BUY',  f'RSI low {rsi_val:.0f}',       0.8))
+        elif rsi_val > 70: signals.append(('SELL', f'RSI overbought {rsi_val:.0f}',1.5))
+        elif rsi_val > 60: signals.append(('SELL', f'RSI high {rsi_val:.0f}',      0.8))
 
         # ── 3. Bollinger Bands ───────────────────────────────────────────────
         bb = self._bollinger(closes)
         if bb:
             upper, mid, lower, pct_b, bw = bb
-            if   pct_b < 0.03 and bw > 0.25: signals.append(('BUY',  f'BB lower {pct_b:.2f}', 1.2))
-            elif pct_b < 0.10 and bw > 0.20: signals.append(('BUY',  f'BB near lower',        0.7))
-            elif pct_b > 0.97 and bw > 0.25: signals.append(('SELL', f'BB upper {pct_b:.2f}', 1.2))
-            elif pct_b > 0.90 and bw > 0.20: signals.append(('SELL', f'BB near upper',        0.7))
+            if   pct_b < 0.08 and bw > 0.15: signals.append(('BUY',  f'BB lower {pct_b:.2f}', 1.2))
+            elif pct_b < 0.20 and bw > 0.10: signals.append(('BUY',  f'BB near lower',        0.7))
+            elif pct_b > 0.92 and bw > 0.15: signals.append(('SELL', f'BB upper {pct_b:.2f}', 1.2))
+            elif pct_b > 0.80 and bw > 0.10: signals.append(('SELL', f'BB near upper',        0.7))
 
         # ── 4. VWAP Deviation ───────────────────────────────────────────────
         vwap = self._vwap(closes, volumes)
         dev  = (close - vwap) / vwap * 100 if vwap else 0
-        if   dev < -0.5: signals.append(('BUY',  f'VWAP dev {dev:.2f}%', 1.2))
-        elif dev < -0.3: signals.append(('BUY',  f'VWAP slight {dev:.2f}%', 0.6))
-        elif dev >  0.5: signals.append(('SELL', f'VWAP dev +{dev:.2f}%', 1.2))
-        elif dev >  0.3: signals.append(('SELL', f'VWAP slight +{dev:.2f}%', 0.6))
+        if   dev < -0.30: signals.append(('BUY',  f'VWAP dev {dev:.2f}%', 1.2))
+        elif dev < -0.15: signals.append(('BUY',  f'VWAP slight {dev:.2f}%', 0.7))
+        elif dev >  0.30: signals.append(('SELL', f'VWAP dev +{dev:.2f}%', 1.2))
+        elif dev >  0.15: signals.append(('SELL', f'VWAP slight +{dev:.2f}%', 0.7))
 
         # ── 5. Volume Momentum ───────────────────────────────────────────────
         vols = list(volumes)
         if len(vols) >= 6:
             avg_vol  = sum(vols[-6:-1]) / 5
             last_vol = vols[-1]
-            if avg_vol > 0 and last_vol > avg_vol * 1.8:
+            if avg_vol > 0 and last_vol > avg_vol * 1.4:
                 cls = list(closes)
                 if cls[-1] > cls[-2] * 1.001:
                     signals.append(('BUY',  f'Vol spike {last_vol/avg_vol:.1f}x↑', 1.3))
@@ -232,16 +232,16 @@ class HFTEngine:
         # ── 6. Stochastic ───────────────────────────────────────────────────
         if len(closes) >= 12:
             stk, std = self._stochastic(closes, highs, lows)
-            if   stk < 20 and std < 25 and stk > std * 0.9:
+            if   stk < 25 and std < 30:
                 signals.append(('BUY',  f'Stoch oversold K={stk:.0f}', 1.1))
-            elif stk > 80 and std > 75 and stk < std * 1.1:
+            elif stk > 75 and std > 70:
                 signals.append(('SELL', f'Stoch overbought K={stk:.0f}', 1.1))
 
         # ── 7. CCI ──────────────────────────────────────────────────────────
         if len(closes) >= 14:
             cci_val = self._cci(closes, highs, lows)
-            if   cci_val < -120: signals.append(('BUY',  f'CCI {cci_val:.0f} oversold', 1.0))
-            elif cci_val >  120: signals.append(('SELL', f'CCI {cci_val:.0f} overbought', 1.0))
+            if   cci_val < -80:  signals.append(('BUY',  f'CCI {cci_val:.0f} oversold', 1.0))
+            elif cci_val >  80:  signals.append(('SELL', f'CCI {cci_val:.0f} overbought', 1.0))
 
         # ── 8. MACD Fast (3/10/5) ───────────────────────────────────────────
         if len(closes) >= 15:

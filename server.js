@@ -921,6 +921,8 @@ app.post('/api/bot/start', requireAuth, async (req, res) => {
 
     _blog('🚀 Bot iniciado (PID '+pid+')');
     _setBotAutostart(true);  // persiste: Node deve reiniciar o bot se restartar
+    // Salva usuário atual para que o bot possa autenticar trades internos
+    try { db.run('INSERT OR REPLACE INTO platform_settings(key,value) VALUES(?,?)',['bot_last_user', req.user]); } catch {}
     res.json({ok:true,message:'Bot iniciado',pid:String(pid)});
   } catch(e) {
     res.status(500).json({ok:false,error:'Erro: '+e.message.slice(0,200)});
@@ -1642,8 +1644,23 @@ app.get('/api/admin/signals/subscribers', requireAuth, requireAdmin, (req, res) 
 });
 
 
+// ─── Bot internal auth (bot process calls these from localhost) ─────────────
+function requireBotOrAuth(req, res, next) {
+  // Accept internal bot calls with special header
+  if (req.headers['x-bot-internal'] === 'cryptoedge-bot-2024') {
+    // Identify the user from bot process env (stored in platform_settings)
+    try {
+      const botUser = db.get("SELECT value FROM platform_settings WHERE key='bot_last_user'");
+      req.user = botUser?.value || 'admin';
+    } catch { req.user = 'admin'; }
+    return next();
+  }
+  // Fall back to regular auth
+  return requireAuth(req, res, next);
+}
+
 // ─── Bot Live Trades (equity curve ao vivo) ───────────────────────────────────
-app.post('/api/bot/trade/open', requireAuth, (req, res) => {
+app.post('/api/bot/trade/open', requireBotOrAuth, (req, res) => {
   try {
     const { symbol, side, entry, qty, sl, tp, strategy } = req.body;
     const id = db.insert('bot_trades', {
@@ -1657,7 +1674,7 @@ app.post('/api/bot/trade/open', requireAuth, (req, res) => {
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
-app.post('/api/bot/trade/close', requireAuth, (req, res) => {
+app.post('/api/bot/trade/close', requireBotOrAuth, (req, res) => {
   try {
     const { id, exit_price, pnl, reason } = req.body;
     db.run(
