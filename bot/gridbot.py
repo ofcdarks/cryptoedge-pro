@@ -992,21 +992,29 @@ def main():
 
         threading.Thread(target=_hft_daily_reset, daemon=True).start()
 
-        # Pre-load historical klines for all HFT pairs (need ≥30 candles to signal)
-        log.info(f"  📦 HFT: Carregando histórico ({HFT_TIMEFRAME}) para {len(HFT_PAIRS)} pares...")
+        # Pre-load CLOSED klines from LIVE Binance (not testnet — testnet só tem BTC/ETH)
+        log.info(f"  📦 HFT: Carregando histórico ({HFT_TIMEFRAME}) para {len(HFT_PAIRS)} pares (LIVE Binance)...")
+        try:
+            from binance.client import Client as _LiveClient
+            _live_client = _LiveClient(api_key, secret_key, testnet=False)
+        except Exception as _ce:
+            _live_client = client  # fallback
+            log.warning(f"  ⚠ HFT: usando client testnet para klines (fallback): {_ce}")
+
         for _hp in HFT_PAIRS:
             try:
-                _kl = client.get_klines(symbol=_hp, interval=HFT_TIMEFRAME, limit=60)
+                _kl = _live_client.get_klines(symbol=_hp, interval=HFT_TIMEFRAME, limit=80)
                 _eng = get_hft_engine()
-                if _eng:
-                    for _k in _kl[:-1]:
+                if _eng and _kl:
+                    for _k in _kl[:-1]:  # skip last (candle still open)
                         _eng.closes[_hp].append(float(_k[4]))
                         _eng.highs[_hp].append(float(_k[2]))
                         _eng.lows[_hp].append(float(_k[3]))
                         _eng.volumes[_hp].append(float(_k[5]))
-                log.info(f"    ✅ {_hp}: {len(_kl)-1} velas")
+                        _eng.opens[_hp].append(float(_k[1]))
+                log.info(f"    ✅ {_hp}: {len(_kl)-1} velas fechadas carregadas")
             except Exception as _he:
-                log.warning(f"    ⚠ {_hp}: {_he}")
+                log.warning(f"    ⚠ {_hp}: falha no pré-load: {_he}")
         log.info(f"  ✅ HFT pronto — monitorando {len(HFT_PAIRS)} pares em {HFT_TIMEFRAME}")
         log.info(f"  📋 Pares: {', '.join(HFT_PAIRS)}")
         log.info(f"  ⚡ Config: TP={HFT_TP_PCT}% | SL={HFT_SL_PCT}% | Risk={HFT_RISK_PCT}% | Cooldown={HFT_COOLDOWN}s")

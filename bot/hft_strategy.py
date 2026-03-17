@@ -432,7 +432,7 @@ class HFTEngine:
 
     def on_candle(self, pair: str, open_: float, high: float, low: float,
                   close: float, volume: float, is_closed: bool):
-        # Registra dados
+        # Init deques para par novo
         if pair not in self.closes:
             self.closes[pair]  = deque(maxlen=200)
             self.highs[pair]   = deque(maxlen=200)
@@ -440,15 +440,19 @@ class HFTEngine:
             self.volumes[pair] = deque(maxlen=200)
             self.opens[pair]   = deque(maxlen=200)
 
+        # Checa SL/TP em cada tick (não precisa esperar vela fechar)
+        self._check_exit(pair, close)
+
+        # SOMENTE em velas FECHADAS atualiza os dados históricos e gera sinais
+        # Ticks intermediários contaminariam RSI/EMA/BB com dados repetidos
+        if not is_closed: return
+
+        # Vela fechada: registra OHLCV definitivo
         self.closes[pair].append(close)
         self.highs[pair].append(high)
         self.lows[pair].append(low)
         self.volumes[pair].append(volume)
         self.opens[pair].append(open_)
-
-        # Checa saídas a cada tick
-        self._check_exit(pair, close)
-        if not is_closed: return
 
         now = time.time()
 
