@@ -13,7 +13,17 @@ from binance.client import Client
 from binance.enums import *
 # python-binance v1+ uses REST polling — no BinanceSocketManager needed
 from dotenv import load_dotenv
-from patterns import Candle, PatternResult, Signal, run_all
+# Import condicional: patterns.py só é necessário em estratégias não-HFT
+import os as _os_early
+if _os_early.environ.get('BOT_STRATEGY', 'pattern').lower() != 'hft':
+    from patterns import Candle, PatternResult, Signal, run_all
+else:
+    # Stubs para evitar NameError se algum código legacy referenciar
+    def run_all(*a, **kw): return [], {}
+    class Candle: pass
+    class PatternResult: pass
+    class Signal: pass
+
 from telegram_notify import (notify_start, notify_entry, notify_exit, notify_stop,
                               notify_session_target,
                               notify_stop_loss_global, notify_error, notify_signal,
@@ -919,7 +929,7 @@ def main():
     log.info(f"{'='*62}\n")
 
     # -- Multi-par Scanner ------------------------------------------------
-    if SCAN_ENABLED:
+    if SCAN_ENABLED and STRATEGY != 'hft':
         scan_pairs = [p.strip() for p in SCAN_PAIRS_RAW.split(',') if p.strip()] or None
         def _on_scan_signal(sig):
             sym  = sig['symbol']

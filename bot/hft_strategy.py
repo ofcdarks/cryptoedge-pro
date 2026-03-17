@@ -90,8 +90,8 @@ def _hft_save_close(tid, exit_p, pnl, reason):
 log = logging.getLogger('CryptoEdge.HFT')
 
 # ── Config global (env) ───────────────────────────────────────────────────────
-HFT_TP_PCT       = float(os.environ.get('HFT_TP_PCT',      '0.40'))
-HFT_SL_PCT       = float(os.environ.get('HFT_SL_PCT',      '0.20'))
+HFT_TP_PCT       = float(os.environ.get('HFT_TP_PCT',      '0.55'))  # era 0.40%
+HFT_SL_PCT       = float(os.environ.get('HFT_SL_PCT',      '0.38'))  # era 0.20%
 # Trail Stop Progressivo: 4 niveis de travamento de lucro
 # L1: lucro >= X% -> SL vai para break-even + buffer (nunca mais fecha no negativo)
 # L2: lucro >= X% -> SL trava 40% do lucro
@@ -102,8 +102,8 @@ HFT_TRAIL_L2 = float(os.environ.get('HFT_TRAIL_L2', '0.08'))  # % lucro p/ trava
 HFT_TRAIL_L3 = float(os.environ.get('HFT_TRAIL_L3', '0.15'))  # % lucro p/ travar 60%
 HFT_TRAIL_L4 = float(os.environ.get('HFT_TRAIL_L4', '0.25'))  # % lucro p/ travar 75%
 HFT_TRAIL_BE_BUF = float(os.environ.get('HFT_TRAIL_BE_BUF', '0.01'))  # buffer BE %
-HFT_RISK_PCT     = float(os.environ.get('HFT_RISK_PCT',    '1.5'))
-HFT_MAX_TRADES   = int(os.environ.get('HFT_MAX_TRADES',    '3'))
+HFT_RISK_PCT     = float(os.environ.get('HFT_RISK_PCT',    '5.0'))  # era 1.5% → 5% para lucro real
+HFT_MAX_TRADES   = int(os.environ.get('HFT_MAX_TRADES',    '5'))   # era 3 → mais oportunidades
 HFT_DAILY_LOSS   = float(os.environ.get('HFT_DAILY_LOSS',  '3.0'))
 HFT_COOLDOWN     = int(os.environ.get('HFT_COOLDOWN',      '45'))
 HFT_TIME_EXIT    = int(os.environ.get('HFT_TIME_EXIT',     '480'))
@@ -120,6 +120,12 @@ HFT_TZ_OFFSET    = int(os.environ.get('HFT_TZ_OFFSET',    '-3'))   # UTC-3 BRT
 
 # Confirmação: máximo de desvio de preço permitido para confirmar sinal (%)
 HFT_CONFIRM_MAX_DRIFT = float(os.environ.get('HFT_CONFIRM_MAX_DRIFT', '0.25'))  # era 0.15
+
+# ── Juros Compostos ───────────────────────────────────────────────────────────
+# Quando ativado, o capital base sobe a cada dia com o lucro do dia anterior
+# → cada trade usa um budget maior conforme o capital cresce
+HFT_COMPOUND      = os.environ.get('HFT_COMPOUND', 'true').lower() == 'true'
+HFT_CAPITAL_FILE  = os.environ.get('HFT_CAPITAL_FILE', '/data/hft_capital.json')
 
 STRATEGY_NAMES = [
     'ema_micro', 'rsi_reversion', 'bollinger', 'vwap_dev',
@@ -171,7 +177,11 @@ class AdaptiveLearner:
                     self._global[s].append(outcome)
                 if pair in self._per_pair and s in self._per_pair[pair]:
                     self._per_pair[pair][s].append(outcome)
-        self._persist()
+            self._dirty = getattr(self, '_dirty', 0) + 1
+        # Persiste a cada 10 trades (não a cada trade) para reduzir I/O
+        if self._dirty >= 10:
+            self._persist()
+            self._dirty = 0
 
     def _wr(self, history):
         return sum(history) / len(history) if len(history) >= 5 else 0.5
@@ -249,11 +259,20 @@ class HFTEngine:
         self._load_calibration()
 
         # ── AI Advisor
-        self.ai_advisor = get_ai_advisor() if _AI_MODULE_OK else None
+        # AI Advisor desativado por padrão no HFT — latência de 3-4s prejudica entradas em 1m
+        # Para ativar: HFT_AI_ENABLED=true no .bot.env ou variáveis de ambiente
+        _ai_default = os.environ.get('HFT_AI_ENABLED', 'false').lower() == 'true'
+        self.ai_advisor = (get_ai_advisor() if _AI_MODULE_OK else None) if _ai_default else None
         self._ai_skipped = 0    # trades ignorados pela IA
         self._ai_approved = 0   # trades aprovados pela IA
 
+        # ── Juros compostos: carrega capital persistido da sessão anterior ──
+        if HFT_COMPOUND:
+            self.capital = self._load_capital()
+
         log.info('  🚀 HFT Engine v3.1 ADAPTIVE + CONFIRMATION + CALIBRATION + AI iniciado')
+        if HFT_COMPOUND:
+            log.info(f'  💰 Juros compostos: ATIVO | capital atual = ${self.capital:.2f}')
 
     # ── PnL History ─────────────────────────────────────────────────────────
 
@@ -337,6 +356,34 @@ class HFTEngine:
             'annual':  _fmt(year_db),
             'last_update': datetime.datetime.now().isoformat(),
         }
+
+    def _load_capital(self) -> float:
+        """Carrega capital persistido (juros compostos entre sessões)."""
+        try:
+            if HFT_COMPOUND and os.path.exists(HFT_CAPITAL_FILE):
+                with open(HFT_CAPITAL_FILE) as f:
+                    data = _json.load(f)
+                saved = float(data.get('capital', 0))
+                if saved > 0:
+                    log.info(f'  💰 Juros compostos: capital carregado = ${saved:.2f} (era ${self.capital:.2f})')
+                    return saved
+        except Exception as e:
+            log.warning(f'  Compound capital load erro: {e}')
+        return self.capital
+
+    def _save_capital(self):
+        """Persiste capital atual para uso na próxima sessão."""
+        if not HFT_COMPOUND: return
+        try:
+            os.makedirs(os.path.dirname(HFT_CAPITAL_FILE), exist_ok=True)
+            with open(HFT_CAPITAL_FILE, 'w') as f:
+                _json.dump({
+                    'capital': round(self.capital, 4),
+                    'updated': datetime.datetime.now().isoformat(),
+                    'initial': float(os.environ.get('BOT_CAPITAL', str(self.capital))),
+                }, f)
+        except Exception as e:
+            log.warning(f'  Compound capital save erro: {e}')
 
     def _load_calibration(self):
         """Carrega parâmetros calibrados por par."""
@@ -793,8 +840,8 @@ class HFTEngine:
     def _calc_qty(self, pair, price, confidence=0.5):
         if price <= 0: return 0
         info      = self._get_sym_info(pair)
-        risk_mult = min(0.8 + confidence * 0.8, 1.2)
-        if self.consec_losses >= 2: risk_mult *= 0.75
+        risk_mult = min(0.8 + confidence * 1.0, 1.5)  # era max 1.2x → agora 1.5x em alta confiança
+        if self.consec_losses >= 2: risk_mult *= 0.7    # reduz mais agressivamente após losses
         budget = self.capital * (HFT_RISK_PCT / 100) * risk_mult
         qty    = self._round_step(budget / price, info['step'])
         if qty < info['min_qty']:
@@ -1118,11 +1165,12 @@ class HFTEngine:
             self.opens[pair]   = deque(maxlen=250)
             self._candle_count[pair] = 0
 
-        # Ticks: verificar SL/TP e fechamentos manuais
+        # Ticks: verificar SL/TP apenas (sem I/O de disco por tick)
         self._check_exit(pair, close)
-        self._poll_close_flags(pair, close)
 
         if not is_closed: return
+        # Vela fechada: verificar flags de fechamento manual (1x por vela, não por tick)
+        self._poll_close_flags(pair, close)
 
         # Vela fechada → atualiza dados
         self.closes[pair].append(close)
@@ -1206,6 +1254,9 @@ class HFTEngine:
             'calibrated_pairs': list(self._pair_params.keys()),
             'ai_advisor': self.ai_advisor.get_stats() if self.ai_advisor else {'enabled': False},
             'ai_skipped':      self._ai_skipped,
+            'compound_enabled': HFT_COMPOUND,
+            'capital_current': round(self.capital, 4),
+            'budget_per_trade': round(self.capital * HFT_RISK_PCT / 100, 4),
             'ai_approved':     self._ai_approved,
             'daily_breakevens': getattr(self, 'daily_breakevens', 0),
             'pnl_summary':     self.get_pnl_summary(),
@@ -1314,6 +1365,23 @@ class HFTEngine:
         if self.daily_wins + self.daily_losses > 0:
             try: self.send_daily_summary()
             except: pass
+
+        # ── Juros compostos: incorpora PnL do dia ao capital base ─────────
+        if HFT_COMPOUND and self.daily_pnl != 0:
+            capital_antes = self.capital
+            self.capital  = round(self.capital + self.daily_pnl, 4)
+            # Garante capital mínimo de $10 para continuar operando
+            self.capital  = max(self.capital, 10.0)
+            delta = self.capital - capital_antes
+            log.info(f'  💰 Compound: capital {capital_antes:.2f} → {self.capital:.2f} ({delta:+.4f})')
+            self._save_capital()
+            self.notify(
+                f'💰 <b>Juros Compostos</b>\n'
+                f'Capital atualizado: <code>${capital_antes:.2f}</code> → <code>${self.capital:.2f}</code>\n'
+                f'Variação: <code>{delta:+.4f}</code> ({delta/capital_antes*100:+.2f}%)\n'
+                f'Próximo budget/trade: <code>${self.capital * HFT_RISK_PCT / 100:.2f}</code>'
+            )
+
         self.daily_pnl    = 0.0; self.daily_wins = 0; self.daily_losses = 0
         self.trades_today = []; self.consec_losses = 0; self.consec_wins = 0
         self.paused_until = 0; self._pending = {}

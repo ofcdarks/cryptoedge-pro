@@ -7086,7 +7086,7 @@ function initHFTPanel() {
     const cfg = botCfg.config || {};
     const setV = (id, val) => { const el = document.getElementById(id); if (el && val !== undefined) el.value = val; };
     // Banco tem prioridade; .bot.env é fallback
-    setV('hft-capital',    hft.capital    || cfg.BOT_CAPITAL     || '300');
+    setV('hft-capital',    hft.capital    || cfg.BOT_CAPITAL     || '100');
     setV('hft-risk-pct',   hft.risk_pct   || cfg.HFT_RISK_PCT    || '1.5');
     setV('hft-tp-pct',     hft.tp_pct     || cfg.HFT_TP_PCT      || '0.35');
     setV('hft-sl-pct',     hft.sl_pct     || cfg.HFT_SL_PCT      || '0.18');
@@ -7349,38 +7349,48 @@ function updateHFTTestnetWarn() {
 }
 
 function updateHFTProfitPreview() {
-  const cap    = parseFloat(document.getElementById('hft-capital')?.value   || '300');
-  const risk   = parseFloat(document.getElementById('hft-risk-pct')?.value  || '1.5');
-  const tp     = parseFloat(document.getElementById('hft-tp-pct')?.value    || '0.35');
-  const sl     = parseFloat(document.getElementById('hft-sl-pct')?.value    || '0.18');
-  const budget = cap * risk / 100;
-  const perWin = budget * tp / 100;
-  const perLoss= budget * sl / 100;
-  // Estimativa conservadora: 20 trades/dia, WR ~70%
-  const dayTrades = 20, wr = 0.70;
-  const perDay    = dayTrades * wr * perWin - dayTrades * (1-wr) * perLoss;
-  const perMonth  = perDay * 22;
+  const cap      = parseFloat(document.getElementById('hft-capital')?.value   || '100');
+  const risk     = parseFloat(document.getElementById('hft-risk-pct')?.value  || '10');
+  const tp       = parseFloat(document.getElementById('hft-tp-pct')?.value    || '0.70');
+  const sl       = parseFloat(document.getElementById('hft-sl-pct')?.value    || '0.40');
+  const compound = document.getElementById('hft-compound')?.checked ?? true;
+  const budget   = cap * risk / 100;
+  const perWin   = budget * tp / 100;
+  const perLoss  = budget * sl / 100;
+  // Estimativa: 20 wins, 6 losses/dia (WR ~77%, 26T/dia)
+  const wins = 20, losses = 6;
+  const perDay = wins * perWin - losses * perLoss;
   const fmtVal = v => Math.abs(v) < 0.01 ? '$' + v.toFixed(4) : Math.abs(v) < 1 ? '$' + v.toFixed(3) : '$' + v.toFixed(2);
   const e = id => document.getElementById(id);
-  if (e('prev-budget'))    e('prev-budget').textContent    = fmtVal(budget);
-  if (e('prev-per-win'))   e('prev-per-win').textContent   = fmtVal(perWin);
-  if (e('prev-per-day'))   { e('prev-per-day').textContent = fmtVal(perDay);   e('prev-per-day').style.color   = perDay >= 0 ? 'var(--green)' : 'var(--red)'; }
-  if (e('prev-per-month')) { e('prev-per-month').textContent = fmtVal(perMonth); e('prev-per-month').style.color = perMonth >= 0 ? 'var(--blue)' : 'var(--red)'; }
+  if (e('prev-budget'))  e('prev-budget').textContent  = fmtVal(budget);
+  if (e('prev-per-win')) e('prev-per-win').textContent = fmtVal(perWin);
+  if (e('prev-per-day')) { e('prev-per-day').textContent = fmtVal(perDay); e('prev-per-day').style.color = perDay >= 0 ? 'var(--green)' : 'var(--red)'; }
+
+  // Projeção 30 dias — simples (sem compound) ou com juros compostos
+  let cap30 = cap, total30 = 0;
+  for (let d = 0; d < 30; d++) {
+    const b = cap30 * risk / 100;
+    const dayPnl = wins * (b * tp / 100) - losses * (b * sl / 100);
+    total30 += dayPnl;
+    if (compound) cap30 += dayPnl;
+  }
+  if (e('prev-per-month'))  { e('prev-per-month').textContent  = (total30 >= 0 ? '+' : '') + fmtVal(total30); e('prev-per-month').style.color = total30 >= 0 ? 'var(--blue)' : 'var(--red)'; }
+  if (e('prev-capital-30')) { e('prev-capital-30').textContent = fmtVal(compound ? cap30 : cap + total30); e('prev-capital-30').style.color = 'var(--gold)'; }
+
   // Mostra % do saldo real que está sendo usado
   const pctHint = e('hft-capital-pct-hint');
   if (pctHint) {
     if (_cachedBinanceBalance && _cachedBinanceBalance > 0) {
       const pct = (cap / _cachedBinanceBalance * 100).toFixed(0);
-      pctHint.textContent = `usando ${pct}% do saldo real`;
+      pctHint.textContent = 'usando ' + pct + '% do saldo real';
       pctHint.style.color = pct > 100 ? 'var(--red)' : pct > 80 ? 'var(--gold)' : 'var(--t3)';
     } else {
       pctHint.textContent = 'usando ' + cap + ' USDT';
       pctHint.style.color = 'var(--t3)';
     }
   }
-  // Cor do risk-pct como indicador de risco
   const riskEl = document.getElementById('hft-risk-pct');
-  if (riskEl) riskEl.style.borderColor = risk <= 2 ? '' : risk <= 5 ? 'rgba(239,159,39,.6)' : 'rgba(227,68,68,.6)';
+  if (riskEl) riskEl.style.borderColor = risk <= 5 ? '' : risk <= 10 ? 'rgba(239,159,39,.6)' : 'rgba(227,68,68,.6)';
 }
 
 // ─── HFT Settings — persiste no banco ao iniciar ─────────────────────────────
@@ -7393,8 +7403,9 @@ function scheduleHFTSave() {
 async function saveHFTSettings() {
   try {
     const hft = {
-      capital:    document.getElementById('hft-capital')?.value    || '300',
-      risk_pct:   document.getElementById('hft-risk-pct')?.value   || '1.5',
+      capital:    document.getElementById('hft-capital')?.value    || '100',
+      risk_pct:   document.getElementById('hft-risk-pct')?.value   || '10',
+      compound:   String(document.getElementById('hft-compound')?.checked ?? true),
       tp_pct:     document.getElementById('hft-tp-pct')?.value     || '0.35',
       sl_pct:     document.getElementById('hft-sl-pct')?.value     || '0.18',
       cooldown:   document.getElementById('hft-cooldown')?.value   || '45',

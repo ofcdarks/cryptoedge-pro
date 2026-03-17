@@ -996,6 +996,7 @@ app.post('/api/bot/start', requireAuth, async (req, res) => {
       env['HFT_RISK_PCT'] = String(reqRisk);
     }
     if (body.hft_tp_pct)     env['HFT_TP_PCT']      = String(body.hft_tp_pct);
+    if (body.hft_compound !== undefined) env['HFT_COMPOUND'] = String(body.hft_compound);
     if (body.hft_sl_pct)     env['HFT_SL_PCT']      = String(body.hft_sl_pct);
     if (body.hft_cooldown)   env['HFT_COOLDOWN']    = String(body.hft_cooldown);
     if (body.hft_daily_loss) env['HFT_DAILY_LOSS']  = String(body.hft_daily_loss);

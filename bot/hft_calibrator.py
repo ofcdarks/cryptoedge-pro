@@ -143,6 +143,7 @@ def _run_backtest(klines, params):
     pnls     = []
 
     WARMUP = 60
+    pending = None  # sinal pendente aguardando confirmação
 
     for i, k in enumerate(klines):
         o = float(k[1]); h = float(k[2]); l = float(k[3])
@@ -205,7 +206,7 @@ def _run_backtest(klines, params):
             ema50 = _ema(list(closes)[-50:], 50)
             bb    = _bollinger(closes, period=20)
             bw    = bb[4] if bb else 1.0
-            if bw < 0.08: continue  # choppy
+            if bw < 0.05: continue  # choppy — alinhado com hft_strategy.py
         else:
             adx_v = 0; ema50 = c; ema21 = c
 
@@ -296,23 +297,36 @@ def _run_backtest(klines, params):
         elif sell_count >= min_sig and sell_score >= min_score and sell_score > buy_score * 1.4:
             side = 'SELL'
 
-        if not side: continue
+        if not side:
+            pending = None  # sinal contrariado — descarta pendente
+            continue
 
-        # ── Abrir posição ─────────────────────────────────────────────────
-        atr_v = _atr(highs, lows, closes)
-        if atr_v <= 0: atr_v = c * 0.002
-        sl_dist = max(atr_v * 1.0, c * 0.0020)
-        tp_dist = max(atr_v * 2.0, sl_dist * min_rr)
-        rr      = tp_dist / sl_dist if sl_dist > 0 else 0
-        if rr < min_rr: continue
-
-        qty = capital * 0.015 / c  # 1.5% risk
-        if side == 'BUY':
-            position = {'side': 'BUY',  'entry': c, 'qty': qty,
-                        'sl': c - sl_dist, 'tp': c + tp_dist, 'ts': ts}
+        # ── Filtro de confirmação: armazena sinal, entra na vela seguinte ─
+        risk_pct_env = float(os.environ.get('HFT_RISK_PCT', '1.5')) / 100
+        max_drift    = float(os.environ.get('HFT_CONFIRM_MAX_DRIFT', '0.25'))
+        if pending and pending['side'] == side:
+            drift     = abs(c - pending['price']) / pending['price'] * 100
+            bullish   = c > o * 1.0001
+            bearish   = c < o * 0.9999
+            confirmed = (side == 'BUY' and bullish) or (side == 'SELL' and bearish)
+            if confirmed and drift <= max_drift:
+                # ── Abrir posição confirmada ──────────────────────────────
+                atr_v = _atr(highs, lows, closes)
+                if atr_v <= 0: atr_v = c * 0.002
+                sl_dist = max(atr_v * 1.0, c * 0.0020)
+                tp_dist = max(atr_v * 2.0, sl_dist * min_rr)
+                rr      = tp_dist / sl_dist if sl_dist > 0 else 0
+                if rr >= min_rr:
+                    qty = capital * risk_pct_env / c
+                    if side == 'BUY':
+                        position = {'side': 'BUY',  'entry': c, 'qty': qty,
+                                    'sl': c - sl_dist, 'tp': c + tp_dist, 'ts': ts}
+                    else:
+                        position = {'side': 'SELL', 'entry': c, 'qty': qty,
+                                    'sl': c + sl_dist, 'tp': c - tp_dist, 'ts': ts}
+            pending = None
         else:
-            position = {'side': 'SELL', 'entry': c, 'qty': qty,
-                        'sl': c + sl_dist, 'tp': c - tp_dist, 'ts': ts}
+            pending = {'side': side, 'price': c}  # armazena para confirmar na vela seguinte
 
     # ── Métricas ──────────────────────────────────────────────────────────────
     n    = len(trades)
@@ -378,7 +392,7 @@ def calibrate_pair(klines, pair):
                             'min_score':  min_sc,
                             'vol_mult':   vol_m,
                             'min_signals': min_sg,
-                            'min_rr':     1.5,
+                            'min_rr': float(os.environ.get('HFT_MIN_RR', '1.4')),
                         })
 
     best_score  = -999
@@ -401,7 +415,7 @@ def calibrate_pair(klines, pair):
         best_params = {
             'rsi_buy': 28, 'rsi_sell': 72,
             'min_score': 3.0, 'vol_mult': 1.5,
-            'min_signals': 3, 'min_rr': 1.5,
+            'min_signals': 3, 'min_rr': float(os.environ.get('HFT_MIN_RR', '1.4')),
         }
         best_result = {'trades': 0, 'win_rate': 0, 'profit_factor': 0,
                        'sharpe': 0, 'roi': 0}
