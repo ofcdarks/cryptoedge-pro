@@ -426,22 +426,18 @@ const el = id => document.getElementById(id);
 document.querySelectorAll('.nav-item').forEach(item => {
   item.addEventListener('click', () => {
     document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
-    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => { p.classList.remove('active'); p.style.display = ''; });
     item.classList.add('active');
     const panel = el('panel-' + item.dataset.panel);
     if (panel) {
       panel.classList.add('active');
-      // Flex panels: CSS .panel.active handles display, but JS must override block→flex
+      // With absolute positioning, all panels start at top automatically
+      // Flex panels need display:flex instead of display:block
       const flexPanels = ['replay', 'live', 'ai'];
-      if (flexPanels.includes(item.dataset.panel)) {
-        panel.style.display = 'flex';
-      } else {
-        panel.style.display = '';  // Reset any previous inline override
-      }
+      panel.style.display = flexPanels.includes(item.dataset.panel) ? 'flex' : '';
     }
-    // CRITICAL: always scroll back to top when switching panels
-    const contentEl = document.querySelector('.content');
-    if (contentEl) contentEl.scrollTop = 0;
+    // Reset scroll position for this panel
+    if (panel) panel.scrollTop = 0;
     // Para polling do bot ao sair do painel
     if (item.dataset.panel !== 'botcontrol' && _botAutoRefresh) {
       clearInterval(_botAutoRefresh); _botAutoRefresh = null;

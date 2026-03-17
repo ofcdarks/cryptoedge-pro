@@ -69,17 +69,17 @@ body{height:100%;overflow:hidden;font-family:var(--sans);background:var(--bg0);c
 .sidebar{width:var(--sidebar);height:100vh;background:var(--bg1);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;z-index:10;overflow:hidden}
 .main{flex:1;height:100vh;display:flex;flex-direction:column;overflow:hidden;min-width:0}
 .topbar{height:var(--top);background:var(--bg1);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 1.25rem;gap:1rem;flex-shrink:0}
-.content{flex:1;overflow:hidden;padding:0;min-height:0;display:flex;flex-direction:column}
-.panel{display:none}
-.panel.active{
-  display:block;
-  flex:1 1 0;
-  min-height:0;
-  overflow-y:auto;
-  overflow-x:hidden;
-  padding:0.875rem;
-  box-sizing:border-box;
+.content{flex:1;overflow:hidden;padding:0;min-height:0;position:relative}
+.panel{
+  display: none;
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0.875rem;
+  box-sizing: border-box;
 }
+.panel.active{ display: block; }
 /* Ensure panels start at top and don't inherit scroll from other panels */
 /* scroll is per-panel now */
 
@@ -444,14 +444,13 @@ td.green{color:var(--green)}td.red{color:var(--red)}td.gold{color:var(--gold)}td
 #jrn-panel-history .table-wrap { overflow-x: auto; }
 
 
-/* ── Panel special cases ────────────────────────────────────────────── */
+/* ── Panel special cases ──────────────────────────────────────────────── */
 
-/* Replay: flex column, fills height, no own scroll (inner card scrolls) */
-#panel-replay { display: none; }
+/* Replay — flex column, fills height */
+#panel-replay { display: none; padding: 0; }
 #panel-replay.active {
-  display: flex !important;
+  display: flex;
   flex-direction: column;
-  padding: 0;
   overflow: hidden;
 }
 #panel-replay > .card {
@@ -464,49 +463,66 @@ td.green{color:var(--green)}td.red{color:var(--red)}td.gold{color:var(--gold)}td
 .rp-chart-wrap {
   flex: 1 1 0;
   min-height: 0;
-  position: relative;
   background: var(--bg2);
   border-radius: 8px;
   padding: 8px;
+  position: relative;
   display: flex;
   flex-direction: column;
 }
-#rp-canvas {
+#rp-canvas { flex: 1 1 0; min-height: 0; width: 100%; display: block; }
+
+/* Live Trading — flex column, fills height */
+#panel-live { display: none; padding: 0; }
+#panel-live.active {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0.875rem;
+  padding-bottom: 0;
+}
+#panel-live .live-grid {
   flex: 1 1 0;
   min-height: 0;
-  width: 100%;
-  display: block;
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 12px;
 }
-
-/* Live Trading: flex column, fills height */
-#panel-live { display: none; }
-#panel-live.active {
-  display: flex !important;
+#panel-live .live-grid > div {
+  display: flex;
   flex-direction: column;
-  padding: 0.875rem;
-  overflow: hidden;
+  min-height: 0;
 }
 
-/* Analysis AI: flex column chat interface */
-#panel-ai { display: none; }
+/* Analysis AI — flex column chat */
+#panel-ai { display: none; padding: 0; }
 #panel-ai.active {
-  display: flex !important;
+  display: flex;
   flex-direction: column;
   overflow: hidden;
+  padding: 0.875rem;
 }
 #panel-ai .chat-wrap {
   flex: 1 1 0;
   min-height: 0;
 }
 
-/* Bot logs: contained height */
+/* PnL Chart: uses standard scrollable panel */
+
+/* Bot control logs */
 #bc-logs {
-  height: 220px !important;
-  min-height: 120px !important;
-  max-height: 220px !important;
+  height: 200px;
+  min-height: 80px;
+  max-height: 200px;
   flex: none !important;
 }
 
-/* Admin panel fix */
+/* Dashboard TV chart responsive */
+#tradingview-widget {
+  height: min(400px, calc(100vh - 380px));
+  min-height: 200px;
+}
+
+/* Admin panel: no top gap */
 #panel-admin { padding-top: 0; }
 #panel-admin > div:first-child { margin-top: 0; }
