@@ -2658,6 +2658,52 @@ app.get('/api/performance/stats', requireAuth, (req, res) => {
   } catch(e){res.json({ok:false,error:e.message});}
 });
 
+// ─── HFT Manual Close ────────────────────────────────────────────────────────
+app.post('/api/hft/close', requireAuth, async (req, res) => {
+  try {
+    const { trade_id } = req.body;
+    if (!trade_id) return res.status(400).json({ ok: false, error: 'trade_id required' });
+    // Write a close flag file that the HFT engine polls
+    const fs = require('fs');
+    const flagDir = '/tmp/hft_close_flags';
+    fs.mkdirSync(flagDir, { recursive: true });
+    fs.writeFileSync(`${flagDir}/${trade_id}`, 'close');
+    res.json({ ok: true, message: 'Sinal de fechamento enviado' });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// ─── HFT Current Prices (for live P&L) ───────────────────────────────────────
+app.get('/api/hft/live-pnl', requireAuth, async (req, res) => {
+  try {
+    const trades = db.all(
+      "SELECT * FROM bot_trades WHERE strategy='hft' AND status='open' AND username=?",
+      [req.user]
+    );
+    if (!trades.length) return res.json({ ok: true, positions: [] });
+    // Get current prices for all open pairs
+    const symbols = [...new Set(trades.map(t => t.symbol))];
+    const prices = {};
+    await Promise.allSettled(symbols.map(async sym => {
+      try {
+        const r = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${sym}`, { signal: AbortSignal.timeout(3000) });
+        const d = await r.json();
+        if (d.price) prices[sym] = parseFloat(d.price);
+      } catch {}
+    }));
+    const positions = trades.map(t => {
+      const curPrice = prices[t.symbol] || 0;
+      const entry    = parseFloat(t.entry || 0);
+      const qty      = parseFloat(t.qty   || 0);
+      const livePnl  = curPrice && entry && qty
+        ? (t.side === 'BUY' ? (curPrice - entry) * qty : (entry - curPrice) * qty)
+        : null;
+      const pctChange = livePnl !== null && entry ? livePnl / (entry * qty) * 100 : null;
+      return { ...t, cur_price: curPrice, live_pnl: livePnl, pct_change: pctChange };
+    });
+    res.json({ ok: true, positions });
+  } catch(e) { res.json({ ok: false, error: e.message, positions: [] }); }
+});
+
 app.get('/api/hft/stats', requireAuth, (req, res) => {
   try {
     const trades = db.all("SELECT * FROM bot_trades WHERE (strategy='hft' OR strategy='HFT') AND DATE(opened_at)=DATE('now') ORDER BY opened_at DESC");

@@ -7068,6 +7068,20 @@ function initHFTPanel() {
   if (!_hftRefreshTimer) _hftRefreshTimer = setInterval(loadHFTStats, 5000);
 }
 
+async function hftManualClose(tradeId, sym) {
+  if (!await showConfirm('Fechar ' + sym, `Fechar a posição ${sym} agora ao preço de mercado?`)) return;
+  try {
+    const r = await fetch('/api/hft/close', {
+      method: 'POST',
+      headers: { ...auth.headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trade_id: tradeId })
+    });
+    const d = await r.json();
+    if (d.ok) { showToast('✅ Sinal de fechamento enviado para ' + sym); setTimeout(loadHFTStats, 2000); }
+    else showToast('❌ ' + (d.error || 'Erro'), true);
+  } catch(e) { showToast('❌ ' + e.message, true); }
+}
+
 async function loadHFTStats() {
   try {
     // Primeiro: checar status real do bot
@@ -7093,9 +7107,16 @@ async function loadHFTStats() {
     }
     if (badge) badge.style.display = isRunning ? 'inline' : 'none';
 
-    const r = await fetch('/api/hft/stats', { headers: auth.headers() });
-    const d = await r.json();
+    // Load stats + live P&L in parallel
+    const [statsResp, liveResp] = await Promise.allSettled([
+      fetch('/api/hft/stats',    { headers: auth.headers() }),
+      fetch('/api/hft/live-pnl', { headers: auth.headers() })
+    ]);
+    const d    = statsResp.status === 'fulfilled' ? await statsResp.value.json() : { ok: false };
+    const live = liveResp.status  === 'fulfilled' ? await liveResp.value.json()  : { ok: false, positions: [] };
     if (!d.ok) return;
+    const liveMap = {};
+    (live.positions || []).forEach(p => { liveMap[p.id] = p; });
     const s = d.today;
     const pnlEl = document.getElementById('hft-pnl');
     if (pnlEl) {
@@ -7111,25 +7132,56 @@ async function loadHFTStats() {
     // Render trade list
     const list = document.getElementById('hft-trades-list');
     if (list && d.trades?.length > 0) {
+      // Column headers
+      list.querySelector('.hft-col-headers')?.remove();
+      const header = document.createElement('div');
+      header.className = 'hft-col-headers';
+      header.style.cssText = 'display:grid;grid-template-columns:22px 80px 50px 95px 95px 65px 90px 80px;gap:5px;padding:4px 0 6px;border-bottom:2px solid var(--border);font-size:10px;color:var(--t3);font-weight:500;margin-bottom:2px';
+      header.innerHTML = '<span></span><span>PAR</span><span>LADO</span><span>ENTRADA</span><span>ATUAL</span><span>P&L</span><span>STATUS</span><span>AÇÃO</span>';
+      list.prepend(header);
       list.innerHTML = d.trades.slice(0,15).map(t => {
-        const pnl   = parseFloat(t.pnl || 0);
-        const open  = !t.closed_at;
-        const icon  = open ? '⏳' : pnl > 0 ? '✅' : '❌';
-        const dur   = open ? 'aberta' : (Math.round((new Date(t.closed_at) - new Date(t.opened_at))/1000) + 's');
-        const sym   = t.symbol || t.pair || '—';
-        const ep    = parseFloat(t.entry || t.entry_price || 0);
-        const eFmt  = ep > 0 ? '$' + (ep < 10 ? ep.toFixed(5) : ep.toFixed(2)) : '—';
-        const sc    = t.side === 'BUY' ? 'var(--green)' : 'var(--red)';
-        const pc    = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--t3)';
-        const pFmt  = pnl !== 0 ? (pnl>0?'+':'') + '$' + pnl.toFixed(4) : open ? '—' : '$0.0000';
-        return `<div style="display:grid;grid-template-columns:22px 88px 52px 100px 100px 65px 1fr;gap:6px;padding:7px 0;border-bottom:1px solid var(--border);align-items:center;font-size:12px">
-          <span style="font-size:13px">${icon}</span>
-          <span style="font-weight:500;color:var(--t1)">${sym}</span>
-          <span style="color:${sc};font-weight:600">${t.side||'—'}</span>
-          <span style="font-family:var(--mono)">${eFmt}</span>
-          <span style="font-family:var(--mono);color:${pc};font-weight:600">${pFmt}</span>
+        const open    = !t.closed_at;
+        const lp      = liveMap[t.id];
+        const livePnl = open && lp?.live_pnl != null ? lp.live_pnl : null;
+        const livePct = open && lp?.pct_change != null ? lp.pct_change : null;
+        const curPrice= open && lp?.cur_price ? lp.cur_price : null;
+        const pnl     = livePnl !== null ? livePnl : parseFloat(t.pnl || 0);
+        const isGain  = pnl > 0;
+        const isLoss  = pnl < 0;
+        const sym     = t.symbol || t.pair || '—';
+        const ep      = parseFloat(t.entry || t.entry_price || 0);
+        const eFmt    = ep > 0 ? '$' + (ep < 10 ? ep.toFixed(5) : ep.toFixed(2)) : '—';
+        const cpFmt   = curPrice ? '$' + (curPrice < 10 ? curPrice.toFixed(5) : curPrice.toFixed(2)) : eFmt;
+        const sc      = t.side === 'BUY' ? 'var(--green)' : 'var(--red)';
+        const dur     = open ? (curPrice ? '🟢 aberta' : 'aberta') : (Math.round((new Date(t.closed_at) - new Date(t.opened_at))/1000) + 's');
+        // P&L display
+        let pnlDisplay, pnlColor, rowBg;
+        if (open && livePnl !== null) {
+          pnlColor = isGain ? '#1d9e75' : isLoss ? '#e24b4a' : 'var(--t3)';
+          rowBg    = isGain ? 'rgba(29,158,117,.04)' : isLoss ? 'rgba(226,75,74,.04)' : 'transparent';
+          pnlDisplay = (isGain?'+':'') + '$' + livePnl.toFixed(4) + (livePct !== null ? ` (${isGain?'+':''}${livePct.toFixed(2)}%)` : '');
+        } else if (!open) {
+          pnlColor = isGain ? 'var(--green)' : isLoss ? 'var(--red)' : 'var(--t3)';
+          rowBg    = 'transparent';
+          pnlDisplay = pnl !== 0 ? (isGain?'+':'') + '$' + pnl.toFixed(4) : '$0.0000';
+        } else {
+          pnlColor = 'var(--t3)'; rowBg = 'transparent'; pnlDisplay = '—';
+        }
+        const icon    = !open ? (pnl > 0 ? '✅' : '❌') : isGain ? '📈' : isLoss ? '📉' : '⏳';
+        const closeBtn = open
+          ? `<button onclick="hftManualClose('${t.id}','${sym}')" title="Fechar manualmente"
+               style="padding:2px 8px;font-size:10px;background:var(--reddim);border:1px solid var(--red);
+                      color:var(--red);border-radius:4px;cursor:pointer;white-space:nowrap">✕ Fechar</button>`
+          : `<span style="color:var(--t3);font-size:10px" title="${t.reason||''}">${(t.reason||'').slice(0,30)}</span>`;
+        return `<div style="display:grid;grid-template-columns:22px 80px 50px 95px 95px 65px 90px 80px;gap:5px;padding:7px 0;border-bottom:1px solid var(--border);align-items:center;font-size:12px;background:${rowBg};border-radius:4px">
+          <span style="font-size:14px">${icon}</span>
+          <span style="font-weight:600;color:var(--t1)">${sym}</span>
+          <span style="color:${sc};font-weight:700">${t.side||'—'}</span>
+          <span style="font-family:var(--mono);color:var(--t3)">${eFmt}</span>
+          <span style="font-family:var(--mono);color:var(--t2)">${cpFmt}</span>
+          <span style="font-family:var(--mono);color:${pnlColor};font-weight:700">${pnlDisplay}</span>
           <span style="color:var(--t3)">${dur}</span>
-          <span style="color:var(--t3);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${t.reason||''}">${(t.reason||'').slice(0,45)}</span>
+          ${closeBtn}
         </div>`;
       }).join('');
     } else if (list) {
