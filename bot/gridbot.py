@@ -256,7 +256,17 @@ def get_real_usdt_balance() -> float:
             # Futures USD-M: usa futures_account_balance
             balances = client.futures_account_balance()
             usdt = next((b for b in balances if b.get('asset') == 'USDT'), None)
-            free = float(usdt.get('availableBalance', 0)) if usdt else 0.0
+            if usdt:
+                # availableBalance = margem livre; walletBalance = saldo total
+                avail  = float(usdt.get('availableBalance', 0))
+                wallet = float(usdt.get('balance', 0))
+                free = avail if avail > 1.0 else wallet  # usa wallet se avail estiver zerado
+                if free < 1.0:
+                    free = wallet  # fallback para saldo total
+            else:
+                free = 0.0
+            if free > 0:
+                log.info(f'  💰 Saldo Futures USDT: available=${avail:.2f} wallet=${wallet:.2f} → usando ${free:.2f}')
         else:
             # Spot padrão
             bal = client.get_asset_balance(asset='USDT')
@@ -266,8 +276,20 @@ def get_real_usdt_balance() -> float:
         log.info(f"  💰 Saldo USDT [{MARKET_TYPE.upper()}]: ${free:.2f}")
         return free
     except Exception as e:
-        log.warning(f"  ⚠ Não foi possível verificar saldo: {e}")
-        return _usdt_balance_cache or 0.0
+        log.warning(f"  ⚠ Não foi possível verificar saldo ({MARKET_TYPE}): {e}")
+        # Se falhou com futures, tenta spot como fallback
+        if MARKET_TYPE == 'futures':
+            try:
+                bal = client.get_asset_balance(asset='USDT')
+                spot_free = float(bal.get('free', 0)) if bal else 0.0
+                if spot_free > 0:
+                    log.info(f"  💰 Fallback para saldo SPOT: ${spot_free:.2f}")
+                    _usdt_balance_cache = spot_free
+                    _usdt_balance_ts    = __import__('time').time()
+                    return spot_free
+            except Exception as e2:
+                log.warning(f"  ⚠ Fallback spot também falhou: {e2}")
+        return _usdt_balance_cache if _usdt_balance_cache is not None else -1.0
 
 def round_step(v, step):
     prec = len(str(step).rstrip('0').split('.')[-1]) if '.' in str(step) else 0
@@ -282,17 +304,20 @@ def safe_qty(capital: float, price: float) -> float:
     effective_capital = capital
     if not TESTNET:
         real_balance = get_real_usdt_balance()
-        if real_balance <= 0:
-            log.error(f"  ❌ Saldo USDT zerado ou indisponível — ordem bloqueada")
-            return 0
-        if real_balance < capital:
-            log.warning(f"  ⚠ Capital configurado (${capital:.2f}) > saldo real (${real_balance:.2f})")
-            log.warning(f"  ↳ Ajustando para 90% do saldo real: ${real_balance * 0.90:.2f}")
-            effective_capital = real_balance * 0.90  # usar 90% do que tem
-        if real_balance < 10:
-            log.error(f"  ❌ Saldo insuficiente: ${real_balance:.2f} (mínimo ~$10 para operar)")
-            _notify_low_balance(real_balance)
-            return 0
+        if real_balance > 0:
+            if real_balance < 10:
+                log.error(f"  ❌ Saldo insuficiente: ${real_balance:.2f} USDT (mínimo ~$10)")
+                _notify_low_balance(real_balance)
+                return 0
+            if real_balance < capital:
+                log.warning(f"  ⚠ Capital config (${capital:.2f}) > saldo livre (${real_balance:.2f}) — usando ${real_balance * 0.95:.2f}")
+                effective_capital = real_balance * 0.95
+            # else: saldo >= capital → usa capital configurado
+        else:
+            # Não conseguiu verificar saldo (API falhou, permissão, etc.)
+            # Usa capital configurado diretamente — a ordem vai falhar se não tiver saldo
+            log.warning(f"  ⚠ Não verificou saldo real — usando capital configurado ${capital:.2f}")
+            effective_capital = capital
 
     qty  = round_step(effective_capital / price * 0.95, info['step'])
     # Garante notional mínimo (qty * price >= $10)
@@ -497,11 +522,11 @@ def pattern_engine_on_candle(close, candle_obj):
         if TRADE_MODE == 'manual':
             confirmed = request_entry_confirmation_v2(
                 SYMBOL, 'BUY', close, sl_price, tp_price,
-                conf_, pat_names, rsi_val, timeout_sec=60)
+                conf_, pat_names, rsi_val, timeout_sec=90)
             if confirmed:
                 open_long(close, qty, sl=sl_price, tp=tp_price, reason=reason_str)
             else:
-                log.info('  🖐 Entrada LONG cancelada pelo usuário (modo manual)')
+                log.info('  🖐 Entrada LONG cancelada / timeout (modo manual)')
         else:
             notify_signal(SYMBOL, 'up', conf_, patterns=pat_names,
                           reason=f'RSI {rsi_val:.0f} | Entrando LONG...')
@@ -516,11 +541,11 @@ def pattern_engine_on_candle(close, candle_obj):
         if TRADE_MODE == 'manual':
             confirmed = request_entry_confirmation_v2(
                 SYMBOL, 'SELL', close, sl_price, tp_price,
-                conf_, pat_names, rsi_val, timeout_sec=60)
+                conf_, pat_names, rsi_val, timeout_sec=90)
             if confirmed:
                 open_short(close, qty, sl=sl_price, tp=tp_price, reason=reason_str)
             else:
-                log.info('  🖐 Entrada SHORT cancelada pelo usuário (modo manual)')
+                log.info('  🖐 Entrada SHORT cancelada / timeout (modo manual)')
         else:
             notify_signal(SYMBOL, 'down', conf_, patterns=pat_names,
                           reason=f'RSI {rsi_val:.0f} | Entrando SHORT...')
@@ -603,7 +628,7 @@ def scalping_on_tick(price):
         sl=price*(1-SCALP_SL_PCT/100); tp=price*(1+SCALP_TP_PCT/100)
         reason=f"RSI {r:.0f}"
         if TRADE_MODE=='manual':
-            confirmed=request_entry_confirmation_v2('BUY',SYMBOL,price,qty,sl,tp,reason,timeout=60)
+            confirmed=request_entry_confirmation_v2('BUY',SYMBOL,price,qty,sl,tp,reason,timeout=90)
             if confirmed: open_long(price,qty,sl,tp,reason)
             else: log.info('  🖐 Scalp LONG cancelado (manual)')
         else:
@@ -612,7 +637,7 @@ def scalping_on_tick(price):
         sl=price*(1+SCALP_SL_PCT/100); tp=price*(1-SCALP_TP_PCT/100)
         reason=f"RSI {r:.0f}"
         if TRADE_MODE=='manual':
-            confirmed=request_entry_confirmation_v2('SELL',SYMBOL,price,qty,sl,tp,reason,timeout=60)
+            confirmed=request_entry_confirmation_v2('SELL',SYMBOL,price,qty,sl,tp,reason,timeout=90)
             if confirmed: open_short(price,qty,sl,tp,reason)
             else: log.info('  🖐 Scalp SHORT cancelado (manual)')
         else:
@@ -632,7 +657,7 @@ def trend_on_candle(close):
         reason=f"EMA{TREND_FAST}>{TREND_SLOW} RSI{r:.0f}"
         if TRADE_MODE == 'manual':
             confirmed = request_entry_confirmation_v2(
-                'BUY', SYMBOL, close, qty, close-sl_d, close+tp_d, reason, timeout=60)
+                'BUY', SYMBOL, close, qty, close-sl_d, close+tp_d, reason, timeout=90)
             if confirmed:
                 open_long(close,qty,close-sl_d,close+tp_d,reason)
             else:
@@ -643,7 +668,7 @@ def trend_on_candle(close):
         reason=f"EMA{TREND_FAST}<{TREND_SLOW} RSI{r:.0f}"
         if TRADE_MODE == 'manual':
             confirmed = request_entry_confirmation_v2(
-                'SELL', SYMBOL, close, qty, close+sl_d, close-tp_d, reason, timeout=60)
+                'SELL', SYMBOL, close, qty, close+sl_d, close-tp_d, reason, timeout=90)
             if confirmed:
                 open_short(close,qty,close+sl_d,close-tp_d,reason)
             else:
@@ -663,7 +688,7 @@ def macd_on_candle(close):
         if prev<0 and hist>0 and r<65:
             reason=f"MACD cross↑ RSI{r:.0f}"
             if TRADE_MODE=='manual':
-                confirmed=request_entry_confirmation_v2('BUY',SYMBOL,close,qty,close-sl_d,close+sl_d*2,reason,timeout=60)
+                confirmed=request_entry_confirmation_v2('BUY',SYMBOL,close,qty,close-sl_d,close+sl_d*2,reason,timeout=90)
                 if confirmed: open_long(close,qty,close-sl_d,close+sl_d*2,reason)
                 else: log.info('  🖐 MACD LONG cancelado (manual)')
             else:
@@ -671,7 +696,7 @@ def macd_on_candle(close):
         elif prev>0 and hist<0 and r>35:
             reason=f"MACD cross↓ RSI{r:.0f}"
             if TRADE_MODE=='manual':
-                confirmed=request_entry_confirmation_v2('SELL',SYMBOL,close,qty,close+sl_d,close-sl_d*2,reason,timeout=60)
+                confirmed=request_entry_confirmation_v2('SELL',SYMBOL,close,qty,close+sl_d,close-sl_d*2,reason,timeout=90)
                 if confirmed: open_short(close,qty,close+sl_d,close-sl_d*2,reason)
                 else: log.info('  🖐 MACD SHORT cancelado (manual)')
             else:
@@ -694,7 +719,7 @@ def breakout_on_candle(close):
     if close>res*(1+0.003) and vol_ok:
         reason=f"Break resistência ${res:,.0f}"
         if TRADE_MODE=='manual':
-            confirmed=request_entry_confirmation_v2('BUY',SYMBOL,close,qty,close-sl_d,close+sl_d*2,reason,timeout=60)
+            confirmed=request_entry_confirmation_v2('BUY',SYMBOL,close,qty,close-sl_d,close+sl_d*2,reason,timeout=90)
             if confirmed: open_long(close,qty,close-sl_d,close+sl_d*2,reason)
             else: log.info('  🖐 Breakout LONG cancelado (manual)')
         else:
@@ -702,7 +727,7 @@ def breakout_on_candle(close):
     elif close<sup*(1-0.003) and vol_ok:
         reason=f"Break suporte ${sup:,.0f}"
         if TRADE_MODE=='manual':
-            confirmed=request_entry_confirmation_v2('SELL',SYMBOL,close,qty,close+sl_d,close-sl_d*2,reason,timeout=60)
+            confirmed=request_entry_confirmation_v2('SELL',SYMBOL,close,qty,close+sl_d,close-sl_d*2,reason,timeout=90)
             if confirmed: open_short(close,qty,close+sl_d,close-sl_d*2,reason)
             else: log.info('  🖐 Breakout SHORT cancelado (manual)')
         else:

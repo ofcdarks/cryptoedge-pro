@@ -146,6 +146,14 @@ def notify_start(symbol: str, strategy: str, capital: float, testnet: bool):
     mode_icon = '🧪' if testnet else '🚀'
     trade_mode = os.environ.get('BOT_TRADE_MODE', 'manual')
     mode_label = '🖐 MANUAL (você confirma cada trade)' if trade_mode == 'manual' else '🤖 AUTO (bot entra sozinho)'
+    # Log diagnostic so admin can verify Telegram config
+    token   = _token()
+    chat_id = _chat_id()
+    if not token or not chat_id:
+        log.error(f'  ❌ TELEGRAM NÃO CONFIGURADO — token={bool(token)} chat_id={bool(chat_id)}')
+        log.error(f'     Configure TELEGRAM_TOKEN e TELEGRAM_CHAT_ID no EasyPanel → Environment')
+    else:
+        log.info(f'  📲 Telegram configurado → chat_id={chat_id[:6]}...  token=...{token[-8:]}')
     _send(
         f'{mode_icon} <b>CryptoEdge Bot Iniciado</b>\n'
         f'{SEP}\n'
@@ -250,7 +258,7 @@ def request_entry_confirmation(symbol: str, side: str, price: float,
 def request_entry_confirmation_v2(symbol: str, side: str, price: float,
                                    sl: float, tp: float, conf: float,
                                    patterns: list, rsi_val: float,
-                                   timeout_sec: int = 60) -> bool:
+                                   timeout_sec: int = 120) -> bool:
     """Versão com dois eventos separados para distinguir confirm vs ignore."""
     icon    = '🟢' if side == 'BUY' else '🔴'
     dir_    = 'LONG ▲' if side == 'BUY' else 'SHORT ▼'
@@ -288,19 +296,30 @@ def request_entry_confirmation_v2(symbol: str, side: str, price: float,
         f'📡 Confiança: {conf_bar}\n'
         f'📊 RSI:       <code>{rsi_val:.0f}</code>\n'
         f'{SEP}\n'
-        f'⏳ <i>Responda em até {timeout_sec}s ou o sinal expira</i>\n'
+        f'⏳ <b>⚡ Responda em {timeout_sec}s ou o sinal expira! ⚡</b>\n'
         f'🕐 <i>{_ts()}</i>',
         reply_markup=markup
     )
 
     # Aguarda qualquer um dos dois eventos
     deadline = time.time() + timeout_sec
+    reminded  = False
     confirmed = False
     while time.time() < deadline:
         if ev_confirm.is_set():
             confirmed = True; break
         if ev_ignore.is_set():
             confirmed = False; break
+        # Lembrete aos 30s do timeout para não perder o sinal
+        remaining = deadline - time.time()
+        if not reminded and remaining < (timeout_sec * 0.5):
+            reminded = True
+            _send(
+                f'⚡ <b>Lembrete — sinal ainda aguarda!</b>\n'
+                f'{icon} {dir_} <code>{symbol}</code> @ <code>${price:,.2f}</code>\n'
+                f'⚡ <b>{int(remaining)}s RESTANTES — clique AGORA!</b>',
+                reply_markup=markup
+            )
         time.sleep(0.3)
 
     with _pending_lock:
@@ -309,7 +328,7 @@ def request_entry_confirmation_v2(symbol: str, side: str, price: float,
 
     if time.time() >= deadline and not ev_confirm.is_set() and not ev_ignore.is_set():
         log.info('  ⏰ Timeout — sinal expirou sem resposta')
-        _send(f'⏰ <b>Expirou</b> — sinal <code>{symbol} {dir_}</code> sem confirmação.')
+        _send(f'⏰ <b>Sinal expirado</b> — <code>{symbol} {dir_}</code> sem confirmação em {timeout_sec}s.')
         return False
 
     return confirmed

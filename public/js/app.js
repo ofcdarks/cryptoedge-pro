@@ -5638,6 +5638,25 @@ async function changePassword() {
   } catch(e) { showToast('❌ '+e.message, true); }
 }
 
+async function testTelegram() {
+  showToast('📲 Enviando mensagem de teste...', false);
+  try {
+    const r = await fetch('/api/bot/test-telegram', { method:'POST', headers: auth.headers() });
+    const d = await r.json();
+    if (d.ok) {
+      await showAlert('✅ Telegram OK!',
+        'Mensagem de teste enviada com sucesso!\n\nVerifique seu Telegram — você deve ter recebido a mensagem.',
+        { icon: '📲', color: 'green' });
+    } else {
+      await showAlert('❌ Telegram com erro',
+        `Erro ao enviar mensagem:\n\n${d.error}\n\nVerifique TELEGRAM_TOKEN e TELEGRAM_CHAT_ID no EasyPanel.`,
+        { icon: '⚠️', color: 'red' });
+    }
+  } catch(e) {
+    showToast('❌ Erro: ' + e.message, true);
+  }
+}
+
 async function saveApiKeys() {
   const binKey    = document.getElementById('key-binance-key')?.value.trim();
   const binSecret = document.getElementById('key-binance-secret')?.value.trim();

@@ -2486,6 +2486,23 @@ async function sendNativePush(username, title, body, data = {}) {
 }
 
 // ─── Health ────────────────────────────────────────────────────────────────────
+
+// ─── Test Telegram endpoint ───────────────────────────────────────────────────
+app.post('/api/bot/test-telegram', requireAuth, async (req, res) => {
+  const tok = process.env.TELEGRAM_TOKEN || '';
+  const cid = process.env.TELEGRAM_CHAT_ID || '';
+  if (!tok || !cid) return res.json({ ok: false, error: 'TELEGRAM_TOKEN ou TELEGRAM_CHAT_ID não configurado' });
+  try {
+    const r = await axios.post(`https://api.telegram.org/bot${tok}/sendMessage`, {
+      chat_id: cid, parse_mode: 'HTML',
+      text: `✅ <b>Teste CryptoEdge Pro</b>\n\n📲 Telegram funcionando!\n🕐 <i>${new Date().toLocaleString('pt-BR', {timeZone:'America/Sao_Paulo'})}</i>`
+    }, { timeout: 8000 });
+    res.json({ ok: true, telegram_ok: r.data.ok, message_id: r.data.result?.message_id });
+  } catch(e) {
+    res.status(500).json({ ok: false, error: e.response?.data?.description || e.message });
+  }
+});
+
 app.get('/api/health', (req, res) => res.json({
   status:'ok', model: process.env.AI_MODEL||'qwen3-30b-a3b', env: process.env.NODE_ENV||'development',
   ts: new Date().toISOString(), uptime: Math.round(process.uptime())+'s',
