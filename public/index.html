@@ -573,7 +573,7 @@
         </div>
 
         <!-- HFT Live Banner (only when HFT running) -->
-        <div id="hft-live-banner" style="display:none;padding:10px 14px;background:rgba(83,63,171,.1);border:1px solid rgba(83,63,171,.3);border-radius:8px;margin-bottom:10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <div id="hft-live-banner" style="display:none;padding:10px 14px;background:rgba(83,63,171,.1);border:1px solid rgba(83,63,171,.3);border-radius:8px;margin-bottom:10px;align-items:center;gap:12px;flex-wrap:wrap">
           <div style="display:flex;align-items:center;gap:6px"><div style="width:8px;height:8px;border-radius:50%;background:#533FAB;animation:pulse 1.5s infinite" id="hft-live-dot"></div><span style="font-size:12px;font-weight:600;color:#8b7fff">⚡ HFT ATIVO</span></div>
           <div style="font-size:12px;color:var(--t2)">Hoje: <b id="hft-dash-trades">0</b> trades · <b id="hft-dash-wr" style="color:var(--green)">—</b> WR · PnL: <b id="hft-dash-pnl" style="color:var(--green)">$0.00</b></div>
           <a onclick="document.querySelector('[data-panel=hft]').click()" style="margin-left:auto;font-size:11px;color:#8b7fff;cursor:pointer">Ver painel →</a>
@@ -2229,7 +2229,7 @@
           <button onclick="stripePortal()" id="stripe-portal-btn" style="margin-top:8px;width:100%;padding:8px;background:var(--bg3);border:1px solid var(--border);color:var(--t3);border-radius:6px;cursor:pointer;font-size:11px" title="Somente para assinaturas pagas via cartão Stripe">⚙️ Gerenciar assinatura Stripe</button>
         </div>
         <!-- Admin quick access bar (shown only for admin) -->
-        <div id="prof-admin-bar" style="display:none;background:rgba(240,185,11,0.08);border:1px solid rgba(240,185,11,0.3);border-radius:10px;padding:12px 16px;margin-bottom:12px;display:flex;align-items:center;gap:12px">
+        <div id="prof-admin-bar" style="display:none;background:rgba(240,185,11,0.08);border:1px solid rgba(240,185,11,0.3);border-radius:10px;padding:12px 16px;margin-bottom:12px;align-items:center;gap:12px">
           <span style="font-size:20px">⚙️</span>
           <div>
             <div style="font-size:13px;font-weight:700;color:var(--gold)">Você é Administrador</div>
@@ -2656,28 +2656,77 @@
           </div>
         </div>
 
-        <!-- Métricas do dia -->
-        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:10px">
-          <div class="card" style="text-align:center;padding:10px">
-            <div id="hft-pnl" style="font-family:var(--mono);font-size:16px;font-weight:700;color:var(--green)">$0.00</div>
-            <div style="font-size:10px;color:var(--t3);margin-top:2px">P&L Hoje</div>
+        <!-- Métricas em tempo real — Hoje / Mês / Ano -->
+        <div style="margin-bottom:10px">
+
+          <!-- Linha 1: PnL dos 3 períodos -->
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px">
+            <!-- Hoje -->
+            <div class="card" style="padding:10px;position:relative">
+              <div style="font-size:9px;font-weight:700;color:var(--t3);letter-spacing:.6px;margin-bottom:4px">📅 HOJE</div>
+              <div id="hft-pnl" style="font-family:var(--mono);font-size:18px;font-weight:800;color:var(--green)">$0.0000</div>
+              <div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap">
+                <span style="font-size:10px;color:var(--t3)"><span id="hft-trades">0</span> trades</span>
+                <span style="font-size:10px;color:var(--t3)">WR: <b id="hft-wr" style="color:var(--t1)">—</b></span>
+                <span id="hft-be-badge" style="display:none;font-size:10px;color:var(--gold)">🔄<span id="hft-bes">0</span> BE</span>
+              </div>
+            </div>
+            <!-- Mês -->
+            <div class="card" style="padding:10px">
+              <div style="font-size:9px;font-weight:700;color:var(--t3);letter-spacing:.6px;margin-bottom:4px">📆 MÊS</div>
+              <div id="hft-pnl-month" style="font-family:var(--mono);font-size:18px;font-weight:800;color:var(--green)">$0.0000</div>
+              <div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap">
+                <span style="font-size:10px;color:var(--t3)"><span id="hft-trades-month">0</span> trades</span>
+                <span style="font-size:10px;color:var(--t3)">WR: <b id="hft-wr-month" style="color:var(--t1)">—</b></span>
+              </div>
+            </div>
+            <!-- Ano -->
+            <div class="card" style="padding:10px">
+              <div style="font-size:9px;font-weight:700;color:var(--t3);letter-spacing:.6px;margin-bottom:4px">📈 ANO</div>
+              <div id="hft-pnl-year" style="font-family:var(--mono);font-size:18px;font-weight:800;color:var(--green)">$0.0000</div>
+              <div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap">
+                <span style="font-size:10px;color:var(--t3)"><span id="hft-trades-year">0</span> trades</span>
+                <span style="font-size:10px;color:var(--t3)">WR: <b id="hft-wr-year" style="color:var(--t1)">—</b></span>
+              </div>
+            </div>
           </div>
-          <div class="card" style="text-align:center;padding:10px">
-            <div id="hft-trades" style="font-family:var(--mono);font-size:16px;font-weight:700">0</div>
-            <div style="font-size:10px;color:var(--t3);margin-top:2px">Trades</div>
+
+          <!-- Linha 2: W/L/BE detalhe do dia + abertas + pares -->
+          <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:8px">
+            <!-- W/L/BE breakdown -->
+            <div class="card" style="padding:10px;display:flex;align-items:center;gap:14px">
+              <div style="text-align:center">
+                <div id="hft-wins-count" style="font-family:var(--mono);font-size:17px;font-weight:700;color:var(--green)">0</div>
+                <div style="font-size:10px;color:var(--t3)">Wins ✅</div>
+              </div>
+              <div style="width:1px;height:32px;background:var(--border)"></div>
+              <div style="text-align:center">
+                <div id="hft-losses-count" style="font-family:var(--mono);font-size:17px;font-weight:700;color:var(--red)">0</div>
+                <div style="font-size:10px;color:var(--t3)">Losses ❌</div>
+              </div>
+              <div style="width:1px;height:32px;background:var(--border)"></div>
+              <div style="text-align:center">
+                <div id="hft-be-count" style="font-family:var(--mono);font-size:17px;font-weight:700;color:var(--gold)">0</div>
+                <div style="font-size:10px;color:var(--t3)">Break-even 🔄</div>
+              </div>
+              <div style="width:1px;height:32px;background:var(--border)"></div>
+              <div style="flex:1;text-align:center">
+                <div id="hft-streak-badge" style="font-size:11px;font-weight:700;color:var(--t2)">—</div>
+                <div style="font-size:10px;color:var(--t3)">Sequência</div>
+              </div>
+            </div>
+            <!-- Abertas -->
+            <div class="card" style="text-align:center;padding:10px">
+              <div id="hft-open" style="font-family:var(--mono);font-size:17px;font-weight:700;color:var(--gold)">0</div>
+              <div style="font-size:10px;color:var(--t3);margin-top:2px">Abertas</div>
+            </div>
+            <!-- Pares -->
+            <div class="card" style="text-align:center;padding:10px">
+              <div id="hft-pairs-active" style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--blue)">—</div>
+              <div style="font-size:10px;color:var(--t3);margin-top:2px">Pares ativos</div>
+            </div>
           </div>
-          <div class="card" style="text-align:center;padding:10px">
-            <div id="hft-wr" style="font-family:var(--mono);font-size:16px;font-weight:700">—</div>
-            <div style="font-size:10px;color:var(--t3);margin-top:2px">Win Rate</div>
-          </div>
-          <div class="card" style="text-align:center;padding:10px">
-            <div id="hft-open" style="font-family:var(--mono);font-size:16px;font-weight:700;color:var(--gold)">0</div>
-            <div style="font-size:10px;color:var(--t3);margin-top:2px">Abertas</div>
-          </div>
-          <div class="card" style="text-align:center;padding:10px">
-            <div id="hft-pairs-active" style="font-family:var(--mono);font-size:12px;font-weight:600;color:var(--blue)">—</div>
-            <div style="font-size:10px;color:var(--t3);margin-top:2px">Pares ativos</div>
-          </div>
+
         </div>
 
         <!-- Config -->
@@ -2691,7 +2740,7 @@
             </div>
             <div class="field">
               <label>Take Profit (%)</label>
-              <input type="number" id="hft-tp-pct" value="0.35" step="0.05" min="0.1" max="2">
+              <input type="number" id="hft-tp-pct" value="0.35" step="0.05" min="0.1" max="2" oninput="updateTrailPreview()">
             </div>
             <div class="field">
               <label>Stop Loss (%)</label>
@@ -2721,6 +2770,102 @@
             </div>
           </div>
 
+          <!-- ═══ TRAIL STOP PROGRESSIVO ═══ -->
+          <div style="border:1px solid rgba(83,63,171,.35);border-radius:8px;padding:14px;margin-bottom:12px;background:rgba(83,63,171,.05)">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+              <div style="font-size:12px;font-weight:700;color:var(--purple,#8b7fff);letter-spacing:.5px">🔒 TRAIL STOP PROGRESSIVO</div>
+              <div style="font-size:10px;color:var(--t3)">trava lucro conforme o preço avança</div>
+            </div>
+
+            <!-- Presets rápidos -->
+            <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap">
+              <div style="font-size:10px;color:var(--t3);width:100%;margin-bottom:2px">Perfil rápido:</div>
+              <button onclick="applyTrailPreset('conservador')" id="trail-preset-conservador"
+                style="padding:5px 10px;border-radius:20px;border:1px solid var(--t3);background:transparent;color:var(--t2);font-size:11px;cursor:pointer;transition:all .15s">
+                🛡️ Conservador
+              </button>
+              <button onclick="applyTrailPreset('equilibrado')" id="trail-preset-equilibrado"
+                style="padding:5px 10px;border-radius:20px;border:1px solid rgba(83,63,171,.6);background:rgba(83,63,171,.15);color:var(--purple,#8b7fff);font-size:11px;cursor:pointer;font-weight:600;transition:all .15s">
+                ⚡ Equilibrado
+              </button>
+              <button onclick="applyTrailPreset('agressivo')" id="trail-preset-agressivo"
+                style="padding:5px 10px;border-radius:20px;border:1px solid var(--t3);background:transparent;color:var(--t2);font-size:11px;cursor:pointer;transition:all .15s">
+                🚀 Agressivo
+              </button>
+              <button onclick="applyTrailPreset('desligado')" id="trail-preset-desligado"
+                style="padding:5px 10px;border-radius:20px;border:1px solid var(--t3);background:transparent;color:var(--t2);font-size:11px;cursor:pointer;transition:all .15s">
+                ✕ Desligado
+              </button>
+            </div>
+
+            <!-- Sliders dos 4 níveis -->
+            <div style="display:grid;gap:10px">
+
+              <!-- L1: Break-even -->
+              <div style="display:grid;grid-template-columns:110px 1fr 54px;align-items:center;gap:8px">
+                <div>
+                  <div style="font-size:11px;font-weight:600;color:#378ADD">L1 Break-even</div>
+                  <div style="font-size:10px;color:var(--t3)">nunca fecha no neg.</div>
+                </div>
+                <input type="range" id="trail-l1" min="0.02" max="0.20" step="0.01" value="0.04"
+                  oninput="updateTrailDisplay('l1',this.value)"
+                  style="accent-color:#378ADD;width:100%">
+                <div style="text-align:right">
+                  <span id="trail-l1-val" style="font-family:var(--mono);font-size:12px;font-weight:700;color:#378ADD">0.04%</span>
+                </div>
+              </div>
+
+              <!-- L2: Lock 40% -->
+              <div style="display:grid;grid-template-columns:110px 1fr 54px;align-items:center;gap:8px">
+                <div>
+                  <div style="font-size:11px;font-weight:600;color:#1D9E75">L2 Trava 40%</div>
+                  <div style="font-size:10px;color:var(--t3)">do lucro acumulado</div>
+                </div>
+                <input type="range" id="trail-l2" min="0.05" max="0.40" step="0.01" value="0.08"
+                  oninput="updateTrailDisplay('l2',this.value)"
+                  style="accent-color:#1D9E75;width:100%">
+                <div style="text-align:right">
+                  <span id="trail-l2-val" style="font-family:var(--mono);font-size:12px;font-weight:700;color:#1D9E75">0.08%</span>
+                </div>
+              </div>
+
+              <!-- L3: Lock 60% -->
+              <div style="display:grid;grid-template-columns:110px 1fr 54px;align-items:center;gap:8px">
+                <div>
+                  <div style="font-size:11px;font-weight:600;color:#BA7517">L3 Trava 60%</div>
+                  <div style="font-size:10px;color:var(--t3)">do lucro acumulado</div>
+                </div>
+                <input type="range" id="trail-l3" min="0.08" max="0.60" step="0.01" value="0.15"
+                  oninput="updateTrailDisplay('l3',this.value)"
+                  style="accent-color:#BA7517;width:100%">
+                <div style="text-align:right">
+                  <span id="trail-l3-val" style="font-family:var(--mono);font-size:12px;font-weight:700;color:#BA7517">0.15%</span>
+                </div>
+              </div>
+
+              <!-- L4: Lock 75% -->
+              <div style="display:grid;grid-template-columns:110px 1fr 54px;align-items:center;gap:8px">
+                <div>
+                  <div style="font-size:11px;font-weight:600;color:#D85A30">L4 Trava 75%</div>
+                  <div style="font-size:10px;color:var(--t3)">trailing dinâmico</div>
+                </div>
+                <input type="range" id="trail-l4" min="0.15" max="1.00" step="0.05" value="0.25"
+                  oninput="updateTrailDisplay('l4',this.value)"
+                  style="accent-color:#D85A30;width:100%">
+                <div style="text-align:right">
+                  <span id="trail-l4-val" style="font-family:var(--mono);font-size:12px;font-weight:700;color:#D85A30">0.25%</span>
+                </div>
+              </div>
+
+            </div><!-- /grid sliders -->
+
+            <!-- Preview visual inline -->
+            <div id="trail-preview" style="margin-top:12px;padding:8px 10px;border-radius:6px;background:rgba(0,0,0,.08);font-size:11px;color:var(--t2);line-height:1.7">
+              <span style="color:var(--t3)">Exemplo com TP=0.40%:</span>&nbsp;
+              <span id="trail-preview-text">Lucro +0.04% → BE | +0.08% → trava $0.032 | +0.15% → trava $0.060 | +0.25% → trava $0.100</span>
+            </div>
+          </div>
+
           <!-- Pares HFT -->
           <div class="field" style="margin-bottom:12px">
             <label>Pares monitorados</label>
@@ -2734,20 +2879,132 @@
             <button onclick="hftStop()"  id="hft-stop-btn"  style="flex:1;padding:10px;background:var(--reddim);border:1px solid var(--red);color:var(--red);font-weight:700;border-radius:6px;cursor:pointer;font-size:13px">■ Parar HFT</button>
           </div>
 
+          <!-- AI Advisor toggle -->
+          <div style="margin-top:10px;border:1px solid rgba(139,127,255,.3);border-radius:8px;padding:12px;background:rgba(139,127,255,.05)">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+              <div>
+                <div style="font-size:12px;font-weight:700;color:#8b7fff">🤖 IA EXPERT — Validação de Sinais</div>
+                <div style="font-size:10px;color:var(--t3);margin-top:2px">A IA analisa cada sinal e decide: entrar, reduzir ou bloquear</div>
+              </div>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+                <input type="checkbox" id="hft-ai-enabled" checked onchange="toggleAIAdvisor(this.checked)"
+                  style="width:16px;height:16px;accent-color:#8b7fff;cursor:pointer">
+                <span id="hft-ai-status-lbl" style="font-size:11px;color:#8b7fff;font-weight:700">ATIVO</span>
+              </label>
+            </div>
+            <div id="hft-ai-config">
+              <!-- Linha 1: modelo FAST + modelo DEEP -->
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+                <div class="field">
+                  <label style="font-size:10px">⚡ Modelo FAST <span style="color:var(--t3)">(cada sinal)</span></label>
+                  <select id="hft-ai-model-fast" style="font-size:11px;padding:5px 6px;border-radius:6px;border:1px solid var(--t3);background:var(--bg2);color:var(--t1);width:100%">
+                    <option value="deepseek-v3-0324" selected>DeepSeek-V3 ★ recomendado</option>
+                    <option value="deepseek-v3">DeepSeek-V3 (estável)</option>
+                    <option value="gpt-4o-mini">GPT-4o Mini</option>
+                    <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                    <option value="qwen3-30b-a3b">Qwen3-30B (antigo)</option>
+                    <option value="deepseek-r1">DeepSeek-R1 (lento)</option>
+                  </select>
+                  <div style="font-size:10px;color:var(--t3);margin-top:2px">rápido, JSON direto, &lt;4s</div>
+                </div>
+                <div class="field">
+                  <label style="font-size:10px">🧠 Modelo DEEP <span style="color:var(--t3)">(quando FAST hesita)</span></label>
+                  <select id="hft-ai-model-deep" style="font-size:11px;padding:5px 6px;border-radius:6px;border:1px solid var(--t3);background:var(--bg2);color:var(--t1);width:100%">
+                    <option value="deepseek-r1" selected>DeepSeek-R1 ★ recomendado</option>
+                    <option value="deepseek-r1-0528">DeepSeek-R1 (0528)</option>
+                    <option value="o3-mini">OpenAI o3-mini</option>
+                    <option value="o3">OpenAI o3</option>
+                    <option value="deepseek-v3-0324">DeepSeek-V3 (mesmo FAST)</option>
+                    <option value="none">Desativado (só FAST)</option>
+                  </select>
+                  <div style="font-size:10px;color:var(--t3);margin-top:2px">raciocínio profundo, &lt;10s</div>
+                </div>
+              </div>
+              <!-- Linha 2: confiança mínima + como funciona -->
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+                <div class="field">
+                  <label style="font-size:10px">Confiança mínima IA (%)</label>
+                  <input type="range" id="hft-ai-min-conf" min="40" max="90" value="55" step="5"
+                    oninput="document.getElementById('hft-ai-conf-val').textContent=this.value+'%'"
+                    style="accent-color:#8b7fff;width:100%">
+                  <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--t3)">
+                    <span>40% permissivo</span>
+                    <b id="hft-ai-conf-val" style="color:#8b7fff">55%</b>
+                    <span>90% restrito</span>
+                  </div>
+                </div>
+                <div style="padding:6px 8px;border-radius:6px;background:rgba(0,0,0,.07);font-size:10px;color:var(--t3);line-height:1.75">
+                  <b style="color:var(--t2)">Fluxo:</b><br>
+                  ✅ FAST aprova → entra<br>
+                  ⚠️ FAST hesita → DEEP decide<br>
+                  🚫 Bloqueado → sinal ignorado
+                </div>
+              </div>
+              <!-- Indicador de setup atual -->
+              <div id="hft-ai-setup-preview" style="padding:6px 10px;border-radius:6px;background:rgba(83,63,171,.08);font-size:11px;color:var(--t2);line-height:1.6">
+                <span style="color:#8b7fff;font-weight:700">Setup atual:</span>
+                DeepSeek-V3 analisa cada sinal em &lt;4s →
+                se hesitar, DeepSeek-R1 faz análise profunda de raciocínio →
+                decisão final com confiança ≥55%
+              </div>
+            </div>
+            <div id="hft-ai-disabled-msg" style="display:none;font-size:11px;color:var(--t3);font-style:italic;padding:6px 0">
+              IA desativada — bot opera apenas com indicadores técnicos.
+            </div>
+            <div style="margin-top:8px;font-size:10px;color:var(--t3)">
+              ⚙️ Requer <code>LAOZHANG_API_KEY</code> nas variáveis de ambiente do EasyPanel
+            </div>
+          </div>
+
           <!-- Aviso testnet/real -->
           <div style="margin-top:10px;padding:10px;border-radius:6px;background:var(--golddim);border:1px solid var(--gold);font-size:12px;color:var(--t2)">
             ⚠️ <b>HFT opera em AUTO — sem confirmação manual.</b> Certifique-se que está em Testnet para testar antes de usar com dinheiro real. Configure <code>BOT_TESTNET=false</code> apenas quando tiver validado a estratégia.
           </div>
         </div>
 
-        <!-- Últimos trades -->
+        <!-- Últimos trades com paginação -->
         <div class="card">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-            <div class="card-title">📋 Últimas operações HFT</div>
-            <button onclick="loadHFTStats()" style="font-size:11px;padding:4px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--t2);cursor:pointer">↺ Atualizar</button>
+          <!-- Header -->
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+            <div class="card-title">📋 Operações HFT</div>
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+              <!-- Filtros -->
+              <div style="display:flex;gap:4px" id="hft-filter-btns">
+                <button onclick="hftSetFilter('all')"     id="hft-f-all"     class="hft-filter-btn active-filter" style="font-size:10px;padding:3px 8px;border-radius:12px;border:1px solid var(--purple,#8b7fff);background:rgba(139,127,255,.18);color:var(--purple,#8b7fff);cursor:pointer;font-weight:700">Todos</button>
+                <button onclick="hftSetFilter('open')"    id="hft-f-open"    class="hft-filter-btn" style="font-size:10px;padding:3px 8px;border-radius:12px;border:1px solid var(--t3);background:transparent;color:var(--t2);cursor:pointer">Abertas</button>
+                <button onclick="hftSetFilter('wins')"    id="hft-f-wins"    class="hft-filter-btn" style="font-size:10px;padding:3px 8px;border-radius:12px;border:1px solid var(--t3);background:transparent;color:var(--t2);cursor:pointer">✅ Wins</button>
+                <button onclick="hftSetFilter('losses')"  id="hft-f-losses"  class="hft-filter-btn" style="font-size:10px;padding:3px 8px;border-radius:12px;border:1px solid var(--t3);background:transparent;color:var(--t2);cursor:pointer">❌ Losses</button>
+                <button onclick="hftSetFilter('be')"      id="hft-f-be"      class="hft-filter-btn" style="font-size:10px;padding:3px 8px;border-radius:12px;border:1px solid var(--t3);background:transparent;color:var(--t2);cursor:pointer">🔄 BE</button>
+              </div>
+              <!-- Per-page -->
+              <select id="hft-per-page" onchange="hftSetPerPage(this.value)"
+                style="font-size:10px;padding:3px 6px;border-radius:6px;border:1px solid var(--t3);background:var(--bg2);color:var(--t2);cursor:pointer">
+                <option value="10" selected>10 / pág</option>
+                <option value="20">20 / pág</option>
+                <option value="50">50 / pág</option>
+              </select>
+              <!-- Refresh -->
+              <button onclick="hftGoPage(1)" style="font-size:11px;padding:3px 9px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--t2);cursor:pointer">↺</button>
+            </div>
           </div>
-          <div id="hft-trades-list" style="font-size:12px;font-family:var(--mono)">
+
+          <!-- Lista -->
+          <div id="hft-trades-list" style="font-size:12px;font-family:var(--mono);min-height:60px">
             <div style="color:var(--t3);text-align:center;padding:20px">Inicie o HFT para ver as operações aqui</div>
+          </div>
+
+          <!-- Paginação -->
+          <div id="hft-pagination" style="display:none;margin-top:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+            <div style="font-size:11px;color:var(--t3)">
+              Mostrando <b id="hft-page-from">—</b>–<b id="hft-page-to">—</b> de <b id="hft-page-total">—</b> operações
+            </div>
+            <div style="display:flex;align-items:center;gap:4px">
+              <button onclick="hftGoPage(_hftPage-1)" id="hft-prev-btn"
+                style="padding:4px 10px;border-radius:6px;border:1px solid var(--t3);background:transparent;color:var(--t2);cursor:pointer;font-size:12px">‹</button>
+              <div id="hft-page-pills" style="display:flex;gap:3px"></div>
+              <button onclick="hftGoPage(_hftPage+1)" id="hft-next-btn"
+                style="padding:4px 10px;border-radius:6px;border:1px solid var(--t3);background:transparent;color:var(--t2);cursor:pointer;font-size:12px">›</button>
+            </div>
           </div>
         </div>
       </div>

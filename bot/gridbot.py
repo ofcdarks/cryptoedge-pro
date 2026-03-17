@@ -33,7 +33,7 @@ def _live_event(etype, data=None):
             f'{_APP_URL}/api/live/event',
             data=payload,
             headers={'Content-Type': 'application/json',
-                     'X-Bot-Internal': 'cryptoedge-bot-2024'},
+                     'X-Bot-Token': _BOT_TOKEN},
             method='POST'
         )
         urllib.request.urlopen(req, timeout=2)
@@ -978,8 +978,31 @@ def main():
                 _send(text)
             except Exception: pass
 
+        # ── AUTO-CALIBRAÇÃO: roda backtest para achar params ótimos por par ──
+        try:
+            from hft_calibrator import run_calibration, needs_calibration
+            from binance.client import Client as _CalibClient
+            if needs_calibration():
+                log.info("  🔬 Iniciando auto-calibração HFT (1ª vez ou expirada)...")
+                try:
+                    _calib_client = _CalibClient(api_key, secret_key, testnet=False)
+                except Exception:
+                    _calib_client = client
+                def _run_calib_bg():
+                    try:
+                        run_calibration(_calib_client, HFT_PAIRS, HFT_TIMEFRAME)
+                    except Exception as _ce:
+                        log.warning(f"  Calibração falhou: {_ce} — usando parâmetros padrão")
+                import threading as _th
+                _th.Thread(target=_run_calib_bg, daemon=True).start()
+                log.info("  🔬 Calibração rodando em background — bot inicia em paralelo")
+            else:
+                log.info("  ✅ Calibração HFT válida carregada — sem necessidade de recalibrar")
+        except Exception as _ce2:
+            log.warning(f"  Calibrador indisponível: {_ce2}")
+
         hft = init_hft(CAPITAL, client, notify_fn=_hft_send)
-        log.info(f"  🚀 HFT Engine iniciado | Pares: {','.join(HFT_PAIRS[:5])}... | TF: {HFT_TIMEFRAME}")
+        log.info(f"  🚀 HFT Engine v3.1 iniciado | Pares: {','.join(HFT_PAIRS[:5])}... | TF: {HFT_TIMEFRAME}")
 
         # Reset diário à meia-noite
         def _hft_daily_reset():
@@ -991,6 +1014,16 @@ def main():
                 secs = (tomorrow - now).total_seconds()
                 time.sleep(secs)
                 if state['running'] and get_hft_engine():
+                    # Recalibra parâmetros com dados frescos antes de resetar
+                    try:
+                        from hft_calibrator import run_calibration
+                        from binance.client import Client as _RCClient
+                        _rc = _RCClient(api_key, secret_key, testnet=False)
+                        log.info("  Recalibracao noturna HFT iniciando...")
+                        run_calibration(_rc, HFT_PAIRS, HFT_TIMEFRAME)
+                        log.info("  Recalibracao noturna concluida")
+                    except Exception as _rce:
+                        log.warning(f"  Recalibracao noturna falhou: {_rce}")
                     get_hft_engine().reset_daily()
 
         threading.Thread(target=_hft_daily_reset, daemon=True).start()
@@ -998,23 +1031,19 @@ def main():
         # Periodic status update every 4 hours
         def _hft_periodic_update():
             import datetime as _dt
+            INTERVAL = int(os.environ.get('HFT_UPDATE_INTERVAL', '1800'))  # 30 min default
             while state['running']:
-                time.sleep(4 * 3600)  # 4 hours
+                time.sleep(INTERVAL)
                 eng = get_hft_engine()
-                if eng and state['running']:
-                    total = eng.daily_wins + eng.daily_losses
-                    if total > 0:
-                        wr = eng.daily_wins / total * 100
-                        pnl_icon = '🟢' if eng.daily_pnl >= 0 else '🔴'
-                        try:
-                            from telegram_notify import _send
-                            _send(
-                                f'⏰ <b>HFT Update ({_dt.datetime.now().strftime("%H:%M")})</b>\n'
-                                f'{pnl_icon} PnL hoje: <code>{"+"if eng.daily_pnl>=0 else ""}${eng.daily_pnl:.4f}</code>\n'
-                                f'📈 {total} trades | {eng.daily_wins}W/{eng.daily_losses}L | WR:{wr:.0f}%\n'
-                                f'📌 Posições abertas: {len(eng.positions)}'
-                            )
-                        except Exception: pass
+                if not eng or not state['running']: continue
+                total = eng.daily_wins + eng.daily_losses + getattr(eng, 'daily_breakevens', 0)
+                if total == 0: continue
+                try:
+                    mins = INTERVAL // 60
+                    label = f'{mins}min' if mins < 60 else f'{mins//60}h'
+                    eng.send_periodic_update(label)
+                except Exception as _pe:
+                    log.debug(f'  Telegram periodic update erro: {_pe}')
         threading.Thread(target=_hft_periodic_update, daemon=True).start()
 
         # Pre-load CLOSED klines from LIVE Binance (not testnet — testnet só tem BTC/ETH)

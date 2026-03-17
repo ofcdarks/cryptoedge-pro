@@ -306,13 +306,8 @@ async function init() {
   _db.run(`CREATE TABLE IF NOT EXISTS subscriptions (
     id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
     username TEXT NOT NULL, plan TEXT DEFAULT 'free', status TEXT DEFAULT 'active',
-    price_brl REAL DEFAULT 0, stripe_id TEXT DEFAULT '', started_at TEXT DEFAULT (datetime('now')), expires_at TEXT
+    price_brl REAL DEFAULT 0, started_at TEXT DEFAULT (datetime('now')), expires_at TEXT
   )`);
-  // Migrate: add stripe_id if missing
-  const subCols = all("PRAGMA table_info(subscriptions)").map(c => c.name);
-  if (!subCols.includes('stripe_id')) {
-    try { _db.run("ALTER TABLE subscriptions ADD COLUMN stripe_id TEXT DEFAULT ''"); } catch {}
-  }
   _db.run('CREATE INDEX IF NOT EXISTS idx_subs_u ON subscriptions(username)');
 
   const alertCols = all("PRAGMA table_info(alerts)").map(c => c.name);
