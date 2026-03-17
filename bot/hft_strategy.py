@@ -714,11 +714,17 @@ class HFTEngine:
         # Verificar se a vela confirma a direção
         bullish_candle = close > open_ * 1.0001
         bearish_candle = close < open_ * 0.9999
-
         confirmed = (side == 'BUY' and bullish_candle) or (side == 'SELL' and bearish_candle)
 
         if not confirmed:
-            # Sinal contradito pela vela de confirmação → descarta
+            # Vela não confirmou — dá mais 1 chance se confiança >= 80%
+            attempts = pending.get('attempts', 0) + 1
+            confidence = pending.get('confidence', 0.5)
+            if confidence >= 0.80 and attempts <= 1:
+                self._pending[pair]['attempts'] = attempts
+                log.info(f'  ⏳ HFT {pair} {side} não confirmado — confiança {confidence:.0%} ≥ 80%, aguarda mais 1 vela (tentativa {attempts})')
+                return False
+            # Descarta
             log.info(f'  ✗ HFT {pair} {side} NÃO confirmado (vela {"baixa" if side=="BUY" else "alta"}) → descartado')
             del self._pending[pair]
             return False
