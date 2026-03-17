@@ -978,31 +978,8 @@ def main():
                 _send(text)
             except Exception: pass
 
-        # ── AUTO-CALIBRAÇÃO: roda backtest para achar params ótimos por par ──
-        try:
-            from hft_calibrator import run_calibration, needs_calibration
-            from binance.client import Client as _CalibClient
-            if needs_calibration():
-                log.info("  🔬 Iniciando auto-calibração HFT (1ª vez ou expirada)...")
-                try:
-                    _calib_client = _CalibClient(api_key, secret_key, testnet=False)
-                except Exception:
-                    _calib_client = client
-                def _run_calib_bg():
-                    try:
-                        run_calibration(_calib_client, HFT_PAIRS, HFT_TIMEFRAME)
-                    except Exception as _ce:
-                        log.warning(f"  Calibração falhou: {_ce} — usando parâmetros padrão")
-                import threading as _th
-                _th.Thread(target=_run_calib_bg, daemon=True).start()
-                log.info("  🔬 Calibração rodando em background — bot inicia em paralelo")
-            else:
-                log.info("  ✅ Calibração HFT válida carregada — sem necessidade de recalibrar")
-        except Exception as _ce2:
-            log.warning(f"  Calibrador indisponível: {_ce2}")
-
         hft = init_hft(CAPITAL, client, notify_fn=_hft_send)
-        log.info(f"  🚀 HFT Engine v3.1 iniciado | Pares: {','.join(HFT_PAIRS[:5])}... | TF: {HFT_TIMEFRAME}")
+        log.info(f"  🚀 HFT Engine iniciado | Pares: {','.join(HFT_PAIRS[:5])}... | TF: {HFT_TIMEFRAME}")
 
         # Reset diário à meia-noite
         def _hft_daily_reset():
@@ -1014,16 +991,6 @@ def main():
                 secs = (tomorrow - now).total_seconds()
                 time.sleep(secs)
                 if state['running'] and get_hft_engine():
-                    # Recalibra parâmetros com dados frescos antes de resetar
-                    try:
-                        from hft_calibrator import run_calibration
-                        from binance.client import Client as _RCClient
-                        _rc = _RCClient(api_key, secret_key, testnet=False)
-                        log.info("  Recalibracao noturna HFT iniciando...")
-                        run_calibration(_rc, HFT_PAIRS, HFT_TIMEFRAME)
-                        log.info("  Recalibracao noturna concluida")
-                    except Exception as _rce:
-                        log.warning(f"  Recalibracao noturna falhou: {_rce}")
                     get_hft_engine().reset_daily()
 
         threading.Thread(target=_hft_daily_reset, daemon=True).start()
