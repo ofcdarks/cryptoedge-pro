@@ -1210,21 +1210,27 @@ class HFTEngine:
                 log.info(f'  ⏸ HFT {pair} fora de sessão ({h_local:02d}h local) — SESSION_FILTER={HFT_SESSION_FILTER}')
             return
 
+        # ── FASE 1: Confirmar sinal pendente ANTES de qualquer filtro ──────
+        # Confirmação deve rodar independente de cooldown ou max_trades
+        # para não perder a janela da vela de confirmação
+        with self._lock:
+            if pair in self._pending:
+                # Só bloqueia se já tem posição neste par
+                if sum(1 for k in self.positions if k.startswith(pair)) >= 1:
+                    self._pending.pop(pair, None)
+                elif len(self.positions) < HFT_MAX_TRADES:
+                    self._try_confirm_and_enter(pair, open_, close, volume)
+                else:
+                    # Limite de posições atingido — descarta pendente
+                    log.info(f'  ⚠ HFT {pair} pendente descartado: MAX_TRADES={HFT_MAX_TRADES} atingido')
+                    del self._pending[pair]
+                return
+
         cooldown = HFT_COOLDOWN
         if self.consec_wins >= 3: cooldown = int(HFT_COOLDOWN * 0.7)
         if now - self.last_trade_ts.get(pair, 0) < cooldown: return
-        if sum(1 for k in self.positions if k.startswith(pair)) >= 1:
-            # Descarta pendente se já tem posição no par
-            self._pending.pop(pair, None)
-            return
-        if len(self.positions) >= HFT_MAX_TRADES:
-            return
-
-        # ── FASE 1: Verificar se há sinal pendente para confirmar ─────────
-        with self._lock:
-            if pair in self._pending:
-                self._try_confirm_and_enter(pair, open_, close, volume)
-                return  # só 1 ação por vela: confirmar OU gerar novo sinal
+        if sum(1 for k in self.positions if k.startswith(pair)) >= 1: return
+        if len(self.positions) >= HFT_MAX_TRADES: return
 
         # ── FASE 2: Gerar novo sinal (se nenhum pendente) ─────────────────
         with self._lock:
