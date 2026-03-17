@@ -2092,8 +2092,8 @@ async function loadBotStatus() {
       statusText = `🟢 Rodando${uptime}`;
     } else if (d.status === 'errored') {
       statusText = '⚠️ Erro no processo — verifique os logs';
-    } else if (d.should_run === true) {
-      statusText = '🟡 Reiniciando... aguarde';
+    } else if (d.should_run === true || d.status === 'restarting') {
+      statusText = '🟡 Reiniciando automaticamente... aguarde';
     } else {
       statusText = '🔴 Parado';
     }
@@ -6976,11 +6976,17 @@ async function loadHFTStats() {
     const dot  = document.getElementById('hft-status-dot');
     const txt  = document.getElementById('hft-status-text');
     const badge = document.getElementById('hft-badge');
-    if (dot)   dot.style.background = isRunning ? 'var(--green)' : statusD.running ? 'var(--gold)' : 'var(--t3)';
+    const isRestarting = !statusD.running && statusD.should_run;
+    if (dot) {
+      dot.style.background = isRunning ? 'var(--green)' : isRestarting ? 'var(--gold)' : statusD.running ? 'var(--blue)' : 'var(--t3)';
+      if (isRestarting) dot.style.animation = 'pulse 1s infinite';
+      else dot.style.animation = '';
+    }
     if (txt) {
-      if (isRunning)        { txt.textContent = 'Rodando (HFT)'; txt.style.color = 'var(--green)'; }
-      else if (statusD.running) { txt.textContent = `Rodando (${statusD.strategy?.toUpperCase() || '?'}) — não é HFT`; txt.style.color = 'var(--gold)'; }
-      else                  { txt.textContent = 'Parado'; txt.style.color = 'var(--t3)'; }
+      if (isRunning)            { txt.textContent = '● Rodando (HFT)'; txt.style.color = 'var(--green)'; }
+      else if (isRestarting)    { txt.textContent = '⏳ Reiniciando...'; txt.style.color = 'var(--gold)'; }
+      else if (statusD.running) { txt.textContent = `● Rodando (${statusD.strategy?.toUpperCase()||'?'})`; txt.style.color = 'var(--blue)'; }
+      else                      { txt.textContent = '○ Parado'; txt.style.color = 'var(--t3)'; }
     }
     if (badge) badge.style.display = isRunning ? 'inline' : 'none';
 

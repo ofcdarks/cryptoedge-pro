@@ -1078,6 +1078,14 @@ def main():
             # Watchdog loop
             while state['running']:
                 time.sleep(2)
+                # Check for Telegram /stop command
+                import os as _osc
+                if _osc.path.exists('/tmp/hft_stop_flag'):
+                    try: _osc.remove('/tmp/hft_stop_flag')
+                    except: pass
+                    log.info("  🛑 Comando /stop recebido via Telegram — encerrando...")
+                    state['running'] = False
+                    break
                 if not twm.is_alive():
                     log.warning("  ⚠️ WebSocket desconectado — reconectando em 5s...")
                     break

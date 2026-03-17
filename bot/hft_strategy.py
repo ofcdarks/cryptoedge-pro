@@ -22,9 +22,27 @@ PROTEÇÃO:
   - Max 3 posições simultâneas
 """
 
-import logging, time, os, threading
+import logging, time, os, threading, urllib.request, json as _json
 from collections import deque
 from decimal import Decimal
+
+_APP_URL = os.environ.get('APP_URL', 'http://localhost:' + os.environ.get('PORT','3000'))
+_BOT_HEADER = {'Content-Type':'application/json','X-Bot-Internal':'cryptoedge-bot-2024'}
+
+def _hft_save_open(pair, side, entry, qty, sl, tp):
+    try:
+        p = _json.dumps({'symbol':pair,'side':side,'entry':entry,'qty':qty,'sl':sl,'tp':tp,'strategy':'hft'}).encode()
+        r = urllib.request.Request(f'{_APP_URL}/api/bot/trade/open', data=p, headers=_BOT_HEADER, method='POST')
+        return _json.loads(urllib.request.urlopen(r, timeout=3).read()).get('id')
+    except: return None
+
+def _hft_save_close(tid, exit_p, pnl, reason):
+    if not tid: return
+    try:
+        p = _json.dumps({'id':tid,'exit_price':exit_p,'pnl':pnl,'reason':reason}).encode()
+        r = urllib.request.Request(f'{_APP_URL}/api/bot/trade/close', data=p, headers=_BOT_HEADER, method='POST')
+        urllib.request.urlopen(r, timeout=3)
+    except: pass
 
 log = logging.getLogger('CryptoEdge.HFT')
 
@@ -352,11 +370,13 @@ class HFTEngine:
             self.positions[key] = {
                 'pair': pair, 'side': side, 'entry': price, 'qty': qty,
                 'sl': sl, 'tp': tp, 'opened_at': time.time(),
-                'order_id': order_id, 'reason': reason
+                'order_id': order_id, 'reason': reason, 'db_id': None
             }
             self.last_trade_ts[pair] = time.time()
             rr = tp_pct / sl_pct if sl_pct > 0 else 0
             log.info(f'  ⚡ HFT {side} {pair} @ ${price:,.4f} | TP +{tp_pct:.2f}% | SL -{sl_pct:.2f}% | R:R 1:{rr:.1f} | {reason}')
+            # Save trade to DB for equity curve
+            self.positions[key]['db_id'] = _hft_save_open(pair, side, price, qty, sl, tp)
             self.notify(
                 f'⚡ <b>HFT {side} — {pair}</b>\n'
                 f'💲 <code>${price:,.4f}</code>  🎯 <code>${tp:,.4f}</code> (+{tp_pct:.2f}%)  🛡 <code>${sl:,.4f}</code> (-{sl_pct:.2f}%)\n'
@@ -398,6 +418,8 @@ class HFTEngine:
             'pair': pair, 'side': side, 'entry': pos['entry'], 'exit': price,
             'qty': qty, 'pnl': pnl, 'duration': duration, 'reason': reason, 'ts': time.time()
         })
+        # Save close to DB for equity curve
+        _hft_save_close(pos.get('db_id'), price, pnl, reason)
         del self.positions[key]
 
         total = self.daily_wins + self.daily_losses

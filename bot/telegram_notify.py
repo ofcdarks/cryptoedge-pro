@@ -122,6 +122,21 @@ def _poll_loop():
             updates = r.json().get('result', [])
             for upd in updates:
                 offset = upd['update_id'] + 1
+                # Handle /stop command from regular message
+                msg_upd = upd.get('message', {})
+                if msg_upd:
+                    txt = msg_upd.get('text', '').strip().lower()
+                    if txt in ('/stop', '/parar', '/pause', '/pausar'):
+                        # Signal bot to stop via file flag
+                        try:
+                            import os as _os
+                            _os.makedirs('/tmp', exist_ok=True)
+                            with open('/tmp/hft_stop_flag', 'w') as _f: _f.write('stop')
+                            stop_chat = msg_upd.get('chat', {}).get('id')
+                            if stop_chat:
+                                _send('🛑 <b>Comando recebido — parando o bot...</b>', chat_id_override=str(stop_chat))
+                        except: pass
+
                 cq = upd.get('callback_query')
                 if not cq: continue
                 data    = cq.get('data', '')

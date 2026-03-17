@@ -835,16 +835,18 @@ app.get('/api/bot/status', requireAuth, (req, res) => {
     if (match('BOT_TIMEFRAME')) currentTF = match('BOT_TIMEFRAME');
     if (match('BOT_TESTNET')) currentTestnet = match('BOT_TESTNET') !== 'false';
   } catch {}
+  const shouldRun = _getBotAutostart();
   res.json({
-    running:   pid!==null,
-    status:    pid ? 'online' : 'stopped',
-    pid:       pid ? String(pid) : null,
-    mode:      'nativo',
-    pm2_found: false,
-    starting:  _botStarting,
-    strategy:  currentStrategy,
-    timeframe: currentTF,
-    testnet:   currentTestnet,
+    running:    pid!==null,
+    status:     pid ? 'online' : (shouldRun ? 'restarting' : 'stopped'),
+    pid:        pid ? String(pid) : null,
+    mode:       'nativo',
+    pm2_found:  false,
+    starting:   _botStarting,
+    should_run: shouldRun,
+    strategy:   currentStrategy,
+    timeframe:  currentTF,
+    testnet:    currentTestnet,
   });
 });
 
@@ -1662,7 +1664,8 @@ function requireBotOrAuth(req, res, next) {
 // ─── Bot Live Trades (equity curve ao vivo) ───────────────────────────────────
 app.post('/api/bot/trade/open', requireBotOrAuth, (req, res) => {
   try {
-    const { symbol, side, entry, qty, sl, tp, strategy } = req.body;
+    const { symbol: rawSymbol, pair, side, entry, qty, sl, tp, strategy } = req.body;
+    const symbol = rawSymbol || pair || 'UNKNOWN';
     const id = db.insert('bot_trades', {
       username: req.user, symbol, side, entry: parseFloat(entry),
       qty: parseFloat(qty), sl: parseFloat(sl||0), tp: parseFloat(tp||0),
@@ -2639,7 +2642,7 @@ app.get('/api/performance/stats', requireAuth, (req, res) => {
 
 app.get('/api/hft/stats', requireAuth, (req, res) => {
   try {
-    const trades = db.all("SELECT * FROM bot_trades WHERE strategy='hft' AND DATE(opened_at)=DATE('now') ORDER BY opened_at DESC");
+    const trades = db.all("SELECT * FROM bot_trades WHERE (strategy='hft' OR strategy='HFT') AND DATE(opened_at)=DATE('now') ORDER BY opened_at DESC");
     const wins=trades.filter(t=>t.pnl>0).length,losses=trades.filter(t=>t.pnl<=0&&t.closed_at).length;
     const pnl=trades.reduce((s,t)=>s+(t.pnl||0),0),wr=wins+losses>0?wins/(wins+losses)*100:0;
     const open=trades.filter(t=>!t.closed_at);
@@ -2675,6 +2678,58 @@ db.init().then(() => {
     console.log(`  💾  SQLite: ${process.env.DB_PATH||'./data'}/cryptoedge.db`);
     console.log(`  🔒  bcrypt rounds: ${BCRYPT_ROUNDS}\n`);
   });
+
+  // ── Auto-restart bot if it was running before server restart ──────────────
+  setTimeout(() => {
+    if (_getBotAutostart() && !_botPid()) {
+      console.log('  🔄 Auto-reiniciando bot (estava rodando antes do restart)...');
+      try {
+        const env = _loadEnv(path.resolve(BOT_ENV_PATH));
+        env['PYTHONUNBUFFERED'] = '1';
+        env['PATH'] = env['PATH'] || process.env.PATH || '/usr/local/bin:/usr/bin:/bin';
+        env['HOME'] = env['HOME'] || process.env.HOME || '/root';
+        env['APP_URL'] = process.env.APP_URL || `http://localhost:${PORT}`;
+        // Restore Binance keys from last user
+        const lastUser = db.get("SELECT value FROM platform_settings WHERE key='bot_last_user'");
+        if (lastUser?.value) {
+          const u = db.get('SELECT binance_key,binance_secret,binance_secret_enc,telegram_token,telegram_chatid FROM users WHERE username=?', [lastUser.value]);
+          if (u?.binance_key) env['BINANCE_API_KEY'] = u.binance_key;
+          if (u?.binance_secret_enc) {
+            try { env['BINANCE_SECRET_KEY'] = decryptSecret(u.binance_secret_enc) || ''; } catch {}
+          } else if (u?.binance_secret) { env['BINANCE_SECRET_KEY'] = u.binance_secret; }
+          if (u?.telegram_token)  env['TELEGRAM_TOKEN']   = u.telegram_token;
+          if (u?.telegram_chatid) env['TELEGRAM_CHAT_ID'] = u.telegram_chatid;
+        }
+        _spawnDetached(env, path.join(__dirname,'bot','gridbot.py'));
+        console.log('  ✅ Bot auto-reiniciado com sucesso');
+      } catch(e) { console.error('  ❌ Auto-restart falhou:', e.message); }
+    }
+  }, 3000); // 3s delay to let DB settle
+
+  // ── Watchdog: revive bot if it crashed ────────────────────────────────────
+  setInterval(() => {
+    if (_getBotAutostart() && !_botPid() && !_botStarting) {
+      console.log('  🔄 Watchdog: bot caiu — reiniciando...');
+      try {
+        const env = _loadEnv(path.resolve(BOT_ENV_PATH));
+        env['PYTHONUNBUFFERED'] = '1';
+        env['PATH'] = env['PATH'] || process.env.PATH || '/usr/local/bin:/usr/bin:/bin';
+        env['HOME'] = env['HOME'] || process.env.HOME || '/root';
+        env['APP_URL'] = process.env.APP_URL || `http://localhost:${PORT}`;
+        const lastUser = db.get("SELECT value FROM platform_settings WHERE key='bot_last_user'");
+        if (lastUser?.value) {
+          const u = db.get('SELECT binance_key,binance_secret,binance_secret_enc,telegram_token,telegram_chatid FROM users WHERE username=?', [lastUser.value]);
+          if (u?.binance_key) env['BINANCE_API_KEY'] = u.binance_key;
+          if (u?.binance_secret_enc) { try { env['BINANCE_SECRET_KEY'] = decryptSecret(u.binance_secret_enc)||''; } catch {} }
+          else if (u?.binance_secret) env['BINANCE_SECRET_KEY'] = u.binance_secret;
+          if (u?.telegram_token)  env['TELEGRAM_TOKEN']   = u.telegram_token;
+          if (u?.telegram_chatid) env['TELEGRAM_CHAT_ID'] = u.telegram_chatid;
+        }
+        _spawnDetached(env, path.join(__dirname,'bot','gridbot.py'));
+        console.log('  ✅ Watchdog: bot reiniciado');
+      } catch(e) { console.error('  ❌ Watchdog restart falhou:', e.message); }
+    }
+  }, 60000); // check every 60s
 
   const wss = new WebSocket.Server({ server, path: '/ws' });
   wss.on('connection', (clientWs) => {
