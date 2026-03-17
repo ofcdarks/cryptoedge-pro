@@ -114,11 +114,12 @@ HFT_PAIRS        = [p.strip() for p in os.environ.get('HFT_PAIRS',
 HFT_TIMEFRAME    = os.environ.get('HFT_TIMEFRAME', '1m')
 HFT_MIN_VOLUME   = float(os.environ.get('HFT_MIN_VOL_USDT', '5000000'))
 HFT_TESTNET      = os.environ.get('BOT_TESTNET', 'true').lower() == 'true'
-HFT_MIN_RR       = float(os.environ.get('HFT_MIN_RR',      '1.5'))
+HFT_MIN_RR       = float(os.environ.get('HFT_MIN_RR',      '1.4')) # era 1.5
 HFT_SESSION_FILTER = os.environ.get('HFT_SESSION_FILTER', 'false').lower() == 'true'
+HFT_TZ_OFFSET    = int(os.environ.get('HFT_TZ_OFFSET',    '-3'))   # UTC-3 BRT
 
 # Confirmação: máximo de desvio de preço permitido para confirmar sinal (%)
-HFT_CONFIRM_MAX_DRIFT = float(os.environ.get('HFT_CONFIRM_MAX_DRIFT', '0.15'))
+HFT_CONFIRM_MAX_DRIFT = float(os.environ.get('HFT_CONFIRM_MAX_DRIFT', '0.25'))  # era 0.15
 
 STRATEGY_NAMES = [
     'ema_micro', 'rsi_reversion', 'bollinger', 'vwap_dev',
@@ -470,7 +471,7 @@ class HFTEngine:
         bb    = self._bollinger(closes, period=20)
         bw    = bb[4] if bb else 1.0
         adx_v = self._adx(highs, lows, closes)
-        if bw < 0.08: return 'choppy'
+        if bw < 0.05: return 'choppy'  # era 0.08 — só bloqueia mercado extremamente flat
         if adx_v > 25:
             if close > ema21 > ema50: return 'trending_up'
             if close < ema21 < ema50: return 'trending_down'
@@ -478,8 +479,10 @@ class HFTEngine:
 
     def _in_active_session(self):
         if not HFT_SESSION_FILTER: return True
-        h = datetime.datetime.utcnow().hour
-        return (0 <= h < 4) or (7 <= h < 12) or (13 <= h < 21)
+        # Usa timezone local configurável (padrão UTC-3 = BRT)
+        h = (datetime.datetime.utcnow().hour + HFT_TZ_OFFSET) % 24
+        # Janela ampla: das 06h às 23h59 horário local — cobre toda sessão cripto relevante
+        return 6 <= h < 24
 
     # ── Geração de Sinal ─────────────────────────────────────────────────────
 
@@ -1140,7 +1143,12 @@ class HFTEngine:
                 self.notify(f'🛑 HFT Daily Loss {HFT_DAILY_LOSS}% atingido | PnL: ${self.daily_pnl:.4f}\nPausado até amanhã.')
             return
 
-        if not self._in_active_session(): return
+        if not self._in_active_session():
+            n = self._candle_count.get(pair, 0)
+            if n % 60 == 0:  # log a cada 60 velas para não poluir
+                h_local = (datetime.datetime.utcnow().hour + HFT_TZ_OFFSET) % 24
+                log.info(f'  ⏸ HFT {pair} fora de sessão ({h_local:02d}h local) — SESSION_FILTER={HFT_SESSION_FILTER}')
+            return
 
         cooldown = HFT_COOLDOWN
         if self.consec_wins >= 3: cooldown = int(HFT_COOLDOWN * 0.7)
