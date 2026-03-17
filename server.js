@@ -2063,12 +2063,14 @@ app.post('/api/billing/pix/create', requireAuth, async (req, res) => {
       description:`Plano ${p.name} - CryptoEdge Pro - 1 mês`,
       instructions:`Pague R$${p.price} via PIX para a chave acima e envie o comprovante para ${process.env.SUPPORT_EMAIL||'suporte@cryptoedge.pro'}` });
   }
-  res.json({ ok:false, error:'Configure PIX_KEY ou STRIPE_SECRET_KEY no .env' });
+  return res.json({ ok:false, error:'Pagamento não configurado ainda. Adicione PIX_KEY (sua chave pix) ou STRIPE_SECRET_KEY nas variáveis de ambiente do EasyPanel para ativar pagamentos.',
+    setup_needed: true, docs: 'EasyPanel → seu serviço → Environment → PIX_KEY ou STRIPE_SECRET_KEY' });
 });
 
 app.post('/api/billing/stripe/checkout', requireAuth, async (req, res) => {
   const stripeKey = process.env.STRIPE_SECRET_KEY || '';
-  if (!stripeKey) return res.json({ ok:false, error:'STRIPE_SECRET_KEY não configurado no .env' });
+  if (!stripeKey) return res.json({ ok:false, error:'STRIPE_SECRET_KEY não configurado. Veja: Configurações → Billing no EasyPanel.' });
+  try { require('stripe'); } catch { return res.json({ ok:false, error:'Pacote stripe não instalado. Execute: npm install stripe no container.' }); }
   const { plan } = req.body;
   const PRICES = { pro: process.env.STRIPE_PRICE_PRO||'', expert: process.env.STRIPE_PRICE_EXPERT||'' };
   if (!PRICES[plan]) return res.status(400).json({ ok:false, error:'Configure STRIPE_PRICE_PRO e STRIPE_PRICE_EXPERT no .env' });

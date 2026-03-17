@@ -2608,20 +2608,34 @@ async function stripeCheckout(plan) {
   });
   const d = await r.json();
   if (d.ok && d.url) { window.open(d.url, '_blank'); }
-  else if (d.error?.includes('STRIPE_SECRET_KEY')) {
-    await showAlert('Stripe não configurado', 'O pagamento via Stripe ainda não está ativo.\n\nUse o código de ativação manual por enquanto.', { icon:'⚙️' });
+  else if (d.error?.includes('STRIPE_SECRET_KEY') || d.error?.includes('não configurado')) {
+    await showAlert('Stripe não configurado', 'Para ativar pagamento com cartão, adicione no EasyPanel:\n\nSTRIPE_SECRET_KEY=sk_live_...\nSTRIPE_PRICE_PRO=price_...\nSTRIPE_PRICE_EXPERT=price_...\n\nOu use código de ativação manual.', { icon:'⚙️', color:'gold' });
     upgradePlan(plan);
+  } else if (d.error?.includes('npm install')) {
+    await showAlert('Pacote não instalado', 'Execute no terminal do container:\n\nnpm install stripe\n\nOu faça redeploy no EasyPanel para instalar automaticamente.', { icon:'📦', color:'blue' });
   } else showToast('❌ ' + (d.error||'Erro'), true);
 }
 
 async function pixCheckout(plan) {
-  plan = plan || 'pro';
+  plan = plan || document.querySelector('[data-plan]')?.dataset?.plan || 'pro';
   const r = await fetch('/api/billing/pix/create', {
     method:'POST', headers:{...auth.headers(),'Content-Type':'application/json'},
     body: JSON.stringify({ plan })
   });
   const d = await r.json();
-  if (!d.ok) { showToast('❌ ' + d.error, true); return; }
+  if (!d.ok) {
+    if (d.setup_needed) {
+      await showAlert('Configuração necessária', `Para ativar pagamentos, adicione as variáveis no EasyPanel:
+
+PIX: adicione PIX_KEY (sua chave pix) e PIX_NAME
+Cartão: adicione STRIPE_SECRET_KEY
+
+EasyPanel → seu serviço → Environment Variables`, { icon:'⚙️', color:'gold' });
+    } else {
+      showToast('❌ ' + d.error, true);
+    }
+    return;
+  }
   if (d.method === 'pix') {
     showToast(`🟢 PIX: ${d.pix_name} · ${d.pix_key}`);
     await showAlert('Pagamento PIX 🟢', `Chave PIX: ${d.pix_key}\nNome: ${d.pix_name}\nValor: R$ ${d.price}\n\n${d.instructions}`, { icon:'🟢', color:'green' });
@@ -2801,10 +2815,12 @@ function _replayDraw() {
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio||1;
-  canvas.width = canvas.offsetWidth * dpr;
-  canvas.height = 260 * dpr;
+  // Use actual canvas size (flex fills container)
+  const W = canvas.offsetWidth  || canvas.parentElement?.clientWidth  || 800;
+  const H = canvas.offsetHeight || canvas.parentElement?.clientHeight || 420;
+  canvas.width  = W * dpr;
+  canvas.height = H * dpr;
   ctx.scale(dpr, dpr);
-  const W = canvas.offsetWidth, H = 260;
   const PAD = {l:55,r:15,t:15,b:30};
   ctx.clearRect(0,0,W,H);
   const visible = _rp.klines.slice(0, _rp.idx+1).slice(-80);

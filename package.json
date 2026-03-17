@@ -1,7 +1,7 @@
 {
   "name": "cryptoedge-pro",
   "version": "2.0.0",
-  "description": "CryptoEdge Pro v2.0 \u2014 Plataforma profissional de day trade cripto com IA (Seguran\u00e7a refor\u00e7ada)",
+  "description": "CryptoEdge Pro v2.0 — Plataforma profissional de day trade cripto com IA (Segurança reforçada)",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -18,7 +18,8 @@
     "helmet": "^8.1.0",
     "nodemailer": "^8.0.2",
     "sql.js": "^1.10.3",
-    "ws": "^8.16.0"
+    "ws": "^8.16.0",
+    "stripe": "^14.21.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.0"

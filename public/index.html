@@ -95,6 +95,10 @@
       }
     };
   </script>
+  <style>
+    #panel-replay.active { display: flex !important; }
+    #panel-replay .card  { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+  </style>
 </head>
 <body>
 <!-- ── Cookie Consent Banner ── -->
@@ -2506,9 +2510,9 @@
 
 
       <!-- ──────────── REPLAY HISTÓRICO ──────────── -->
-      <div id="panel-replay" class="panel">
-        <div class="card" style="margin-bottom:12px">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+      <div id="panel-replay" class="panel" style="height:calc(100vh - var(--top) - 2.5rem);display:none;flex-direction:column;gap:0">
+        <div class="card" style="display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px;flex-shrink:0">
             <div class="card-title">⏪ Replay Histórico — Tick a Tick</div>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
               <select id="rp-symbol" style="font-size:11px;padding:4px 8px;background:var(--bg2);border:1px solid var(--border);color:var(--t2);border-radius:4px">
@@ -2525,7 +2529,7 @@
           </div>
 
           <!-- Stats bar -->
-          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:12px">
+          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:8px;flex-shrink:0">
             <div style="background:var(--bg2);border-radius:6px;padding:8px;text-align:center">
               <div id="rp-price" style="font-family:var(--mono);font-size:13px;font-weight:600">—</div>
               <div style="font-size:10px;color:var(--t3)">Preço atual</div>
@@ -2549,13 +2553,13 @@
           </div>
 
           <!-- Chart canvas -->
-          <div style="position:relative;background:var(--bg2);border-radius:8px;padding:10px;margin-bottom:12px">
-            <canvas id="rp-canvas" style="width:100%;height:260px;display:block"></canvas>
+          <div style="position:relative;background:var(--bg2);border-radius:8px;padding:10px;margin-bottom:8px;flex:1;min-height:0;display:flex;flex-direction:column;">
+            <canvas id="rp-canvas" style="width:100%;flex:1;min-height:0;display:block"></canvas>
             <div id="rp-empty" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--t3);font-size:13px">Selecione um par e clique em Carregar para iniciar o replay</div>
           </div>
 
           <!-- Controls -->
-          <div style="display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap;margin-bottom:12px">
+          <div style="display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;margin-bottom:8px;flex-shrink:0">
             <button onclick="replayStart()" id="rp-play-btn" style="padding:8px 20px;background:var(--green);color:#000;font-weight:700;border:none;border-radius:6px;cursor:pointer;font-size:13px">▶ Manual</button>
             <button onclick="replayAutoBot()" id="rp-bot-btn" style="padding:8px 20px;background:rgba(0,120,255,.15);border:1px solid var(--blue);color:var(--blue);font-weight:700;border-radius:6px;cursor:pointer;font-size:13px">🤖 Bot Auto</button>
             <button onclick="replayPause()" style="padding:8px 16px;background:var(--bg3);border:1px solid var(--border);color:var(--t1);font-weight:600;border-radius:6px;cursor:pointer;font-size:13px">⏸ Pausar</button>
@@ -2564,7 +2568,7 @@
             <button onclick="replayReset()" style="padding:8px 12px;background:var(--bg3);border:1px solid var(--border);color:var(--red);border-radius:6px;cursor:pointer;font-size:12px">↺</button>
           </div>
           <!-- Bot strategy selector (for auto mode) -->
-          <div id="rp-bot-controls" style="display:none;padding:10px;background:rgba(0,120,255,.06);border:1px solid var(--blue);border-radius:6px;margin-bottom:10px">
+          <div id="rp-bot-controls" style="display:none;padding:8px 10px;background:rgba(0,120,255,.06);border:1px solid var(--blue);border-radius:6px;margin-bottom:6px;flex-shrink:0">
             <div style="font-size:11px;color:var(--blue);font-weight:600;margin-bottom:8px">🤖 Configuração do Bot Auto</div>
             <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
               <div class="field"><label style="font-size:10px">Estratégia</label>
@@ -2592,7 +2596,7 @@
           </div>
 
           <!-- Manual trading buttons -->
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;flex-shrink:0">
             <button onclick="replayTrade('BUY')" style="padding:12px;background:rgba(0,220,130,.15);border:1px solid var(--green);color:var(--green);font-weight:700;border-radius:6px;cursor:pointer;font-size:13px">🟢 LONG</button>
             <button onclick="replayClosePos()" style="padding:12px;background:var(--bg3);border:1px solid var(--border);color:var(--t1);font-weight:600;border-radius:6px;cursor:pointer;font-size:13px">⬛ Fechar</button>
             <button onclick="replayTrade('SELL')" style="padding:12px;background:rgba(220,60,80,.15);border:1px solid var(--red);color:var(--red);font-weight:700;border-radius:6px;cursor:pointer;font-size:13px">🔴 SHORT</button>
