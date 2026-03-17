@@ -7043,6 +7043,12 @@ const HFT_PAIRS_DEFAULT = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT',
 let _hftRefreshTimer = null;
 
 function initHFTPanel() {
+  // Inicializa trail stop + AI preview
+  setTimeout(() => {
+    applyTrailPreset('equilibrado');
+    updateTrailPreview();
+    updateAISetupPreview();
+  }, 100);
   // Renderiza seletor de pares
   const sel = document.getElementById('hft-pair-selector');
   if (sel && sel.children.length === 0) {
@@ -7084,241 +7090,269 @@ async function hftManualClose(tradeId, sym) {
 
 async function loadHFTStats() {
   try {
-    // Primeiro: checar status real do bot
-    const statusR = await fetch('/api/bot/status', { headers: auth.headers() });
-    const statusD = await statusR.json();
-    const isHFT   = statusD.strategy === 'hft';
+    const [statusR, statsR, summaryR] = await Promise.all([
+      fetch('/api/bot/status',      { headers: auth.headers() }),
+      fetch('/api/hft/stats',       { headers: auth.headers() }),
+      fetch('/api/hft/pnl-summary', { headers: auth.headers() }),
+    ]);
+    const statusD  = await statusR.json();
+    const statsD   = await statsR.json();
+    const summaryD = await summaryR.json();
+
+    const isHFT    = statusD.strategy === 'hft';
     const isRunning = statusD.running && isHFT;
 
-    const dot  = document.getElementById('hft-status-dot');
-    const txt  = document.getElementById('hft-status-text');
+    const dot   = document.getElementById('hft-status-dot');
+    const txt   = document.getElementById('hft-status-text');
     const badge = document.getElementById('hft-badge');
-    const isRestarting = !statusD.running && statusD.should_run;
-    if (dot) {
-      dot.style.background = isRunning ? 'var(--green)' : isRestarting ? 'var(--gold)' : statusD.running ? 'var(--blue)' : 'var(--t3)';
-      if (isRestarting) dot.style.animation = 'pulse 1s infinite';
-      else dot.style.animation = '';
-    }
+
+    if (dot)   dot.style.background   = isRunning ? 'var(--green)' : 'var(--t3)';
+    if (badge) badge.style.display    = isRunning ? 'inline' : 'none';
     if (txt) {
-      if (isRunning)            { txt.textContent = '● Rodando (HFT)'; txt.style.color = 'var(--green)'; }
-      else if (isRestarting)    { txt.textContent = '⏳ Reiniciando...'; txt.style.color = 'var(--gold)'; }
-      else if (statusD.running) { txt.textContent = `● Rodando (${statusD.strategy?.toUpperCase()||'?'})`; txt.style.color = 'var(--blue)'; }
-      else                      { txt.textContent = '○ Parado'; txt.style.color = 'var(--t3)'; }
+      if (isRunning) { txt.textContent = '● Rodando (HFT)'; txt.style.color = 'var(--green)'; }
+      else           { txt.textContent = statusD.running ? '● Rodando (outro bot)' : 'Parado'; txt.style.color = 'var(--t3)'; }
     }
-    if (badge) badge.style.display = isRunning ? 'inline' : 'none';
 
-    // Load stats + live P&L in parallel
-    const [statsResp, liveResp] = await Promise.allSettled([
-      fetch('/api/hft/stats',    { headers: auth.headers() }),
-      fetch('/api/hft/live-pnl', { headers: auth.headers() })
-    ]);
-    const d    = statsResp.status === 'fulfilled' ? await statsResp.value.json() : { ok: false };
-    const live = liveResp.status  === 'fulfilled' ? await liveResp.value.json()  : { ok: false, positions: [] };
-    if (!d.ok) return;
-    const liveMap = {};
-    (live.positions || []).forEach(p => { liveMap[p.id] = p; });
-    const s = d.today;
-    const pnlEl = document.getElementById('hft-pnl');
-    if (pnlEl) {
-      pnlEl.textContent = `$${parseFloat(s.pnl || 0).toFixed(4)}`;
-      pnlEl.style.color = parseFloat(s.pnl) >= 0 ? 'var(--green)' : 'var(--red)';
-    }
     const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
-    set('hft-trades', s.total || 0);
-    set('hft-wr', s.wr ? s.wr + '%' : '—');
-    set('hft-open', s.open_positions || 0);
-    set('hft-pairs-active', s.pairs?.join(', ') || '—');
-
-    // Render trade list
-    const list = document.getElementById('hft-trades-list');
-    if (list && d.trades?.length > 0) {
-      // Column headers
-      list.querySelector('.hft-col-headers')?.remove();
-      const header = document.createElement('div');
-      header.className = 'hft-col-headers';
-      header.style.cssText = 'display:grid;grid-template-columns:22px 80px 50px 95px 95px 65px 90px 80px;gap:5px;padding:4px 0 6px;border-bottom:2px solid var(--border);font-size:10px;color:var(--t3);font-weight:500;margin-bottom:2px';
-      header.innerHTML = '<span></span><span>PAR</span><span>LADO</span><span>ENTRADA</span><span>ATUAL</span><span>P&L</span><span>STATUS</span><span>AÇÃO</span>';
-      list.prepend(header);
-      list.innerHTML = d.trades.slice(0,15).map(t => {
-        const open    = !t.closed_at;
-        const lp      = liveMap[t.id];
-        const livePnl = open && lp?.live_pnl != null ? lp.live_pnl : null;
-        const livePct = open && lp?.pct_change != null ? lp.pct_change : null;
-        const curPrice= open && lp?.cur_price ? lp.cur_price : null;
-        const pnl     = livePnl !== null ? livePnl : parseFloat(t.pnl || 0);
-        const isGain  = pnl > 0;
-        const isLoss  = pnl < 0;
-        const sym     = t.symbol || t.pair || '—';
-        const ep      = parseFloat(t.entry || t.entry_price || 0);
-        const eFmt    = ep > 0 ? '$' + (ep < 10 ? ep.toFixed(5) : ep.toFixed(2)) : '—';
-        const cpFmt   = curPrice ? '$' + (curPrice < 10 ? curPrice.toFixed(5) : curPrice.toFixed(2)) : eFmt;
-        const sc      = t.side === 'BUY' ? 'var(--green)' : 'var(--red)';
-        const dur     = open ? (curPrice ? '🟢 aberta' : 'aberta') : (Math.round((new Date(t.closed_at) - new Date(t.opened_at))/1000) + 's');
-        // P&L display
-        let pnlDisplay, pnlColor, rowBg;
-        if (open && livePnl !== null) {
-          pnlColor = isGain ? '#1d9e75' : isLoss ? '#e24b4a' : 'var(--t3)';
-          rowBg    = isGain ? 'rgba(29,158,117,.04)' : isLoss ? 'rgba(226,75,74,.04)' : 'transparent';
-          pnlDisplay = (isGain?'+':'') + '$' + livePnl.toFixed(4) + (livePct !== null ? ` (${isGain?'+':''}${livePct.toFixed(2)}%)` : '');
-        } else if (!open) {
-          pnlColor = isGain ? 'var(--green)' : isLoss ? 'var(--red)' : 'var(--t3)';
-          rowBg    = 'transparent';
-          pnlDisplay = pnl !== 0 ? (isGain?'+':'') + '$' + pnl.toFixed(4) : '$0.0000';
-        } else {
-          pnlColor = 'var(--t3)'; rowBg = 'transparent'; pnlDisplay = '—';
-        }
-        const icon    = !open ? (pnl > 0 ? '✅' : '❌') : isGain ? '📈' : isLoss ? '📉' : '⏳';
-        const closeBtn = open
-          ? `<button onclick="hftManualClose('${t.id}','${sym}')" title="Fechar manualmente"
-               style="padding:2px 8px;font-size:10px;background:var(--reddim);border:1px solid var(--red);
-                      color:var(--red);border-radius:4px;cursor:pointer;white-space:nowrap">✕ Fechar</button>`
-          : `<span style="color:var(--t3);font-size:10px" title="${t.reason||''}">${(t.reason||'').slice(0,30)}</span>`;
-        return `<div style="display:grid;grid-template-columns:22px 80px 50px 95px 95px 65px 90px 80px;gap:5px;padding:7px 0;border-bottom:1px solid var(--border);align-items:center;font-size:12px;background:${rowBg};border-radius:4px">
-          <span style="font-size:14px">${icon}</span>
-          <span style="font-weight:600;color:var(--t1)">${sym}</span>
-          <span style="color:${sc};font-weight:700">${t.side||'—'}</span>
-          <span style="font-family:var(--mono);color:var(--t3)">${eFmt}</span>
-          <span style="font-family:var(--mono);color:var(--t2)">${cpFmt}</span>
-          <span style="font-family:var(--mono);color:${pnlColor};font-weight:700">${pnlDisplay}</span>
-          <span style="color:var(--t3)">${dur}</span>
-          ${closeBtn}
-        </div>`;
-      }).join('');
-    } else if (list) {
-      list.innerHTML = '<div style="color:var(--t3);text-align:center;padding:20px">Nenhuma operação ainda hoje</div>';
-    }
-  } catch {}
-}
-
-function updateMaxTradesHint() {
-  const maxT   = parseInt(document.getElementById('hft-max-trades')?.value || '3');
-  const risk   = parseFloat(document.getElementById('hft-risk-pct')?.value || '1.5');
-  const hint   = document.getElementById('hft-max-hint');
-  if (!hint) return;
-  // Try to get capital from bot config
-  const capEl = document.getElementById('hft-capital');
-  const cap   = capEl ? parseFloat(capEl.value) : 300;
-  const perTrade = cap * risk / 100;
-  const total    = perTrade * maxT;
-  const rec      = Math.max(1, Math.min(20, Math.floor(cap * 0.10 / perTrade)));
-  hint.textContent = `${maxT} posições ≈ $${total.toFixed(2)} em uso ($${perTrade.toFixed(2)}/trade) · Recomendado: ${rec}`;
-  hint.style.color = maxT > rec * 2 ? 'var(--red)' : maxT > rec ? 'var(--gold)' : 'var(--t3)';
-}
-
-async function hftStart() {
-  const startBtn = document.getElementById('hft-start-btn');
-  if (startBtn?.disabled) return;
-  const pairs = [...document.querySelectorAll('.hft-pair-btn[data-active="1"]')]
-    .map(b => b.dataset.pair);
-  if (pairs.length === 0) { showToast('❌ Selecione pelo menos 1 par', true); return; }
-
-  const riskPct = parseFloat(document.getElementById('hft-risk-pct')?.value || '1.5');
-  const maxT    = parseInt(document.getElementById('hft-max-trades')?.value || '3');
-  const config = {
-    strategy:        'hft',
-    timeframe:       document.getElementById('hft-tf')?.value || '1m',
-    trade_mode:      'auto',
-    hft_risk_pct:    String(riskPct),
-    hft_tp_pct:      document.getElementById('hft-tp-pct')?.value     || '0.35',
-    hft_sl_pct:      document.getElementById('hft-sl-pct')?.value     || '0.18',
-    hft_cooldown:    document.getElementById('hft-cooldown')?.value   || '45',
-    hft_daily_loss:  document.getElementById('hft-daily-loss')?.value || '3.0',
-    hft_max_trades:  String(maxT),
-    hft_pairs:       pairs.join(','),
-    testnet:         document.getElementById('hft-testnet')?.checked ? 'true' : undefined,
-  };
-
-  const ok = await showConfirm('⚡ Iniciar HFT',
-    `O bot vai operar AUTOMATICAMENTE nos ${pairs.length} pares selecionados.\n\nTP: ${config.hft_tp_pct}% | SL: ${config.hft_sl_pct}% | Daily Loss Limit: ${config.hft_daily_loss}%\n\nSem confirmação manual — cada sinal é executado imediatamente.`);
-  if (!ok) return;
-
-  // Disable button + show loading
-  if (startBtn) { startBtn.disabled = true; startBtn.textContent = '⏳ Iniciando...'; }
-  try {
-    const r = await fetch('/api/bot/start', {
-      method: 'POST',
-      headers: { ...auth.headers(), 'Content-Type': 'application/json' },
-      body: JSON.stringify(config)
-    });
-    const d = await r.json();
-    if (d.ok) {
-      showToast('⚡ HFT Bot iniciado! Aguarde 30s para os primeiros sinais.');
-      setTimeout(loadHFTStats, 3000);
-    } else {
-      showToast('❌ ' + (d.error || 'Erro ao iniciar'), true);
-      if (startBtn) { startBtn.disabled = false; startBtn.textContent = '⚡ Iniciar HFT'; }
-    }
-  } catch(e) {
-    showToast('❌ ' + e.message, true);
-    if (startBtn) { startBtn.disabled = false; startBtn.textContent = '⚡ Iniciar HFT'; }
-  } finally {
-    // Re-enable after 10s regardless
-    setTimeout(() => { if (startBtn) { startBtn.disabled = false; startBtn.textContent = '⚡ Iniciar HFT'; } }, 10000);
-  }
-}
-
-async function hftStop() {
-  const ok = await showConfirm('Parar HFT', 'Confirma parar o HFT Bot? Posições abertas continuarão até fechar por TP/SL.');
-  if (!ok) return;
-  const r = await fetch('/api/bot/stop', { method: 'POST', headers: auth.headers() });
-  const d = await r.json();
-  if (d.ok || d.stopped) {
-    showToast('HFT Bot parado.');
-    document.getElementById('hft-status-dot').style.background = 'var(--t3)';
-    document.getElementById('hft-status-text').textContent = 'Parado';
-    document.getElementById('hft-status-text').style.color = 'var(--t3)';
-    document.getElementById('hft-badge').style.display = 'none';
-  }
-}
-
-// ─── Dashboard: Performance Stats ─────────────────────────────────────────────
-async function loadPerformanceStats(days=30) {
-  try {
-    const r = await fetch(`/api/performance/stats?days=${days}`, { headers: auth.headers() });
-    const d = await r.json();
-    if (!d.ok || d.empty) return;
-    const set = (id, v, color) => {
+    const setColor = (id, pnl) => {
       const e = document.getElementById(id);
       if (!e) return;
-      e.textContent = v;
-      if (color) e.style.color = color;
+      const v = parseFloat(pnl);
+      e.style.color = v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--t2)';
     };
-    const sharpe = d.sharpe;
-    set('ps-sharpe', sharpe.toFixed(2),
-        sharpe >= 2 ? 'var(--green)' : sharpe >= 1 ? 'var(--gold)' : 'var(--red)');
-    set('ps-pf', d.pf >= 999 ? '∞' : d.pf.toFixed(2),
-        d.pf >= 1.5 ? 'var(--green)' : d.pf >= 1 ? 'var(--gold)' : 'var(--red)');
-    set('ps-avg-win',  d.avg_win  > 0 ? `+$${d.avg_win.toFixed(2)}`  : '—', 'var(--green)');
-    set('ps-avg-loss', d.avg_loss < 0 ? `-$${Math.abs(d.avg_loss).toFixed(2)}` : '—', 'var(--red)');
-    set('ps-streak', d.best_streak > 0 ? `${d.best_streak}W` : '—', 'var(--gold)');
-    const dur = d.avg_duration_sec;
-    set('ps-avg-dur', dur < 60 ? `${dur}s` : dur < 3600 ? `${Math.round(dur/60)}m` : `${(dur/3600).toFixed(1)}h`);
-  } catch {}
+
+    // ── Hoje (from live stats) ───────────────────────────────────────────
+    if (statsD.ok && statsD.today) {
+      const t = statsD.today;
+      const pnl = parseFloat(t.pnl || 0);
+
+      const pnlEl = document.getElementById('hft-pnl');
+      if (pnlEl) {
+        pnlEl.textContent = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(4);
+        pnlEl.style.color = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--t2)';
+      }
+      set('hft-trades', t.total || 0);
+      set('hft-wins-count',   t.wins   || 0);
+      set('hft-losses-count', t.losses || 0);
+      set('hft-be-count',     t.breakevens || 0);
+      set('hft-open', t.open_positions || 0);
+      set('hft-pairs-active', t.pairs?.join(', ') || '—');
+
+      // WR exclui break-even
+      const eff = (t.wins || 0) + (t.losses || 0);
+      const wr  = eff > 0 ? ((t.wins / eff) * 100).toFixed(1) + '%' : '—';
+      set('hft-wr', wr);
+
+      // BE badge
+      const beBadge = document.getElementById('hft-be-badge');
+      const be = t.breakevens || 0;
+      if (beBadge) beBadge.style.display = be > 0 ? 'inline' : 'none';
+      set('hft-bes', be);
+
+      // Streak badge
+      const streakEl = document.getElementById('hft-streak-badge');
+      if (streakEl && summaryD.ok) {
+        const ws = summaryD.best_win_streak || 0;
+        const ls = summaryD.best_loss_streak || 0;
+        streakEl.textContent = ws > 0 ? `${ws}W série` : ls > 0 ? `${ls}L série` : '—';
+        streakEl.style.color = ws > ls ? 'var(--green)' : ls > ws ? 'var(--red)' : 'var(--t2)';
+      }
+    }
+
+    // ── Mês / Ano (from pnl-summary) ────────────────────────────────────
+    if (summaryD.ok) {
+      const fmtPnl = (p) => (p >= 0 ? '+' : '') + '$' + parseFloat(p).toFixed(4);
+
+      // Mês
+      const m = summaryD.monthly || {};
+      const mEl = document.getElementById('hft-pnl-month');
+      if (mEl) { mEl.textContent = fmtPnl(m.pnl || 0); setColor('hft-pnl-month', m.pnl); }
+      const mEff = (m.wins||0) + (m.losses||0);
+      set('hft-trades-month', m.trades || 0);
+      set('hft-wr-month', mEff > 0 ? ((m.wins/mEff)*100).toFixed(1)+'%' : '—');
+
+      // Ano
+      const a = summaryD.annual || {};
+      const aEl = document.getElementById('hft-pnl-year');
+      if (aEl) { aEl.textContent = fmtPnl(a.pnl || 0); setColor('hft-pnl-year', a.pnl); }
+      const aEff = (a.wins||0) + (a.losses||0);
+      set('hft-trades-year', a.trades || 0);
+      set('hft-wr-year', aEff > 0 ? ((a.wins/aEff)*100).toFixed(1)+'%' : '—');
+    }
+
+    // ── Trades list (delegado ao sistema de paginação) ──────────────────
+    if (statsD.trades !== undefined) {
+      _hftRenderTrades(statsD.trades, statsD.pagination);
+    }
+
+  } catch(e) { console.error('loadHFTStats:', e); }
 }
 
-// ─── Dashboard: HFT live banner ───────────────────────────────────────────────
-async function loadHFTDashBanner() {
-  try {
-    const [statusR, statsR] = await Promise.all([
-      fetch('/api/bot/status', { headers: auth.headers() }),
-      fetch('/api/hft/stats',  { headers: auth.headers() })
-    ]);
-    const status = await statusR.json();
-    const stats  = await statsR.json();
-    const banner = document.getElementById('hft-live-banner');
-    if (!banner) return;
-    const isHFT = status.running && status.strategy === 'hft';
-    banner.style.display = isHFT ? 'flex' : 'none';
-    if (!isHFT || !stats.ok) return;
-    const s = stats.today;
-    const pnl = parseFloat(s.pnl);
-    const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
-    set('hft-dash-trades', s.total);
-    set('hft-dash-wr', s.wr + '%');
-    const pnlEl = document.getElementById('hft-dash-pnl');
-    if (pnlEl) {
-      pnlEl.textContent = `$${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)}`;
-      pnlEl.style.color = pnl >= 0 ? 'var(--green)' : 'var(--red)';
-    }
-  } catch {}
+// ── HFT Pagination state ──────────────────────────────────────────────────────
+let _hftPage    = 1;
+let _hftPerPage = 10;
+let _hftFilter  = 'all';
+
+function hftSetFilter(f) {
+  _hftFilter = f;
+  _hftPage   = 1;
+  // Atualiza visual dos botões de filtro
+  ['all','open','wins','losses','be'].forEach(k => {
+    const btn = document.getElementById('hft-f-' + k);
+    if (!btn) return;
+    const active = k === f;
+    btn.style.background  = active ? 'rgba(139,127,255,.18)' : 'transparent';
+    btn.style.border      = active ? '1px solid var(--purple,#8b7fff)' : '1px solid var(--t3)';
+    btn.style.color       = active ? 'var(--purple,#8b7fff)' : 'var(--t2)';
+    btn.style.fontWeight  = active ? '700' : '400';
+  });
+  _hftFetchPage();
 }
+
+function hftSetPerPage(v) {
+  _hftPerPage = parseInt(v);
+  _hftPage    = 1;
+  _hftFetchPage();
+}
+
+function hftGoPage(n) {
+  if (n < 1) return;
+  _hftPage = n;
+  _hftFetchPage();
+}
+
+async function _hftFetchPage() {
+  try {
+    const url = `/api/hft/stats?page=${_hftPage}&per_page=${_hftPerPage}&filter=${_hftFilter}`;
+    const r   = await fetch(url, { headers: auth.headers() });
+    const d   = await r.json();
+    if (d.ok && d.trades !== undefined) {
+      _hftRenderTrades(d.trades, d.pagination);
+    }
+  } catch(e) { console.error('hftFetchPage:', e); }
+}
+
+function _hftRenderTrades(trades, pagination) {
+  const list = document.getElementById('hft-trades-list');
+  if (!list) return;
+
+  const BE_THRESH = 0.0002;
+  const COLS = '50px 44px 44px 86px 86px 90px 70px 80px 78px';
+
+  // Header
+  const header = `<div style="display:grid;grid-template-columns:${COLS};gap:4px;font-size:10px;color:var(--t3);padding:4px 0 6px;border-bottom:1px solid var(--color-border-tertiary);margin-bottom:2px">
+    <span>Par</span><span>Dir</span><span>Dur.</span><span>Entrada</span><span>Saída</span><span>P&L</span><span>Trail</span><span>Estado</span><span>Ação</span>
+  </div>`;
+
+  if (!trades || trades.length === 0) {
+    list.innerHTML = header + '<div style="color:var(--color-text-secondary);text-align:center;padding:18px;font-size:12px">Nenhuma operação encontrada para este filtro</div>';
+    return;
+  }
+
+  const rows = trades.map(t => {
+    const pnl     = parseFloat(t.pnl || 0);
+    const sym     = (t.symbol || '—').replace('USDT','');
+    const isOpen  = !t.closed_at;
+    const isBE    = !isOpen && Math.abs(pnl) <= BE_THRESH;
+    const pnlColor = pnl > BE_THRESH ? 'var(--color-text-success)' : pnl < -BE_THRESH ? 'var(--color-text-danger)' : '#BA7517';
+    const pnlStr   = isBE ? '🔄 BE' : (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(4);
+
+    // Duração
+    let durStr = '—';
+    if (t.opened_at) {
+      const secs = isOpen
+        ? Math.floor((Date.now() - new Date(t.opened_at).getTime()) / 1000)
+        : (t.closed_at ? Math.floor((new Date(t.closed_at) - new Date(t.opened_at)) / 1000) : 0);
+      durStr = secs < 60 ? secs + 's' : secs < 3600 ? Math.floor(secs/60) + 'm' : (secs/3600).toFixed(1) + 'h';
+    }
+
+    // Trail info from reason
+    let trailStr = '—';
+    const reason = t.reason || '';
+    const trailMatch = reason.match(/Trail-L(\d)/);
+    const lockMatch  = reason.match(/\+?([\d.]+)%\s*travado/);
+    if (trailMatch) {
+      const colors = { '1':'#378ADD','2':'#1D9E75','3':'#BA7517','4':'#D85A30' };
+      const lv = trailMatch[1];
+      trailStr = `<span style="color:${colors[lv]||'var(--color-text-secondary)'}">L${lv}${lockMatch?'+'+lockMatch[1]+'%':''}</span>`;
+    } else if (reason.includes('TP')) {
+      trailStr = `<span style="color:var(--color-text-success)">TP</span>`;
+    } else if (reason.includes('SL')) {
+      trailStr = `<span style="color:var(--color-text-danger)">SL</span>`;
+    } else if (reason.includes('Manual')) {
+      trailStr = `<span style="color:var(--color-text-secondary)">Manual</span>`;
+    }
+
+    // Status icon
+    const stateEl = isOpen
+      ? `<span id="hft-livepnl-${t.id}" style="color:#1D9E75;font-weight:600">● aberta</span>`
+      : (isBE
+          ? '<span style="color:#BA7517">🔄 BE</span>'
+          : `<span style="color:${pnlColor}">${pnl > BE_THRESH ? '✅' : '❌'}</span>`);
+
+    const btn = isOpen
+      ? `<button onclick="hftManualClose('${t.id}','${sym}USDT')" style="font-size:10px;padding:3px 8px;border-radius:4px;border:1px solid var(--color-text-danger);background:rgba(226,75,74,.1);color:var(--color-text-danger);cursor:pointer;white-space:nowrap">✕ Fechar</button>`
+      : '';
+
+    const rowBg = isOpen ? 'rgba(29,158,117,.04)' : '';
+    return `<div style="display:grid;grid-template-columns:${COLS};gap:4px;font-size:11px;font-family:monospace;padding:4px 0;border-bottom:1px solid rgba(128,128,128,.07);align-items:center;background:${rowBg}">
+      <span style="color:var(--color-text-info);font-weight:600">${sym}</span>
+      <span style="color:${t.side==='BUY'?'var(--color-text-success)':'var(--color-text-danger)'};font-weight:600">${t.side||'—'}</span>
+      <span style="color:var(--color-text-secondary)">${durStr}</span>
+      <span>$${parseFloat(t.entry||0).toFixed(4)}</span>
+      <span>${t.exit_price?'$'+parseFloat(t.exit_price).toFixed(4):'—'}</span>
+      <span style="color:${pnlColor};font-weight:700">${pnlStr}</span>
+      <span style="font-size:10px">${trailStr}</span>
+      <span>${stateEl}</span>
+      <span>${btn}</span>
+    </div>`;
+  }).join('');
+
+  list.innerHTML = header + rows;
+
+  // Paginação
+  if (pagination) {
+    const { page, per_page, total, total_pages } = pagination;
+    const pagDiv = document.getElementById('hft-pagination');
+    if (pagDiv) {
+      pagDiv.style.display = total > per_page ? 'flex' : 'none';
+      const from = Math.min((page-1)*per_page+1, total);
+      const to   = Math.min(page*per_page, total);
+      const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+      set('hft-page-from',  from);
+      set('hft-page-to',    to);
+      set('hft-page-total', total);
+
+      // Prev/next
+      const prevBtn = document.getElementById('hft-prev-btn');
+      const nextBtn = document.getElementById('hft-next-btn');
+      if (prevBtn) { prevBtn.disabled = page <= 1; prevBtn.style.opacity = page <= 1 ? '.3' : '1'; }
+      if (nextBtn) { nextBtn.disabled = page >= total_pages; nextBtn.style.opacity = page >= total_pages ? '.3' : '1'; }
+
+      // Page pills (máx 7 visíveis)
+      const pillsEl = document.getElementById('hft-page-pills');
+      if (pillsEl) {
+        const maxPills = 7;
+        let pages = [];
+        if (total_pages <= maxPills) {
+          pages = Array.from({length:total_pages},(_,i)=>i+1);
+        } else {
+          // Janela deslizante em torno da página atual
+          let start = Math.max(1, page - 2);
+          let end   = Math.min(total_pages, start + maxPills - 1);
+          start     = Math.max(1, end - maxPills + 1);
+          if (start > 1) pages.push(1, '…');
+          for (let i = start; i <= end; i++) pages.push(i);
+          if (end < total_pages) pages.push('…', total_pages);
+        }
+        pillsEl.innerHTML = pages.map(p =>
+          p === '…'
+            ? `<span style="font-size:11px;color:var(--color-text-secondary);padding:0 2px">…</span>`
+            : `<button onclick="hftGoPage(${p})" style="min-width:26px;padding:3px 5px;border-radius:5px;border:1px solid ${p===page?'rgba(139,127,255,.7)':'var(--color-border-tertiary)'};background:${p===page?'rgba(139,127,255,.18)':'transparent'};color:${p===page?'var(--purple,#8b7fff)':'var(--color-text-secondary)'};cursor:pointer;font-size:11px;font-weight:${p===page?'700':'400'}">${p}</button>`
+        ).join('');
+      }
+    }
+  }
+}
+
+
