@@ -10,7 +10,7 @@ from patterns import Candle, run_all, Signal
 
 log = logging.getLogger('CryptoEdge.Scanner')
 
-# ── Pares padrão monitorados ───────────────────────────────────────────────────
+# -- Pares padrão monitorados ---------------------------------------------------
 DEFAULT_PAIRS = [
     'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT',
     'ADAUSDT', 'DOGEUSDT', 'AVAXUSDT', 'LINKUSDT', 'DOTUSDT',
@@ -26,7 +26,7 @@ _scanner_thread: threading.Thread = None
 _running = False
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 def _get_candles(client: Client, symbol: str, timeframe: str, limit: int = 60):
     klines = client.get_klines(symbol=symbol, interval=timeframe, limit=limit)
     return [
@@ -153,9 +153,9 @@ def _scanner_loop(api_key: str, secret_key: str, pairs: list,
             time.sleep(1)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # API pública
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 def start(api_key: str, secret_key: str, notify_fn=None,
           pairs: list = None, timeframe: str = '15m',
           min_conf: float = 0.68, interval_sec: int = 300,

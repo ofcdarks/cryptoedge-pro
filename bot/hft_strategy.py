@@ -46,7 +46,7 @@ def _hft_save_close(tid, exit_p, pnl, reason):
 
 log = logging.getLogger('CryptoEdge.HFT')
 
-# ─── Config ───────────────────────────────────────────────────────────────────
+# --- Config -------------------------------------------------------------------
 HFT_TP_PCT      = float(os.environ.get('HFT_TP_PCT',     '0.35'))
 HFT_SL_PCT      = float(os.environ.get('HFT_SL_PCT',     '0.18'))
 HFT_RISK_PCT    = float(os.environ.get('HFT_RISK_PCT',    '1.5'))
@@ -62,7 +62,7 @@ HFT_TIMEFRAME   = os.environ.get('HFT_TIMEFRAME', '1m')
 HFT_MIN_VOLUME  = float(os.environ.get('HFT_MIN_VOL_USDT', '5000000'))
 HFT_TESTNET     = os.environ.get('BOT_TESTNET', 'true').lower() == 'true'
 
-# ─── Engine ───────────────────────────────────────────────────────────────────
+# --- Engine -------------------------------------------------------------------
 class HFTEngine:
     def __init__(self, capital: float, client, notify_fn=None):
         self.capital        = capital
@@ -87,7 +87,7 @@ class HFTEngine:
         # Performance tracking per pair
         self.pair_stats: dict = {p: {'wins':0,'losses':0,'pnl':0.0} for p in HFT_PAIRS}
 
-    # ─── Indicadores ──────────────────────────────────────────────────────────
+    # --- Indicadores ----------------------------------------------------------
 
     def _ema(self, values, period):
         vals = list(values)
@@ -188,7 +188,7 @@ class HFTEngine:
         trs = [max(h[i]-l[i], abs(h[i]-c[i-1]), abs(l[i]-c[i-1])) for i in range(1, len(c))]
         return sum(trs) / len(trs) if trs else 0
 
-    # ─── Sinal principal — combina 9 estratégias ──────────────────────────────
+    # --- Sinal principal — combina 9 estratégias ------------------------------
 
     def _generate_signal(self, pair: str) -> dict:
         closes  = self.closes[pair]
@@ -202,7 +202,7 @@ class HFTEngine:
         close   = closes[-1]
         signals = []  # (side, reason, weight)
 
-        # ── 1. EMA Micro (3/8/21) ─────────────────────────────────────────────
+        # -- 1. EMA Micro (3/8/21) ---------------------------------------------
         ema3  = self._ema(list(closes)[-3:],  3)
         ema8  = self._ema(list(closes)[-8:],  8)
         ema21 = self._ema(list(closes)[-21:], 21)
@@ -211,14 +211,14 @@ class HFTEngine:
         elif ema3 < ema8 * 0.9999 and ema8 < ema21 * 1.0002:
             signals.append(('SELL', 'EMA micro bear', 1.0))
 
-        # ── 2. RSI Extremo (período 7) ───────────────────────────────────────
+        # -- 2. RSI Extremo (período 7) ---------------------------------------
         rsi_val = self._rsi(closes)
         if   rsi_val < 30: signals.append(('BUY',  f'RSI oversold {rsi_val:.0f}',  1.5))
         elif rsi_val < 40: signals.append(('BUY',  f'RSI low {rsi_val:.0f}',       0.8))
         elif rsi_val > 70: signals.append(('SELL', f'RSI overbought {rsi_val:.0f}',1.5))
         elif rsi_val > 60: signals.append(('SELL', f'RSI high {rsi_val:.0f}',      0.8))
 
-        # ── 3. Bollinger Bands ───────────────────────────────────────────────
+        # -- 3. Bollinger Bands -----------------------------------------------
         bb = self._bollinger(closes)
         if bb:
             upper, mid, lower, pct_b, bw = bb
@@ -227,7 +227,7 @@ class HFTEngine:
             elif pct_b > 0.92 and bw > 0.15: signals.append(('SELL', f'BB upper {pct_b:.2f}', 1.2))
             elif pct_b > 0.80 and bw > 0.10: signals.append(('SELL', f'BB near upper',        0.7))
 
-        # ── 4. VWAP Deviation ───────────────────────────────────────────────
+        # -- 4. VWAP Deviation -----------------------------------------------
         vwap = self._vwap(closes, volumes)
         dev  = (close - vwap) / vwap * 100 if vwap else 0
         if   dev < -0.30: signals.append(('BUY',  f'VWAP dev {dev:.2f}%', 1.2))
@@ -235,7 +235,7 @@ class HFTEngine:
         elif dev >  0.30: signals.append(('SELL', f'VWAP dev +{dev:.2f}%', 1.2))
         elif dev >  0.15: signals.append(('SELL', f'VWAP slight +{dev:.2f}%', 0.7))
 
-        # ── 5. Volume Momentum ───────────────────────────────────────────────
+        # -- 5. Volume Momentum -----------------------------------------------
         vols = list(volumes)
         if len(vols) >= 6:
             avg_vol  = sum(vols[-6:-1]) / 5
@@ -247,7 +247,7 @@ class HFTEngine:
                 elif cls[-1] < cls[-2] * 0.999:
                     signals.append(('SELL', f'Vol spike {last_vol/avg_vol:.1f}x↓', 1.3))
 
-        # ── 6. Stochastic ───────────────────────────────────────────────────
+        # -- 6. Stochastic ---------------------------------------------------
         if len(closes) >= 12:
             stk, std = self._stochastic(closes, highs, lows)
             if   stk < 25 and std < 30:
@@ -255,13 +255,13 @@ class HFTEngine:
             elif stk > 75 and std > 70:
                 signals.append(('SELL', f'Stoch overbought K={stk:.0f}', 1.1))
 
-        # ── 7. CCI ──────────────────────────────────────────────────────────
+        # -- 7. CCI ----------------------------------------------------------
         if len(closes) >= 14:
             cci_val = self._cci(closes, highs, lows)
             if   cci_val < -80:  signals.append(('BUY',  f'CCI {cci_val:.0f} oversold', 1.0))
             elif cci_val >  80:  signals.append(('SELL', f'CCI {cci_val:.0f} overbought', 1.0))
 
-        # ── 8. MACD Fast (3/10/5) ───────────────────────────────────────────
+        # -- 8. MACD Fast (3/10/5) -------------------------------------------
         if len(closes) >= 15:
             ml, sl, hist = self._macd_fast(closes)
             prev_hist = list(closes)  # need previous candle
@@ -270,7 +270,7 @@ class HFTEngine:
             elif hist < 0 and abs(hist) > abs(ml) * 0.1:
                 signals.append(('SELL', f'MACD fast cross↓ {hist:.4f}', 0.9))
 
-        # ── 9. Price Action (Pinbar / Engulfing) ────────────────────────────
+        # -- 9. Price Action (Pinbar / Engulfing) ----------------------------
         if len(opens) >= 2:
             pa = self._price_action(opens, closes, highs, lows)
             if pa == 'BUY':
@@ -278,7 +278,7 @@ class HFTEngine:
             elif pa == 'SELL':
                 signals.append(('SELL', 'Pinbar/Engulf bearish', 1.4))
 
-        # ── Consolidar com peso ──────────────────────────────────────────────
+        # -- Consolidar com peso ----------------------------------------------
         buy_score  = sum(w for s, r, w in signals if s == 'BUY')
         sell_score = sum(w for s, r, w in signals if s == 'SELL')
         buy_count  = sum(1 for s, r, w in signals if s == 'BUY')
@@ -301,7 +301,7 @@ class HFTEngine:
 
         return {'side': None, 'score': 0, 'reason': f'sem consenso (B:{buy_count} S:{sell_count})'}
 
-    # ─── Gestão de ordens ─────────────────────────────────────────────────────
+    # --- Gestão de ordens -----------------------------------------------------
 
     def _get_sym_info(self, pair: str) -> dict:
         if pair not in self._sym_info:
@@ -533,13 +533,13 @@ class HFTEngine:
         pnl_icon = '🟢' if self.daily_pnl >= 0 else '🔴'
         self.notify(
             f'📊 <b>Resumo Diário HFT</b>\n'
-            f'{'─'*28}\n'
+            f'{'-'*28}\n'
             f'{pnl_icon} PnL: <code>{"+"if self.daily_pnl>=0 else ""}${self.daily_pnl:.4f}</code>\n'
             f'📈 Trades: <code>{total}</code> ({self.daily_wins}W/{self.daily_losses}L)\n'
             f'🎯 Win Rate: <code>{wr:.1f}%</code>\n'
-            f'{'─'*28}\n'
+            f'{'-'*28}\n'
             f'<b>Por par:</b>\n{pair_lines}\n'
-            f'{'─'*28}\n'
+            f'{'-'*28}\n'
             f'🕐 <i>{__import__("datetime").datetime.now().strftime("%d/%m/%Y %H:%M")}</i>'
         )
 
@@ -556,7 +556,7 @@ class HFTEngine:
         log.info('  ✅ HFT novo dia iniciado')
 
 
-# ─── Singleton ────────────────────────────────────────────────────────────────
+# --- Singleton ----------------------------------------------------------------
 _hft_engine: HFTEngine = None
 
 def get_hft_engine() -> HFTEngine: return _hft_engine

@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ─── Re-use indicator functions from gridbot ──────────────────────────────────
+# --- Re-use indicator functions from gridbot ----------------------------------
 def ema(values, period):
     vals = list(values)
     if not vals: return 0
@@ -63,7 +63,7 @@ def atr_calc(highs, lows, closes, period=14):
     trs=[max(h[i]-l[i],abs(h[i]-c[i-1]),abs(l[i]-c[i-1])) for i in range(1,len(c))]
     return sum(trs)/len(trs) if trs else 0
 
-# ─── Backtest Engine ──────────────────────────────────────────────────────────
+# --- Backtest Engine ----------------------------------------------------------
 
 class Backtester:
     def __init__(self, klines, strategy='trend', config=None):
@@ -336,10 +336,10 @@ class Backtester:
         }
 
 
-# ─── CLI entry point (used by server.js via child_process) ────────────────────
+# --- CLI entry point (used by server.js via child_process) --------------------
 
 
-# ─── Walk-Forward Analysis ─────────────────────────────────────────────────────
+# --- Walk-Forward Analysis -----------------------------------------------------
 def walk_forward(klines, strategy='trend', config=None, folds=4):
     n = len(klines); fold_size = n // (folds + 1); results = []
     for i in range(folds):

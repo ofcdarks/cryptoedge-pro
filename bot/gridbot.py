@@ -19,7 +19,7 @@ from telegram_notify import (notify_start, notify_entry, notify_exit, notify_sto
                               notify_stop_loss_global, notify_error, notify_signal,
                               request_entry_confirmation_v2)
 import multi_scanner
-# ─── Live State Notifier ───────────────────────────────────────────────────────
+# --- Live State Notifier -------------------------------------------------------
 # Envia eventos ao servidor Node para atualizar o Live Trading em tempo real
 _APP_URL  = os.environ.get('APP_URL', 'http://localhost:' + os.environ.get('PORT','3000'))
 _BOT_TOKEN = os.environ.get('BOT_WEBHOOK_TOKEN', '')
@@ -90,7 +90,7 @@ logging.basicConfig(
 )
 log = logging.getLogger('CryptoEdge')
 
-# ── Config ─────────────────────────────────────────────────────────────────────
+# -- Config ---------------------------------------------------------------------
 API_KEY    = os.environ.get('BINANCE_API_KEY',   '')
 SECRET_KEY = os.environ.get('BINANCE_SECRET_KEY','')
 TESTNET    = os.environ.get('BOT_TESTNET','true').lower() == 'true'
@@ -176,9 +176,9 @@ signal.signal(signal.SIGINT, handle_exit)
 # Client será criado em main() após validar as chaves
 client = None
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # INDICADORES
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def ema(values, period):
     vals = list(values)
@@ -223,9 +223,9 @@ def trend_direction_from_ema():
     if e_fast < e_slow * 0.999: return 'down'
     return 'neutral'
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # HELPERS
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 _sym_info_cache = {}   # cache para evitar chamada API a cada vela
 
@@ -313,7 +313,7 @@ def safe_qty(capital: float, price: float) -> float:
     if price <= 0: return 0
     info = get_sym_info()
 
-    # ── Verificar saldo real (apenas em modo não-testnet) ──────────────────────
+    # -- Verificar saldo real (apenas em modo não-testnet) ----------------------
     effective_capital = capital
     if not TESTNET:
         real_balance = get_real_usdt_balance()
@@ -442,9 +442,9 @@ def check_sl_tp(price):
         if price >= pos['sl']: close_position(price,'STOP LOSS')
         elif price <= pos['tp']: close_position(price,'TAKE PROFIT')
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # STRATEGY: PATTERN ENGINE (principal)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def pattern_engine_on_candle(close, candle_obj):
     """
@@ -464,7 +464,7 @@ def pattern_engine_on_candle(close, candle_obj):
     state['all_patterns']    = patterns
     state['last_prediction'] = prediction
 
-    log.info(f"\n  ┌─ PADRÕES DETECTADOS ({len(patterns)}) {'─'*35}")
+    log.info(f"\n  ┌- PADRÕES DETECTADOS ({len(patterns)}) {'-'*35}")
     if patterns:
         for p in patterns[:5]:  # top 5
             log.info(f"  │  {p}")
@@ -476,11 +476,11 @@ def pattern_engine_on_candle(close, candle_obj):
     tgt_   = prediction.get('target_pct', 0)
     score_ = prediction.get('score', 0)
 
-    log.info(f"  ├─ PREDIÇÃO PRÓXIMO MOVIMENTO:")
+    log.info(f"  ├- PREDIÇÃO PRÓXIMO MOVIMENTO:")
     log.info(f"  │  Direção: {dir_.upper()} | Confiança: {conf_:.0%} | Alvo: {tgt_:+.1f}%")
     for r in prediction.get('reasoning', [])[:4]:
         log.info(f"  │  {r}")
-    log.info(f"  └{'─'*50}")
+    log.info(f"  └{'-'*50}")
     # Notifica Live Trading com o sinal detectado
     if conf_ >= MIN_CONFIDENCE:
         top_pat_names = [p.name for p in patterns[:2]] if patterns else []
@@ -565,9 +565,9 @@ def pattern_engine_on_candle(close, candle_obj):
             open_short(close, qty, sl=sl_price, tp=tp_price, reason=reason_str)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # STRATEGIES: GRID, DCA, SCALP, TREND, MACD (mantidas do v3)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def grid_init():
     info=get_sym_info(); step=(PRICE_MAX-PRICE_MIN)/NUM_GRIDS
@@ -746,9 +746,9 @@ def breakout_on_candle(close):
         else:
             open_short(close,qty,close+sl_d,close-sl_d*2,reason)
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # WebSocket Handlers
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def on_kline(msg):
     if not state['running']: return
@@ -777,7 +777,7 @@ def on_kline(msg):
         close_position(close,'STOP GLOBAL')
         state['running']=False; return
 
-    # ── Session Manager: para ao atingir gain ou loss da sessão ──
+    # -- Session Manager: para ao atingir gain ou loss da sessão --
     if SESSION_GAIN > 0 and state['pnl'] >= SESSION_GAIN:
         log.info(f"  🎯 SESSION GAIN atingido: ${state['pnl']:+.2f} >= ${SESSION_GAIN:.2f}")
         if state['position']: close_position(close, 'SESSION GAIN')
@@ -793,7 +793,7 @@ def on_kline(msg):
         state['running'] = False; return
     if not is_close: return
 
-    # ── VELA FECHADA ───────────────────────────────────────────────
+    # -- VELA FECHADA -----------------------------------------------
     state['candle_count'] += 1
     candle_obj = Candle(open=opn, high=high, low=low, close=close, volume=vol)
     state['candles'].append(candle_obj)
@@ -807,7 +807,7 @@ def on_kline(msg):
     r   = rsi(state['raw_closes'])
     a   = atr(state['raw_highs'], state['raw_lows'], state['raw_closes'])
 
-    log.info(f"\n{'═'*62}")
+    log.info(f"\n{'='*62}")
     log.info(f"  🕯 Vela #{n} [{TIMEFRAME}] {SYMBOL} | "
              f"O:{opn:,.0f} H:{high:,.0f} L:{low:,.0f} C:{close:,.0f}")
     log.info(f"  PnL: ${state['pnl']:+.2f} | W:{state['wins']} L:{state['losses']} "
@@ -835,9 +835,9 @@ def on_ticker(msg):
     price = float(msg.get('c',0))
     if price and STRATEGY=='scalping': scalping_on_tick(price)
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Warm-up
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def warm_up():
     needed = max(HISTORY_SIZE, MACD_SLOW+MACD_SIGNAL+10, BREAK_LB+5, 50)
@@ -862,9 +862,9 @@ def warm_up():
     except Exception as e:
         log.warning(f"  Warm-up falhou: {e}")
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # MAIN
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def main():
     global client
@@ -896,7 +896,7 @@ def main():
         log.error(f"  Falha ao conectar na Binance: {e}")
         sys.exit(1)
 
-    log.info(f"\n{'═'*62}")
+    log.info(f"\n{'='*62}")
     log.info(f"  🚀 CryptoEdge Pro — {STRATEGY.upper()}")
     log.info(f"  Par: {SYMBOL} | Capital: ${CAPITAL} | Testnet: {TESTNET}")
     # Só notifica no primeiro start, não nos restarts silenciosos
@@ -916,9 +916,9 @@ def main():
     if STRATEGY in ('pattern','auto'):
         log.info(f"  Pattern Engine: conf≥{MIN_CONFIDENCE:.0%} | "
                  f"SL={SL_ATR_MULT}×ATR | TP={TP_RR}×SL | Volume: {REQUIRE_VOLUME}")
-    log.info(f"{'═'*62}\n")
+    log.info(f"{'='*62}\n")
 
-    # ── Multi-par Scanner ────────────────────────────────────────────────
+    # -- Multi-par Scanner ------------------------------------------------
     if SCAN_ENABLED:
         scan_pairs = [p.strip() for p in SCAN_PAIRS_RAW.split(',') if p.strip()] or None
         def _on_scan_signal(sig):
@@ -970,7 +970,7 @@ def main():
         warm_up()
     if STRATEGY=='grid': grid_init()
 
-    # ── HFT: inicializa engine e agenda reset diário ─────────────────────────
+    # -- HFT: inicializa engine e agenda reset diário -------------------------
     if STRATEGY == 'hft':
         def _hft_send(text):
             try:
@@ -1132,10 +1132,10 @@ def main():
             time.sleep(10)
 
     wr = state['wins']/max(1,state['wins']+state['losses'])*100
-    log.info(f"\n{'═'*62}")
+    log.info(f"\n{'='*62}")
     log.info(f"  Resultado final: PnL ${state['pnl']:+.2f} | "
              f"W:{state['wins']} L:{state['losses']} WR:{wr:.0f}%")
-    log.info(f"{'═'*62}")
+    log.info(f"{'='*62}")
     multi_scanner.stop()
     # Send HFT daily summary on stop
     if STRATEGY == 'hft':
