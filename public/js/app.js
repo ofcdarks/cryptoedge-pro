@@ -7074,7 +7074,7 @@ async function hftManualClose(tradeId, sym) {
     const r = await fetch('/api/hft/close', {
       method: 'POST',
       headers: { ...auth.headers(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ trade_id: tradeId })
+      body: JSON.stringify({ trade_id: tradeId, pair: sym })
     });
     const d = await r.json();
     if (d.ok) { showToast('✅ Sinal de fechamento enviado para ' + sym); setTimeout(loadHFTStats, 2000); }

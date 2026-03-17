@@ -452,6 +452,55 @@ class HFTEngine:
                 elif age > HFT_TIME_EXIT and price < pos['entry']: self._close_position(key, price, f'Time-exit profit')
                 elif age > HFT_TIME_EXIT * 2: self._close_position(key, price, f'Time-exit max')
 
+
+    def _poll_close_flags(self, pair: str, close: float):
+        import os as _os
+        # Check pair-based flag (fastest path)
+        pair_flag = f'/tmp/hft_close_pair_{pair}'
+        if _os.path.exists(pair_flag):
+            try: _os.remove(pair_flag)
+            except: pass
+            self.close_position_by_pair(pair, 'Manual close via painel')
+            return
+        # Check id-based flags
+        import glob as _glob
+        for fpath in _glob.glob('/tmp/hft_close_*'):
+            if '_pair_' in fpath: continue
+            try:
+                import json as _json
+                data = _json.loads(open(fpath).read())
+                if data.get('pair') == pair or not data.get('pair'):
+                    db_id = data.get('trade_id', '')
+                    _os.remove(fpath)
+                    if db_id:
+                        if not self.close_position_by_id(db_id, 'Manual close via painel'):
+                            self.close_position_by_pair(pair, 'Manual close via painel')
+                    else:
+                        self.close_position_by_pair(pair, 'Manual close via painel')
+            except: pass
+
+    def close_position_by_pair(self, pair: str, reason: str = 'Manual close via painel') -> bool:
+        """Close the first open position for a given pair. Called by manual close endpoint."""
+        closed = False
+        for key, pos in list(self.positions.items()):
+            if pos['pair'] == pair:
+                cur_price = list(self.closes.get(pair, [pos['entry']]))[-1]
+                log.info(f'  🖐 HFT manual close: {pair} {pos["side"]} @ ${cur_price:,.4f}')
+                self._close_position(key, cur_price, reason)
+                closed = True
+                break
+        return closed
+
+    def close_position_by_id(self, db_id: str, reason: str = 'Manual close via painel') -> bool:
+        """Close position by DB trade id."""
+        for key, pos in list(self.positions.items()):
+            if pos.get('db_id') == db_id or key == db_id:
+                cur_price = list(self.closes.get(pos['pair'], [pos['entry']]))[-1]
+                log.info(f'  🖐 HFT manual close by id: {pos["pair"]} @ ${cur_price:,.4f}')
+                self._close_position(key, cur_price, reason)
+                return True
+        return False
+
     def on_candle(self, pair: str, open_: float, high: float, low: float,
                   close: float, volume: float, is_closed: bool):
         # Init deques para par novo
@@ -462,8 +511,10 @@ class HFTEngine:
             self.volumes[pair] = deque(maxlen=200)
             self.opens[pair]   = deque(maxlen=200)
 
-        # Checa SL/TP em cada tick (não precisa esperar vela fechar)
+        # Checa SL/TP em cada tick
         self._check_exit(pair, close)
+        # Check manual close requests every tick
+        self._poll_close_flags(pair, close)
 
         # SOMENTE em velas FECHADAS atualiza os dados históricos e gera sinais
         # Ticks intermediários contaminariam RSI/EMA/BB com dados repetidos

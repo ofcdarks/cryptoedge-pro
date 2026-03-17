@@ -2661,14 +2661,25 @@ app.get('/api/performance/stats', requireAuth, (req, res) => {
 // ─── HFT Manual Close ────────────────────────────────────────────────────────
 app.post('/api/hft/close', requireAuth, async (req, res) => {
   try {
-    const { trade_id } = req.body;
-    if (!trade_id) return res.status(400).json({ ok: false, error: 'trade_id required' });
-    // Write a close flag file that the HFT engine polls
+    const { trade_id, pair } = req.body;
+    if (!trade_id && !pair) return res.status(400).json({ ok: false, error: 'trade_id or pair required' });
+
+    // Look up the trade to get pair + side
+    let sym = pair;
+    if (trade_id && !pair) {
+      const t = db.get('SELECT symbol, side FROM bot_trades WHERE id=? AND username=?', [trade_id, req.user]);
+      sym = t?.symbol || pair;
+    }
+
+    // Write a close signal file: /tmp/hft_close_{trade_id}
     const fs = require('fs');
-    const flagDir = '/tmp/hft_close_flags';
-    fs.mkdirSync(flagDir, { recursive: true });
-    fs.writeFileSync(`${flagDir}/${trade_id}`, 'close');
-    res.json({ ok: true, message: 'Sinal de fechamento enviado' });
+    const flagFile = `/tmp/hft_close_${trade_id || sym}`;
+    fs.writeFileSync(flagFile, JSON.stringify({ trade_id: trade_id || '', pair: sym || '', ts: Date.now() }));
+
+    // Also write a pair-based flag as fallback
+    if (sym) fs.writeFileSync(`/tmp/hft_close_pair_${sym}`, '1');
+
+    res.json({ ok: true, message: `Sinal de fechamento enviado para ${sym || trade_id}` });
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
