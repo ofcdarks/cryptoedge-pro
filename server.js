@@ -53,8 +53,8 @@ app.use(helmet({
 // ─── CORS ─────────────────────────────────────────────────────────────────────
 const allowedOrigin = process.env.ALLOWED_ORIGIN;
 app.use(cors({
-  origin: allowedOrigin || false,  // FIX: was `true` (permite qualquer origem)
-  credentials: true
+  origin: allowedOrigin || '*',
+  credentials: allowedOrigin ? true : false,
 }));
 
 app.use(express.json({ limit: '5mb' }));
@@ -356,31 +356,7 @@ app.post('/api/trades', requireAuth, (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-app.patch('/api/trades/:id', requireAuth, (req, res) => {
-  try {
-    const b = req.body || {};
-    const updates = {};
-    if (b.result     !== undefined) updates.result     = b.result;
-    if (b.exit       !== undefined) updates.exit       = b.exit;
-    if (b.pnl        !== undefined) updates.pnl        = b.pnl;
-    if (b.pnl_pct    !== undefined) updates.pnl_pct    = b.pnl_pct;
-    if (b.notes      !== undefined) updates.notes      = b.notes;
-    if (b.screenshot !== undefined) updates.screenshot = b.screenshot;
-    if (b.tags       !== undefined) updates.tags       = JSON.stringify(b.tags);
-    if (!Object.keys(updates).length) return res.json({ ok: true });
-    updates.updated_at = new Date().toISOString();
-    db.update('trades', updates, 'id=? AND username=?', [req.params.id, req.user], true);
-    res.json({ ok: true });
-  } catch(e) { res.status(500).json({ error: e.message }); }
-});
-
-app.delete('/api/trades/:id', requireAuth, (req, res) => {
-  try {
-    db.remove('trades', 'id=? AND username=?', [req.params.id, req.user]);
-    res.json({ ok: true });
-  } catch(e) { res.status(500).json({ error: e.message }); }
-});
-
+// FIX: rotas estáticas ANTES das rotas com parâmetro dinâmico (:id)
 app.get('/api/trades/stats', requireAuth, (req, res) => {
   try {
     const all    = db.all('SELECT * FROM trades WHERE username=?', [req.user]);
@@ -406,6 +382,32 @@ app.get('/api/trades/export/csv', requireAuth, (req, res) => {
     res.send('\ufeff' + header + lines); // BOM for Excel
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
+
+app.patch('/api/trades/:id', requireAuth, (req, res) => {
+  try {
+    const b = req.body || {};
+    const updates = {};
+    if (b.result     !== undefined) updates.result     = b.result;
+    if (b.exit       !== undefined) updates.exit       = b.exit;
+    if (b.pnl        !== undefined) updates.pnl        = b.pnl;
+    if (b.pnl_pct    !== undefined) updates.pnl_pct    = b.pnl_pct;
+    if (b.notes      !== undefined) updates.notes      = b.notes;
+    if (b.screenshot !== undefined) updates.screenshot = b.screenshot;
+    if (b.tags       !== undefined) updates.tags       = JSON.stringify(b.tags);
+    if (!Object.keys(updates).length) return res.json({ ok: true });
+    updates.updated_at = new Date().toISOString();
+    db.update('trades', updates, 'id=? AND username=?', [req.params.id, req.user], true);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/trades/:id', requireAuth, (req, res) => {
+  try {
+    db.remove('trades', 'id=? AND username=?', [req.params.id, req.user]);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 
 // ─── Prices REST ───────────────────────────────────────────────────────────────
 const SYMBOLS = [
@@ -896,22 +898,6 @@ app.post('/api/bot/start', requireAuth, async (req, res) => {
     if (body.hft_cooldown)   env['HFT_COOLDOWN']    = String(body.hft_cooldown);
     if (body.hft_daily_loss) env['HFT_DAILY_LOSS']  = String(body.hft_daily_loss);
     if (body.hft_pairs)      env['HFT_PAIRS']       = body.hft_pairs;
-    // Trail Stop Progressivo
-    if (body.hft_trail_l1)   env['HFT_TRAIL_L1']    = String(body.hft_trail_l1);
-    if (body.hft_trail_l2)   env['HFT_TRAIL_L2']    = String(body.hft_trail_l2);
-    if (body.hft_trail_l3)   env['HFT_TRAIL_L3']    = String(body.hft_trail_l3);
-    if (body.hft_trail_l4)   env['HFT_TRAIL_L4']    = String(body.hft_trail_l4);
-    // AI Advisor v2.0
-    if (body.hft_ai_enabled  !== undefined) env['HFT_AI_ENABLED']    = String(body.hft_ai_enabled);
-    if (body.hft_ai_min_conf)               env['HFT_AI_MIN_CONF']   = String(body.hft_ai_min_conf);
-    if (body.hft_ai_model_fast)             env['HFT_AI_MODEL_FAST'] = body.hft_ai_model_fast;
-    if (body.hft_ai_model_deep !== undefined) {
-      if (body.hft_ai_model_deep && body.hft_ai_model_deep !== 'none') {
-        env['HFT_AI_MODEL_DEEP'] = body.hft_ai_model_deep;
-      } else {
-        env['HFT_AI_MODEL_DEEP'] = body.hft_ai_model_fast || 'deepseek-v3-0324'; // usa fast como deep
-      }
-    }
 
     // ── Salva config efetiva para que restarts usem a mesma estratégia ──────────
     const cfgToSave = [
@@ -923,8 +909,6 @@ app.post('/api/bot/start', requireAuth, async (req, res) => {
       'BOT_MIN_CONF','BOT_SL_ATR','BOT_TP_RR','BOT_MARKET','BOT_TZ_OFFSET',
       'HFT_PAIRS','HFT_TIMEFRAME','HFT_TP_PCT','HFT_SL_PCT','HFT_RISK_PCT',
       'HFT_MAX_TRADES','HFT_COOLDOWN','HFT_DAILY_LOSS','HFT_MIN_SIGNALS',
-      'HFT_TRAIL_L1','HFT_TRAIL_L2','HFT_TRAIL_L3','HFT_TRAIL_L4',
-      'HFT_AI_ENABLED','HFT_AI_MIN_CONF','HFT_AI_MODEL_FAST','HFT_AI_MODEL_DEEP',
       'BOT_SCAN_ENABLED','BOT_SCAN_PAIRS','BOT_SCAN_INTERVAL','BOT_SCAN_MIN_CONF',
     ];
     botEnvKeys.forEach(k => { if (env[k] !== undefined) cfgToSave.push(`${k}=${env[k]}`); });
@@ -1436,7 +1420,7 @@ app.get('/api/live/state', (req, res) => {
 });
 
 // Bot posts events to live state (called internally by bot webhook or analysis save)
-app.post('/api/live/event', requireAuth, (req, res) => {
+app.post('/api/live/event', requireBotOrAuth, (req, res) => {
   try {
     const { type, data } = req.body || {};
     if (!type) return res.status(400).json({ error: 'type required' });
@@ -2081,12 +2065,22 @@ app.post('/api/exchange/balance', requireAuth, async (req, res) => {
       if (!key || !secret) return res.json({ ok:false, error:'Configure BYBIT_API_KEY no .env', simulated:true });
       const ts = Date.now().toString();
       const recv = '5000';
-      const queryStr = `api_key=${key}&coin=USDT&recvWindow=${recv}&timestamp=${ts}`;
-      const sig = require('crypto').createHmac('sha256', secret).update(queryStr).digest('hex');
-      const r = await axios.get(`https://api.bybit.com/v2/private/wallet/balance?${queryStr}&sign=${sig}`,
-        { timeout:8000 });
-      const bal = r.data?.result?.USDT;
-      return res.json({ ok:true, exchange:'bybit', balance: bal?.equity||0, available: bal?.available_balance||0 });
+      // Bybit v5 API — HMAC: timestamp + apiKey + recvWindow + queryString
+      const queryStr = `accountType=UNIFIED`;
+      const preSign = ts + key + recv + queryStr;
+      const sig = require('crypto').createHmac('sha256', secret).update(preSign).digest('hex');
+      const r = await axios.get(`https://api.bybit.com/v5/account/wallet-balance?${queryStr}`, {
+        headers: {
+          'X-BAPI-API-KEY': key,
+          'X-BAPI-SIGN': sig,
+          'X-BAPI-TIMESTAMP': ts,
+          'X-BAPI-RECV-WINDOW': recv,
+        },
+        timeout: 8000
+      });
+      const coins = r.data?.result?.list?.[0]?.coin || [];
+      const usdt  = coins.find(c => c.coin === 'USDT') || {};
+      return res.json({ ok:true, exchange:'bybit', balance: usdt.walletBalance||0, available: usdt.availableToWithdraw||0 });
     }
     if (exchange === 'okx') {
       const key    = user?.okx_key    || process.env.OKX_API_KEY    || '';
@@ -2094,9 +2088,10 @@ app.post('/api/exchange/balance', requireAuth, async (req, res) => {
       const pass   = user?.okx_pass   || process.env.OKX_PASSPHRASE || '';
       if (!key || !secret) return res.json({ ok:false, error:'Configure OKX_API_KEY no .env', simulated:true });
       const ts = new Date().toISOString();
-      const sig = require('crypto').createHmac('sha256',secret).update(ts+'GET'+'/api/v5/account/balance').digest('base64');
+      // OKX v5: HMAC(timestamp + method + requestPath + body), body='' para GET
+      const sig = require('crypto').createHmac('sha256', secret).update(ts + 'GET' + '/api/v5/account/balance' + '').digest('base64');
       const r = await axios.get('https://www.okx.com/api/v5/account/balance',
-        { headers:{'OK-ACCESS-KEY':key,'OK-ACCESS-SIGN':sig,'OK-ACCESS-TIMESTAMP':ts,'OK-ACCESS-PASSPHRASE':pass}, timeout:8000 });
+        { headers:{'OK-ACCESS-KEY':key,'OK-ACCESS-SIGN':sig,'OK-ACCESS-TIMESTAMP':ts,'OK-ACCESS-PASSPHRASE':pass,'OK-ACCESS-PROJECT':''}, timeout:8000 });
       const usdt = r.data?.data?.[0]?.details?.find(d=>d.ccy==='USDT');
       return res.json({ ok:true, exchange:'okx', balance: usdt?.eq||0, available: usdt?.availEq||0 });
     }
@@ -2656,7 +2651,7 @@ app.get('/api/performance/by-pair', requireAuth, (req, res) => {
 app.get('/api/performance/stats', requireAuth, (req, res) => {
   try {
     const days = parseInt(req.query.days||'30');
-    const rows = db.all(`SELECT pnl,(julianday(COALESCE(closed_at,datetime('now')))-julianday(opened_at))*86400 AS dur FROM bot_trades WHERE closed_at IS NOT NULL AND opened_at>=datetime('now','-'||?||' days') ORDER BY opened_at`,[days]);
+    const rows = db.all(`SELECT pnl,(julianday(COALESCE(closed_at,datetime('now')))-julianday(opened_at))*86400 AS dur FROM bot_trades WHERE closed_at IS NOT NULL AND username=? AND opened_at>=datetime('now','-'||?||' days') ORDER BY opened_at`,[req.user, days]);
     if(!rows.length) return res.json({ok:true,empty:true});
     const wins=rows.filter(r=>r.pnl>0),losses=rows.filter(r=>r.pnl<=0),n=rows.length;
     const tot=rows.reduce((s,r)=>s+(r.pnl||0),0);
@@ -2735,99 +2730,12 @@ app.get('/api/hft/live-pnl', requireAuth, async (req, res) => {
 
 app.get('/api/hft/stats', requireAuth, (req, res) => {
   try {
-    const BE_THRESH = 0.0002;
-    // Suporte a paginação e filtro
-    const page     = Math.max(1, parseInt(req.query.page  || '1'));
-    const pageSize = Math.min(100, Math.max(5, parseInt(req.query.per_page || '10')));
-    const filter   = req.query.filter || 'all'; // all | open | wins | losses | be
-    const days     = req.query.days   || null;  // null = só hoje, número = últimos N dias
-
-    const dateFilter = days
-      ? `AND opened_at >= datetime('now', '-${parseInt(days)} days')`
-      : `AND DATE(opened_at) = DATE('now')`;
-
-    const allTrades = db.all(
-      `SELECT * FROM bot_trades WHERE (strategy='hft' OR strategy='HFT') ${dateFilter} AND username=? ORDER BY opened_at DESC`,
-      [req.user]
-    );
-
-    const closed = allTrades.filter(t => t.closed_at);
-    const wins   = closed.filter(t =>  t.pnl > BE_THRESH).length;
-    const losses = closed.filter(t =>  t.pnl < -BE_THRESH).length;
-    const bes    = closed.filter(t => Math.abs(t.pnl||0) <= BE_THRESH).length;
-    const pnl    = allTrades.reduce((s,t)=>s+(t.pnl||0),0);
-    const eff    = wins + losses;
-    const wr     = eff > 0 ? wins / eff * 100 : 0;
-    const open   = allTrades.filter(t=>!t.closed_at);
-
-    // Filtro da página
-    let filtered = allTrades;
-    if (filter === 'open')   filtered = allTrades.filter(t => !t.closed_at);
-    if (filter === 'wins')   filtered = closed.filter(t => t.pnl > BE_THRESH);
-    if (filter === 'losses') filtered = closed.filter(t => t.pnl < -BE_THRESH);
-    if (filter === 'be')     filtered = closed.filter(t => Math.abs(t.pnl||0) <= BE_THRESH);
-
-    const totalFiltered = filtered.length;
-    const totalPages    = Math.max(1, Math.ceil(totalFiltered / pageSize));
-    const pageSafe      = Math.min(page, totalPages);
-    const paginated     = filtered.slice((pageSafe - 1) * pageSize, pageSafe * pageSize);
-
-    res.json({
-      ok:   true,
-      today: { wins, losses, breakevens:bes, pnl:pnl.toFixed(4), wr:wr.toFixed(1),
-               total:allTrades.length, open_positions:open.length,
-               pairs:[...new Set(open.map(t=>t.symbol))] },
-      trades:      paginated,
-      pagination:  { page:pageSafe, per_page:pageSize, total:totalFiltered, total_pages:totalPages, filter },
-    });
-  } catch(e){ res.json({ok:false,error:e.message}); }
-});
-
-// ─── HFT PnL Summary (diário / mensal / anual) ────────────────────────────────
-app.get('/api/hft/pnl-summary', requireAuth, (req, res) => {
-  try {
-    const BE = 0.0002;
-    const now   = new Date();
-    const today = now.toISOString().slice(0,10);
-    const month = now.toISOString().slice(0,7);
-    const year  = now.getFullYear().toString();
-
-    const calc = (rows) => {
-      const wins   = rows.filter(r =>  r.pnl > BE).length;
-      const losses = rows.filter(r =>  r.pnl < -BE).length;
-      const bes    = rows.filter(r => Math.abs(r.pnl||0) <= BE).length;
-      const pnl    = rows.reduce((s,r) => s+(r.pnl||0), 0);
-      const eff    = wins + losses;
-      return { wins, losses, breakevens:bes, trades:rows.length,
-               pnl: parseFloat(pnl.toFixed(4)),
-               win_rate: eff > 0 ? parseFloat((wins/eff*100).toFixed(1)) : 0 };
-    };
-
-    const base = "SELECT pnl FROM bot_trades WHERE (strategy='hft' OR strategy='HFT') AND status='closed' AND username=?";
-    const todayRows  = db.all(base + " AND DATE(opened_at)=DATE('now')",              [req.user]);
-    const monthRows  = db.all(base + " AND strftime('%Y-%m',opened_at)=?",            [req.user, month]);
-    const yearRows   = db.all(base + " AND strftime('%Y',opened_at)=?",              [req.user, year]);
-    const allRows    = db.all(base,                                                    [req.user]);
-
-    // Streaks: maior sequência de wins/losses
-    const allClosed = db.all("SELECT pnl FROM bot_trades WHERE (strategy='hft' OR strategy='HFT') AND status='closed' AND username=? ORDER BY closed_at ASC", [req.user]);
-    let bestWinStreak=0,bestLossStreak=0,curW=0,curL=0;
-    allClosed.forEach(r => {
-      if(r.pnl > BE)       { curW++; curL=0; bestWinStreak=Math.max(bestWinStreak,curW); }
-      else if(r.pnl < -BE) { curL++; curW=0; bestLossStreak=Math.max(bestLossStreak,curL); }
-      else                 { /* BE: não quebra nenhuma streak */ }
-    });
-
-    res.json({ ok:true,
-      today:  calc(todayRows),
-      monthly:calc(monthRows),
-      annual: calc(yearRows),
-      all_time: calc(allRows),
-      best_win_streak:  bestWinStreak,
-      best_loss_streak: bestLossStreak,
-      period: { today, month, year }
-    });
-  } catch(e) { res.json({ok:false,error:e.message}); }
+    const trades = db.all("SELECT * FROM bot_trades WHERE (strategy='hft' OR strategy='HFT') AND DATE(opened_at)=DATE('now') AND username=? ORDER BY opened_at DESC", [req.user]);
+    const wins=trades.filter(t=>t.pnl>0).length,losses=trades.filter(t=>t.pnl<=0&&t.closed_at).length;
+    const pnl=trades.reduce((s,t)=>s+(t.pnl||0),0),wr=wins+losses>0?wins/(wins+losses)*100:0;
+    const open=trades.filter(t=>!t.closed_at);
+    res.json({ok:true,today:{wins,losses,pnl:pnl.toFixed(4),wr:wr.toFixed(1),total:trades.length,open_positions:open.length,pairs:[...new Set(open.map(t=>t.pair))]},trades:trades.slice(0,20)});
+  } catch(e){res.json({ok:false,error:e.message});}
 });
 
 // ─── Performance & HFT stats ─────────────────────────────────────────────────
