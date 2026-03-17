@@ -431,13 +431,12 @@ document.querySelectorAll('.nav-item').forEach(item => {
     const panel = el('panel-' + item.dataset.panel);
     if (panel) {
       panel.classList.add('active');
-      // With absolute positioning, all panels start at top automatically
-      // Flex panels need display:flex instead of display:block
+      // Flex panels override display:block with display:flex
       const flexPanels = ['replay', 'live', 'ai'];
-      panel.style.display = flexPanels.includes(item.dataset.panel) ? 'flex' : '';
+      if (flexPanels.includes(item.dataset.panel)) panel.style.display = 'flex';
+      // Always reset scroll to top on panel switch
+      panel.scrollTop = 0;
     }
-    // Reset scroll position for this panel
-    if (panel) panel.scrollTop = 0;
     // Para polling do bot ao sair do painel
     if (item.dataset.panel !== 'botcontrol' && _botAutoRefresh) {
       clearInterval(_botAutoRefresh); _botAutoRefresh = null;
