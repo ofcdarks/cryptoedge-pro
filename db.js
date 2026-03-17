@@ -110,6 +110,11 @@ async function init() {
   const userCols = all("PRAGMA table_info(users)").map(c => c.name);
   if (!userCols.includes('binance_secret_enc'))  { try { _db.run("ALTER TABLE users ADD COLUMN binance_secret_enc TEXT DEFAULT ''"); } catch {} }
   if (!userCols.includes('webhook_token'))        { try { _db.run("ALTER TABLE users ADD COLUMN webhook_token TEXT DEFAULT ''"); } catch {} }
+  if (!userCols.includes('bybit_key'))      { try { _db.run("ALTER TABLE users ADD COLUMN bybit_key TEXT DEFAULT ''");    } catch {} }
+  if (!userCols.includes('bybit_secret'))   { try { _db.run("ALTER TABLE users ADD COLUMN bybit_secret TEXT DEFAULT ''"); } catch {} }
+  if (!userCols.includes('okx_key'))        { try { _db.run("ALTER TABLE users ADD COLUMN okx_key TEXT DEFAULT ''");      } catch {} }
+  if (!userCols.includes('okx_secret'))     { try { _db.run("ALTER TABLE users ADD COLUMN okx_secret TEXT DEFAULT ''");   } catch {} }
+  if (!userCols.includes('okx_pass'))       { try { _db.run("ALTER TABLE users ADD COLUMN okx_pass TEXT DEFAULT ''");     } catch {} }
   if (!userCols.includes('signals_enabled'))      { try { _db.run("ALTER TABLE users ADD COLUMN signals_enabled INTEGER DEFAULT 0"); } catch {} }
   if (!userCols.includes('signals_plan'))         { try { _db.run("ALTER TABLE users ADD COLUMN signals_plan TEXT DEFAULT 'free'"); } catch {} }
   // Admin recebe sinais por padrão
@@ -221,6 +226,66 @@ async function init() {
 
   // Indexes
   _db.run('CREATE INDEX IF NOT EXISTS idx_trades_user ON trades(username, created_at)');
+  // ── Copy Trading ─────────────────────────────────────────────────────────────
+  _db.run(`CREATE TABLE IF NOT EXISTS copy_leaders (
+    id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
+    username TEXT NOT NULL UNIQUE,
+    display_name TEXT DEFAULT '',
+    bio TEXT DEFAULT '',
+    public INTEGER DEFAULT 1,
+    copy_fee_pct REAL DEFAULT 0,
+    followers INTEGER DEFAULT 0,
+    total_pnl REAL DEFAULT 0,
+    win_rate REAL DEFAULT 0,
+    trades INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+  )`);
+
+  _db.run(`CREATE TABLE IF NOT EXISTS copy_followers (
+    id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
+    follower TEXT NOT NULL,
+    leader TEXT NOT NULL,
+    capital REAL NOT NULL,
+    max_risk_pct REAL DEFAULT 2,
+    active INTEGER DEFAULT 1,
+    copied_trades INTEGER DEFAULT 0,
+    pnl_total REAL DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(follower, leader)
+  )`);
+  _db.run('CREATE INDEX IF NOT EXISTS idx_copy_f ON copy_followers(follower)');
+  _db.run('CREATE INDEX IF NOT EXISTS idx_copy_l ON copy_followers(leader)');
+
+  // ── TradingView Webhooks (extended) ──────────────────────────────────────────
+  _db.run(`CREATE TABLE IF NOT EXISTS tv_webhooks (
+    id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
+    username TEXT NOT NULL,
+    name TEXT DEFAULT '',
+    token TEXT NOT NULL UNIQUE,
+    auto_execute INTEGER DEFAULT 0,
+    capital REAL DEFAULT 100,
+    strategy TEXT DEFAULT 'manual',
+    active INTEGER DEFAULT 1,
+    fires INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+  )`);
+
+  // ── IR Fiscal tracking ────────────────────────────────────────────────────────
+  _db.run(`CREATE TABLE IF NOT EXISTS fiscal_records (
+    id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
+    username TEXT NOT NULL,
+    month TEXT NOT NULL,
+    gross_gain REAL DEFAULT 0,
+    gross_loss REAL DEFAULT 0,
+    net_pnl REAL DEFAULT 0,
+    tax_due REAL DEFAULT 0,
+    paid INTEGER DEFAULT 0,
+    darf_code TEXT DEFAULT '6015',
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(username, month)
+  )`);
+  _db.run('CREATE INDEX IF NOT EXISTS idx_fiscal_u ON fiscal_records(username, month)');
+
 
   _db.run(`CREATE TABLE IF NOT EXISTS bot_trades (
     id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),

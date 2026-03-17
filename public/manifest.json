@@ -1,16 +1,16 @@
 {
   "name": "CryptoEdge Pro",
   "short_name": "CryptoEdge",
-  "description": "Plataforma profissional de day trade de criptomoedas com IA",
+  "description": "Plataforma profissional de trading com bot automatizado, análise de mercado e gestão de risco.",
   "start_url": "/",
   "display": "standalone",
-  "orientation": "landscape",
+  "orientation": "any",
   "background_color": "#0d1117",
-  "theme_color": "#F0B90B",
+  "theme_color": "#00dc82",
   "lang": "pt-BR",
   "categories": [
     "finance",
-    "business"
+    "productivity"
   ],
   "screenshots": [],
   "icons": [

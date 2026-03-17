@@ -68,3 +68,32 @@ self.addEventListener('sync', e => {
 async function syncPendingData() {
   // placeholder for future offline queue
 }
+
+// ─── Push Notifications ────────────────────────────────────────────────────────
+self.addEventListener('push', event => {
+  if (!event.data) return;
+  try {
+    const data = event.data.json();
+    event.waitUntil(
+      self.registration.showNotification(data.title || 'CryptoEdge Pro', {
+        body:  data.body  || '',
+        icon:  data.icon  || '/icon-192.png',
+        badge: data.badge || '/icon-32.png',
+        data:  data.data  || {},
+        vibrate: [200, 100, 200],
+        tag: 'cryptoedge-' + (data.data?.type || 'general'),
+        renotify: true,
+      })
+    );
+  } catch(e) {}
+});
+
+self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  event.waitUntil(
+    clients.matchAll({ type:'window', includeUncontrolled:true }).then(cls => {
+      if (cls.length > 0) { cls[0].focus(); return; }
+      return clients.openWindow('/');
+    })
+  );
+});

@@ -439,6 +439,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
     if (item.dataset.panel === 'dashboard') { loadTrades(); loadFearGreed(); }
     if (item.dataset.panel === 'calculator') { calcLev(); }
     if (item.dataset.panel === 'risk') { calcRisk(); }
+    if (_panelLoadHooks[item.dataset.panel]) { _panelLoadHooks[item.dataset.panel](); }
     if (item.dataset.panel === 'gridbot') { calcGrid(); }
     if (item.dataset.panel === 'journal')     { loadTrades(); loadStats(); }
     if (item.dataset.panel === 'botcontrol')  {
@@ -2274,6 +2275,207 @@ async function resetPaperAccount() {
 }
 
 // ─── Init extras on panel switch ──────────────────────────────────────────────
+
+// ─── COPY TRADING ─────────────────────────────────────────────────────────────
+async function loadCopyLeaders() {
+  try {
+    const r = await fetch('/api/copy/leaders', { headers: auth.headers() });
+    const d = await r.json();
+    const el = document.getElementById('copy-leaders-list');
+    if (!el) return;
+    if (!d.leaders?.length) {
+      el.innerHTML = '<div style="color:var(--t3);font-size:13px;text-align:center;padding:20px">Nenhum líder disponível ainda. Seja o primeiro!</div>';
+      return;
+    }
+    el.innerHTML = d.leaders.map(l => `
+      <div style="padding:12px;border-radius:var(--r2);border:1px solid var(--border);background:var(--bg2)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <div>
+            <div style="font-weight:600;font-size:13px">${escHtml(l.display_name||l.username)}</div>
+            <div style="font-size:11px;color:var(--t3)">${escHtml(l.bio||'Sem bio')}</div>
+          </div>
+          <button onclick="followLeader('${l.username}')" style="padding:5px 12px;background:var(--green);color:#000;font-weight:700;border:none;border-radius:4px;cursor:pointer;font-size:11px">Copiar</button>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;font-size:11px;text-align:center">
+          <div style="background:var(--bg3);border-radius:4px;padding:6px">
+            <div style="font-weight:600;color:${parseFloat(l.total_pnl)>=0?'var(--green)':'var(--red)'}">${parseFloat(l.total_pnl)>=0?'+':''}$${parseFloat(l.total_pnl||0).toFixed(2)}</div>
+            <div style="color:var(--t3)">PnL</div>
+          </div>
+          <div style="background:var(--bg3);border-radius:4px;padding:6px">
+            <div style="font-weight:600">${parseFloat(l.win_rate||0).toFixed(0)}%</div>
+            <div style="color:var(--t3)">Win Rate</div>
+          </div>
+          <div style="background:var(--bg3);border-radius:4px;padding:6px">
+            <div style="font-weight:600">${l.follower_count||0}</div>
+            <div style="color:var(--t3)">Seguidores</div>
+          </div>
+        </div>
+      </div>`).join('');
+  } catch {}
+}
+
+async function followLeader(leader) {
+  const capital = prompt(`Capital para copiar @${leader} (USDT):`, '100');
+  if (!capital) return;
+  const r = await fetch('/api/copy/follow', {
+    method:'POST', headers:{...auth.headers(),'Content-Type':'application/json'},
+    body: JSON.stringify({ leader, capital:parseFloat(capital), max_risk_pct:2 })
+  });
+  const d = await r.json();
+  showToast(d.ok ? '✅ ' + d.message : '❌ ' + d.error, !d.ok);
+  if (d.ok) loadCopyMyFollows();
+}
+
+async function becomeLeader() {
+  const name = document.getElementById('cp-name')?.value;
+  const bio  = document.getElementById('cp-bio')?.value;
+  const fee  = document.getElementById('cp-fee')?.value;
+  const r = await fetch('/api/copy/become-leader', {
+    method:'POST', headers:{...auth.headers(),'Content-Type':'application/json'},
+    body: JSON.stringify({ display_name:name, bio, copy_fee_pct:parseFloat(fee||0) })
+  });
+  const d = await r.json();
+  showToast(d.ok ? '✅ Perfil de líder publicado!' : '❌ ' + d.error, !d.ok);
+  if (d.ok) loadCopyLeaders();
+}
+
+async function loadCopyMyFollows() {
+  try {
+    const r = await fetch('/api/copy/my-follows', { headers:auth.headers() });
+    const d = await r.json();
+    const el = document.getElementById('copy-my-follows');
+    if (!el) return;
+    if (!d.follows?.length) { el.innerHTML = '<div style="color:var(--t3)">Não está copiando nenhum trader ainda.</div>'; return; }
+    el.innerHTML = d.follows.map(f => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px;border-radius:6px;background:var(--bg2);margin-bottom:6px">
+        <div><div style="font-size:12px;font-weight:600">${f.display_name||f.leader}</div>
+          <div style="font-size:11px;color:var(--t3)">Capital: $${parseFloat(f.capital).toFixed(0)} · ${f.copied_trades} trades copiados</div></div>
+        <button onclick="unfollowLeader('${f.leader}')" style="padding:3px 8px;border:1px solid var(--red);color:var(--red);background:none;border-radius:4px;cursor:pointer;font-size:11px">Parar</button>
+      </div>`).join('');
+  } catch {}
+}
+
+async function unfollowLeader(leader) {
+  const r = await fetch('/api/copy/follow/'+leader, { method:'DELETE', headers:auth.headers() });
+  const d = await r.json();
+  if (d.ok) { showToast('✅ Parou de copiar '+leader); loadCopyMyFollows(); }
+}
+
+// ─── TRADINGVIEW WEBHOOKS ──────────────────────────────────────────────────────
+async function loadTVWebhooks() {
+  try {
+    const r = await fetch('/api/tv/webhooks', { headers:auth.headers() });
+    const d = await r.json();
+    const el = document.getElementById('tv-webhook-list');
+    if (!el) return;
+    if (!d.webhooks?.length) { el.innerHTML = '<div style="color:var(--t3);font-size:13px">Nenhum webhook criado ainda.</div>'; return; }
+    el.innerHTML = d.webhooks.map(w => `
+      <div style="padding:10px;border-radius:6px;border:1px solid var(--border);background:var(--bg2)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <div style="font-weight:600;font-size:13px">${escHtml(w.name)}</div>
+          <div style="display:flex;gap:6px;align-items:center">
+            <span style="font-size:11px;color:var(--t3)">${w.fires} disparos</span>
+            <button onclick="deleteTVWebhook('${w.id}')" style="padding:2px 8px;border:1px solid var(--red);color:var(--red);background:none;border-radius:4px;cursor:pointer;font-size:11px">✕</button>
+          </div>
+        </div>
+        <div style="font-size:10px;font-family:var(--mono);color:var(--t3);word-break:break-all;padding:6px;background:var(--bg3);border-radius:4px;cursor:pointer" onclick="navigator.clipboard.writeText(this.textContent).then(()=>showToast('URL copiada!'))">
+          ${location.origin}/api/tv/webhook/${w.token}
+        </div>
+      </div>`).join('');
+  } catch {}
+}
+
+async function createTVWebhook() {
+  const name    = document.getElementById('tv-name')?.value;
+  const capital = document.getElementById('tv-capital')?.value;
+  if (!name) return showToast('❌ Nome obrigatório', true);
+  const r = await fetch('/api/tv/webhooks', {
+    method:'POST', headers:{...auth.headers(),'Content-Type':'application/json'},
+    body: JSON.stringify({ name, capital:parseFloat(capital||100) })
+  });
+  const d = await r.json();
+  if (d.ok) { showToast('✅ Webhook criado! URL copiada.'); navigator.clipboard.writeText(location.origin+'/api/tv/webhook/'+d.token).catch(()=>{}); loadTVWebhooks(); }
+  else showToast('❌ '+d.error, true);
+}
+
+async function deleteTVWebhook(id) {
+  const r = await fetch('/api/tv/webhooks/'+id, { method:'DELETE', headers:auth.headers() });
+  const d = await r.json();
+  if (d.ok) { showToast('✅ Webhook removido'); loadTVWebhooks(); }
+}
+
+// ─── IR FISCAL ────────────────────────────────────────────────────────────────
+async function loadFiscal() {
+  const year = document.getElementById('fiscal-year')?.value || new Date().getFullYear();
+  try {
+    const r = await fetch(`/api/fiscal/${year}`, { headers:auth.headers() });
+    const d = await r.json();
+    const sm = document.getElementById('fiscal-summary');
+    const mo = document.getElementById('fiscal-months');
+    if (!d.ok) return;
+    const totalDue = d.months.reduce((a,m)=>a+(m.tax_due_brl||0),0);
+    if (sm) sm.innerHTML = `
+      <div style="background:var(--bg2);border-radius:6px;padding:10px;text-align:center">
+        <div style="font-size:15px;font-weight:600;color:${parseFloat(d.total_pnl)>=0?'var(--green)':'var(--red)'}">${parseFloat(d.total_pnl)>=0?'+':''}$${parseFloat(d.total_pnl).toFixed(2)}</div>
+        <div style="font-size:10px;color:var(--t3);margin-top:2px">PnL Total ${year}</div>
+      </div>
+      <div style="background:var(--bg2);border-radius:6px;padding:10px;text-align:center">
+        <div style="font-size:15px;font-weight:600">${d.months.length}</div>
+        <div style="font-size:10px;color:var(--t3);margin-top:2px">Meses com trades</div>
+      </div>
+      <div style="background:var(--bg2);border-radius:6px;padding:10px;text-align:center">
+        <div style="font-size:15px;font-weight:600;color:${totalDue>0?'var(--red)':'var(--green)'}">${totalDue>0?'R$'+totalDue.toFixed(2):'Isento'}</div>
+        <div style="font-size:10px;color:var(--t3);margin-top:2px">IR Total ${year}</div>
+      </div>`;
+    if (mo) mo.innerHTML = !d.months.length
+      ? '<div style="color:var(--t3);font-size:13px;text-align:center;padding:20px">Sem trades registrados em '+year+'</div>'
+      : d.months.map(m => `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg2);margin-bottom:6px">
+          <div>
+            <div style="font-weight:600;font-size:13px">${m.month}</div>
+            <div style="font-size:11px;color:var(--t3)">Ganhos: $${parseFloat(m.gross_gain||0).toFixed(2)} · Perdas: $${parseFloat(m.gross_loss||0).toFixed(2)}</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-weight:600;font-size:13px;color:${m.net_pnl>=0?'var(--green)':'var(--red)'}">${m.net_pnl>=0?'+':''}$${parseFloat(m.net_pnl||0).toFixed(2)}</div>
+            <div style="font-size:11px;color:${m.tax_due_brl>0?'var(--red)':'var(--green)'}">${m.tax_due_brl>0?'Pagar DARF R$'+m.tax_due_brl.toFixed(2):'Isento'}</div>
+          </div>
+        </div>`).join('');
+  } catch {}
+}
+
+function downloadFiscalReport() {
+  const year = document.getElementById('fiscal-year')?.value || new Date().getFullYear();
+  window.open(`/api/fiscal/report/${year}`, '_blank');
+}
+
+// ─── MULTI-EXCHANGE ────────────────────────────────────────────────────────────
+async function checkBalance(exchange) {
+  const el = document.getElementById('bal-' + exchange);
+  if (el) el.textContent = '⏳ Verificando...';
+  try {
+    if (exchange === 'binance') {
+      const r = await fetch('/api/binance/balance', { headers:auth.headers() });
+      const d = await r.json();
+      if (el) el.innerHTML = d.ok ? `<b style="color:var(--green)">$${parseFloat(d.totalUSDT).toFixed(2)}</b><br><span style="font-size:10px">${d.source}</span>` : `<span style="color:var(--red)">${d.error?.slice(0,40)}</span>`;
+      return;
+    }
+    const r = await fetch('/api/exchange/balance', {
+      method:'POST', headers:{...auth.headers(),'Content-Type':'application/json'},
+      body: JSON.stringify({ exchange })
+    });
+    const d = await r.json();
+    if (el) el.innerHTML = d.ok ? `<b style="color:var(--green)">$${parseFloat(d.balance||0).toFixed(2)}</b><br><span style="font-size:10px">disponível: $${parseFloat(d.available||0).toFixed(2)}</span>` : `<span style="color:var(--t3)">${d.error?.slice(0,40)||'Configure nas env vars'}</span>`;
+  } catch(e) { if(el) el.textContent = 'Erro'; }
+}
+
+// ─── Panel load hooks ──────────────────────────────────────────────────────────
+const _panelLoadHooks = {
+  copy:      () => { loadCopyLeaders(); loadCopyMyFollows(); },
+  tvwebhook: () => loadTVWebhooks(),
+  fiscal:    () => loadFiscal(),
+  exchanges: () => {},
+};
+
 async function botSaveAndApply() {
   const btn = document.querySelector('[onclick="botSaveAndApply()"]');
   if (btn) { btn.textContent = '⏳ Salvando...'; btn.disabled = true; }

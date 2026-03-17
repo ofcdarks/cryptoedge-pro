@@ -1763,6 +1763,296 @@ app.post('/api/push/subscribe', requireAuth, (req, res) => {
 });
 app.get('/api/push/vapid-public', (req, res) => res.json({ ok:true, key:VAPID_PUBLIC, enabled:!!webpush }));
 
+// ─── COPY TRADING ─────────────────────────────────────────────────────────────
+app.get('/api/copy/leaders', requireAuth, (req, res) => {
+  try {
+    const leaders = db.all(`
+      SELECT cl.*, u.username,
+        (SELECT COUNT(*) FROM copy_followers cf WHERE cf.leader=cl.username AND cf.active=1) as follower_count
+      FROM copy_leaders cl JOIN users u ON u.username=cl.username
+      WHERE cl.public=1 ORDER BY cl.total_pnl DESC LIMIT 20`);
+    res.json({ ok:true, leaders });
+  } catch(e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+app.post('/api/copy/become-leader', requireAuth, (req, res) => {
+  try {
+    const { display_name, bio, copy_fee_pct } = req.body;
+    const exists = db.get('SELECT id FROM copy_leaders WHERE username=?', [req.user]);
+    if (exists) {
+      db.run('UPDATE copy_leaders SET display_name=?,bio=?,copy_fee_pct=? WHERE username=?',
+        [display_name||req.user, bio||'', parseFloat(copy_fee_pct||0), req.user], true);
+    } else {
+      db.insert('copy_leaders', { username:req.user, display_name:display_name||req.user, bio:bio||'', copy_fee_pct:parseFloat(copy_fee_pct||0) });
+    }
+    res.json({ ok:true, message:'Perfil de líder criado/atualizado' });
+  } catch(e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+app.post('/api/copy/follow', requireAuth, async (req, res) => {
+  try {
+    const { leader, capital, max_risk_pct } = req.body;
+    if (!leader || !capital) return res.status(400).json({ ok:false, error:'leader e capital obrigatórios' });
+    const leaderExists = db.get('SELECT id FROM copy_leaders WHERE username=?', [leader]);
+    if (!leaderExists) return res.status(404).json({ ok:false, error:'Líder não encontrado' });
+    if (leader === req.user) return res.status(400).json({ ok:false, error:'Você não pode seguir a si mesmo' });
+    db.run('INSERT OR REPLACE INTO copy_followers(follower,leader,capital,max_risk_pct,active) VALUES(?,?,?,?,1)',
+      [req.user, leader, parseFloat(capital), parseFloat(max_risk_pct||2)], true);
+    db.run('UPDATE copy_leaders SET followers=followers+1 WHERE username=?', [leader], true);
+    res.json({ ok:true, message:`Seguindo ${leader} com $${capital}` });
+  } catch(e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+app.delete('/api/copy/follow/:leader', requireAuth, (req, res) => {
+  try {
+    db.run('UPDATE copy_followers SET active=0 WHERE follower=? AND leader=?', [req.user, req.params.leader], true);
+    db.run('UPDATE copy_leaders SET followers=MAX(0,followers-1) WHERE username=?', [req.params.leader], true);
+    res.json({ ok:true });
+  } catch(e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+app.get('/api/copy/my-follows', requireAuth, (req, res) => {
+  try {
+    const follows = db.all(`SELECT cf.*, cl.display_name, cl.total_pnl as leader_pnl, cl.win_rate as leader_wr
+      FROM copy_followers cf LEFT JOIN copy_leaders cl ON cl.username=cf.leader
+      WHERE cf.follower=? AND cf.active=1`, [req.user]);
+    res.json({ ok:true, follows });
+  } catch(e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+// Quando líder abre trade, copia para seguidores
+async function _broadcastCopyTrade(leaderUser, tradeData) {
+  try {
+    const followers = db.all('SELECT * FROM copy_followers WHERE leader=? AND active=1', [leaderUser]);
+    if (!followers.length) return;
+    const leaderCapital = parseFloat(tradeData.size || tradeData.qty || 1);
+    for (const f of followers) {
+      try {
+        const ratio    = f.capital / (leaderCapital * parseFloat(tradeData.entry||1));
+        const copySize = Math.min(f.capital * f.max_risk_pct/100, f.capital * ratio);
+        const copyTrade = { ...tradeData, size: copySize, username: f.follower,
+          reason: `Copy de @${leaderUser} · ${tradeData.reason||''}` };
+        db.insert('trades', { username:f.follower, pair:tradeData.pair||tradeData.symbol,
+          direction:tradeData.side||tradeData.direction, entry:parseFloat(tradeData.entry||0),
+          size:copySize, reason:copyTrade.reason, result:'pending',
+          pnl:0, leverage:'1x', created_at: new Date().toLocaleString('pt-BR') });
+        db.run('UPDATE copy_followers SET copied_trades=copied_trades+1 WHERE follower=? AND leader=?',
+          [f.follower, leaderUser], true);
+      } catch {}
+    }
+  } catch {}
+}
+
+// ─── TRADINGVIEW WEBHOOKS (Enhanced) ──────────────────────────────────────────
+app.post('/api/tv/webhook/:token', async (req, res) => {
+  try {
+    const wh = db.get('SELECT * FROM tv_webhooks WHERE token=? AND active=1', [req.params.token]);
+    if (!wh) return res.status(401).json({ error:'Invalid webhook token' });
+    const { ticker, action, close, contracts, comment, strategy } = req.body;
+    db.run('UPDATE tv_webhooks SET fires=fires+1 WHERE id=?', [wh.id], true);
+    const symbol   = (ticker||'BTCUSDT').replace('USDT.P','USDT').replace('.','');
+    const side     = (action||'').toLowerCase().includes('buy') ? 'BUY' : 'SELL';
+    const price    = parseFloat(close||0);
+    const qty      = parseFloat(contracts||0);
+    // Registrar no diário de trades
+    db.insert('trades', { username:wh.username, pair:symbol.replace('USDT','/USDT'),
+      direction: side==='BUY'?'Long':'Short', entry:price, size:wh.capital,
+      reason:`TradingView: ${comment||strategy||action||'signal'}`, result:'pending',
+      pnl:0, leverage:'1x', created_at:new Date().toLocaleString('pt-BR') });
+    // Notificar via live feed
+    _pushLiveFeed({ type:'signal', label:`📺 TradingView: ${side} ${symbol}`,
+      detail:`$${price.toLocaleString()} · ${comment||'Pine Script alert'}`, color: side==='BUY'?'green':'red' });
+    // Notificar Telegram
+    const user = db.get('SELECT telegram_token,telegram_chatid FROM users WHERE username=?',[wh.username]);
+    const tgToken = user?.telegram_token || process.env.TELEGRAM_TOKEN || '';
+    const chatId  = user?.telegram_chatid || process.env.TELEGRAM_CHAT_ID || '';
+    if (tgToken && chatId) {
+      const icon = side==='BUY'?'🟢':'🔴';
+      await axios.post(`https://api.telegram.org/bot${tgToken}/sendMessage`, {
+        chat_id:chatId, parse_mode:'HTML',
+        text:`${icon} <b>TradingView Alert — ${symbol}</b>\n<b>${side}</b> @ <code>$${price.toLocaleString()}</code>\n<i>${comment||action||'Pine Script signal'}</i>`
+      }, {timeout:5000}).catch(()=>{});
+    }
+    res.json({ ok:true, symbol, side, price });
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+app.get('/api/tv/webhooks', requireAuth, (req, res) => {
+  try { res.json({ ok:true, webhooks: db.all('SELECT * FROM tv_webhooks WHERE username=?',[req.user]) }); }
+  catch(e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+app.post('/api/tv/webhooks', requireAuth, (req, res) => {
+  try {
+    const { name, capital, auto_execute } = req.body;
+    const token = genToken();
+    const id = db.insert('tv_webhooks', { username:req.user, name:name||'TradingView', token, capital:parseFloat(capital||100), auto_execute:auto_execute?1:0 });
+    const url = (process.env.APP_URL||'http://localhost:3000') + '/api/tv/webhook/' + token;
+    res.json({ ok:true, id, token, url, message:`Webhook criado! URL: ${url}` });
+  } catch(e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+app.delete('/api/tv/webhooks/:id', requireAuth, (req, res) => {
+  try { db.run('DELETE FROM tv_webhooks WHERE id=? AND username=?',[req.params.id,req.user],true); res.json({ok:true}); }
+  catch(e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+// ─── MULTI-EXCHANGE (Bybit + OKX) ─────────────────────────────────────────────
+app.post('/api/exchange/balance', requireAuth, async (req, res) => {
+  const { exchange } = req.body;
+  const user = db.get('SELECT * FROM users WHERE username=?',[req.user]);
+  try {
+    if (exchange === 'bybit') {
+      const key    = user?.bybit_key || process.env.BYBIT_API_KEY || '';
+      const secret = user?.bybit_secret || process.env.BYBIT_API_SECRET || '';
+      if (!key || !secret) return res.json({ ok:false, error:'Configure BYBIT_API_KEY no .env', simulated:true });
+      const ts = Date.now().toString();
+      const recv = '5000';
+      const queryStr = `api_key=${key}&coin=USDT&recvWindow=${recv}&timestamp=${ts}`;
+      const sig = require('crypto').createHmac('sha256', secret).update(queryStr).digest('hex');
+      const r = await axios.get(`https://api.bybit.com/v2/private/wallet/balance?${queryStr}&sign=${sig}`,
+        { timeout:8000 });
+      const bal = r.data?.result?.USDT;
+      return res.json({ ok:true, exchange:'bybit', balance: bal?.equity||0, available: bal?.available_balance||0 });
+    }
+    if (exchange === 'okx') {
+      const key    = user?.okx_key    || process.env.OKX_API_KEY    || '';
+      const secret = user?.okx_secret || process.env.OKX_API_SECRET || '';
+      const pass   = user?.okx_pass   || process.env.OKX_PASSPHRASE || '';
+      if (!key || !secret) return res.json({ ok:false, error:'Configure OKX_API_KEY no .env', simulated:true });
+      const ts = new Date().toISOString();
+      const sig = require('crypto').createHmac('sha256',secret).update(ts+'GET'+'/api/v5/account/balance').digest('base64');
+      const r = await axios.get('https://www.okx.com/api/v5/account/balance',
+        { headers:{'OK-ACCESS-KEY':key,'OK-ACCESS-SIGN':sig,'OK-ACCESS-TIMESTAMP':ts,'OK-ACCESS-PASSPHRASE':pass}, timeout:8000 });
+      const usdt = r.data?.data?.[0]?.details?.find(d=>d.ccy==='USDT');
+      return res.json({ ok:true, exchange:'okx', balance: usdt?.eq||0, available: usdt?.availEq||0 });
+    }
+    res.json({ ok:false, error:'Exchange não suportada. Use: binance, bybit, okx' });
+  } catch(e) { res.status(500).json({ ok:false, error:e.response?.data?.retMsg||e.message }); }
+});
+
+// ─── IR FISCAL TRACKER ────────────────────────────────────────────────────────
+app.get('/api/fiscal/:year', requireAuth, (req, res) => {
+  try {
+    const year = req.params.year || new Date().getFullYear().toString();
+    const records = db.all('SELECT * FROM fiscal_records WHERE username=? AND month LIKE ? ORDER BY month',
+      [req.user, year+'-%']);
+    // Calcular meses faltantes a partir dos bot_trades
+    const trades = db.all(
+      "SELECT strftime('%Y-%m', closed_at) as month, SUM(CASE WHEN pnl>0 THEN pnl ELSE 0 END) as gains, SUM(CASE WHEN pnl<0 THEN ABS(pnl) ELSE 0 END) as losses FROM bot_trades WHERE username=? AND status='closed' AND closed_at LIKE ? GROUP BY month",
+      [req.user, year+'%']);
+    const result = trades.map(t => {
+      const net  = t.gains - t.losses;
+      const taxBRL = net * 5.7; // aproximado USD→BRL×5.7
+      const due  = taxBRL > 35000 ? (net * 5.7 - 35000) * 0.15 : 0;
+      const saved = records.find(r => r.month === t.month);
+      return { month:t.month, gross_gain:t.gains, gross_loss:t.losses, net_pnl:net,
+        tax_due_brl: parseFloat(due.toFixed(2)), paid: saved?.paid||0, darf_code:'6015',
+        must_declare: taxBRL > 35000 };
+    });
+    res.json({ ok:true, year, months:result, total_pnl: result.reduce((a,r)=>a+r.net_pnl,0).toFixed(2) });
+  } catch(e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+app.get('/api/fiscal/report/:year', requireAuth, (req, res) => {
+  try {
+    const year = req.params.year || new Date().getFullYear().toString();
+    const trades = db.all(
+      "SELECT *, strftime('%Y-%m', closed_at) as month FROM bot_trades WHERE username=? AND status='closed' AND closed_at LIKE ? ORDER BY closed_at",
+      [req.user, year+'%']);
+    const byMonth = {};
+    trades.forEach(t => {
+      if (!byMonth[t.month]) byMonth[t.month] = { gains:0, losses:0, trades:[] };
+      if ((t.pnl||0) >= 0) byMonth[t.month].gains += t.pnl;
+      else byMonth[t.month].losses += Math.abs(t.pnl);
+      byMonth[t.month].trades.push(t);
+    });
+    const months = Object.entries(byMonth).sort();
+    const rows = months.map(([m, d]) => {
+      const net = d.gains - d.losses;
+      const netBRL = net * 5.7;
+      const due = netBRL > 35000 ? (netBRL - 35000) * 0.15 : 0;
+      return `<tr style="background:${net<0?'#fff8f8':'#f8fff8'}">
+        <td><b>${m}</b></td><td>$${d.gains.toFixed(2)}</td><td>$${d.losses.toFixed(2)}</td>
+        <td style="font-weight:700;color:${net>=0?'#1d9e75':'#e24b4a'}">${net>=0?'+':''}$${net.toFixed(2)}</td>
+        <td>R$${(net*5.7).toFixed(2)}</td>
+        <td style="color:${due>0?'#e24b4a':'#1d9e75'}">${due>0?'R$'+due.toFixed(2)+' (DARF 6015)':'Isento'}</td>
+        <td>${d.trades.length}</td>
+      </tr>`;
+    }).join('');
+    const totalPnl = months.reduce((a,[,d])=>a+(d.gains-d.losses),0);
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<style>body{font-family:Arial,sans-serif;color:#222;padding:40px;max-width:960px;margin:0 auto}
+h1{font-size:20px}h2{font-size:15px;margin:20px 0 8px}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{background:#f0f0f0;padding:8px;text-align:left;font-size:11px;text-transform:uppercase}
+td{padding:7px 8px;border-bottom:1px solid #eee}
+.warn{background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:12px;font-size:12px;margin:16px 0}
+.info{background:#d1ecf1;border:1px solid #bee5eb;border-radius:6px;padding:12px;font-size:12px;margin:16px 0}
+.footer{margin-top:40px;font-size:11px;color:#999;border-top:1px solid #eee;padding-top:16px}</style></head>
+<body>
+<h1>CryptoEdge Pro — Relatório Fiscal ${year}</h1>
+<p style="color:#666;font-size:13px">Gerado em ${new Date().toLocaleDateString('pt-BR')} · Usuário: ${req.user}</p>
+<div class="warn">⚠️ <b>Obrigação fiscal:</b> Ganhos com criptomoedas acima de R$35.000/mês estão sujeitos ao IR (alíquota 15-22,5%). Use o código DARF 6015. <b>Prazo: último dia útil do mês seguinte ao ganho.</b> Consulte um contador para validar estes valores.</div>
+<div class="info">ℹ️ Cotação USD/BRL usada: R$5.70 (estimativa). Use a cotação oficial do Banco Central do Brasil (ptax) na data de cada operação para cálculo preciso.</div>
+<h2>Resumo Mensal ${year}</h2>
+<table><thead><tr><th>Mês</th><th>Ganhos (USD)</th><th>Perdas (USD)</th><th>PnL (USD)</th><th>PnL (BRL est.)</th><th>IR Devido</th><th>Trades</th></tr></thead>
+<tbody>${rows}</tbody></table>
+<div style="margin-top:16px;padding:12px;background:#f5f5f5;border-radius:8px;font-size:13px">
+  <b>Total ${year}:</b> PnL = ${totalPnl>=0?'+':''}$${totalPnl.toFixed(2)} USD ≈ R$${(totalPnl*5.7).toFixed(2)}
+</div>
+<div class="footer">CryptoEdge Pro · Dados para fins informativos. Não substitui consultoria tributária.</div>
+</body></html>`;
+    res.setHeader('Content-Type','text/html; charset=utf-8');
+    res.setHeader('Content-Disposition',`attachment; filename="fiscal-${year}-${req.user}.html"`);
+    res.send(html);
+  } catch(e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+// ─── PIX / STRIPE BILLING (base) ─────────────────────────────────────────────
+app.post('/api/billing/pix/create', requireAuth, async (req, res) => {
+  // Integração real: usar Mercado Pago ou EfiPay
+  // Por ora gera QR code estático com instruções
+  const { plan } = req.body;
+  const PLANS = { free:{price:0}, pro:{price:97,name:'Pro'}, expert:{price:197,name:'Expert'} };
+  const p = PLANS[plan];
+  if (!p || p.price === 0) return res.status(400).json({ ok:false, error:'Plano inválido para pagamento' });
+  const pixKey    = process.env.PIX_KEY    || '';
+  const pixName   = process.env.PIX_NAME   || 'CryptoEdge Pro';
+  const stripeKey = process.env.STRIPE_SECRET_KEY || '';
+  if (!pixKey && !stripeKey) {
+    return res.json({ ok:true, method:'manual', plan, price:p.price,
+      instructions:`Pagamento manual: entre em contato com o suporte para receber o código de ativação após o pagamento de R$${p.price}.`,
+      contact: process.env.SUPPORT_EMAIL || process.env.SMTP_FROM || '' });
+  }
+  if (pixKey) {
+    return res.json({ ok:true, method:'pix', plan, price:p.price, pix_key:pixKey, pix_name:pixName,
+      description:`Plano ${p.name} - CryptoEdge Pro - 1 mês`,
+      instructions:`Pague R$${p.price} via PIX para a chave acima e envie o comprovante para ${process.env.SUPPORT_EMAIL||'suporte@cryptoedge.pro'}` });
+  }
+  res.json({ ok:false, error:'Configure PIX_KEY ou STRIPE_SECRET_KEY no .env' });
+});
+
+app.post('/api/billing/stripe/checkout', requireAuth, async (req, res) => {
+  const stripeKey = process.env.STRIPE_SECRET_KEY || '';
+  if (!stripeKey) return res.json({ ok:false, error:'STRIPE_SECRET_KEY não configurado no .env' });
+  const { plan } = req.body;
+  const PRICES = { pro: process.env.STRIPE_PRICE_PRO||'', expert: process.env.STRIPE_PRICE_EXPERT||'' };
+  if (!PRICES[plan]) return res.status(400).json({ ok:false, error:'Configure STRIPE_PRICE_PRO e STRIPE_PRICE_EXPERT no .env' });
+  try {
+    const stripe = require('stripe')(stripeKey);
+    const session = await stripe.checkout.sessions.create({
+      mode:'subscription', payment_method_types:['card'],
+      line_items:[{price:PRICES[plan], quantity:1}],
+      success_url:`${process.env.APP_URL||'http://localhost:3000'}/profile?upgraded=1`,
+      cancel_url: `${process.env.APP_URL||'http://localhost:3000'}/profile?cancelled=1`,
+      metadata:{ username:req.user, plan }
+    });
+    res.json({ ok:true, url:session.url });
+  } catch(e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+
 // ─── Health ────────────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => res.json({
   status:'ok', model: process.env.AI_MODEL||'qwen3-30b-a3b', env: process.env.NODE_ENV||'development',
