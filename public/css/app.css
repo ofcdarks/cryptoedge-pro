@@ -73,14 +73,12 @@ body{height:100%;overflow:hidden;font-family:var(--sans);background:var(--bg0);c
 .panel{display:none}
 .panel.active{
   display:block;
-  flex:1;
+  flex:1 1 0;
   min-height:0;
   overflow-y:auto;
   overflow-x:hidden;
   padding:0.875rem;
-  height:100%;
   box-sizing:border-box;
-  scroll-behavior:auto;
 }
 /* Ensure panels start at top and don't inherit scroll from other panels */
 /* scroll is per-panel now */
@@ -425,22 +423,8 @@ td.green{color:var(--green)}td.red{color:var(--red)}td.gold{color:var(--gold)}td
 .admin-mode .admin-only { display: flex !important; }
 #topbar-admin-btn:hover { background: rgba(240,185,11,0.3) !important; transform: scale(1.05); }
 
-/* All panels: prevent black space / scroll residue */
-.panel.active { min-height: auto; }
 
-/* Full-height panels that need special treatment */
-#panel-live.active,
-#panel-ai.active {
-  /* These panels manage their own height internally */
-  overflow: visible;
-}
 
-/* Live panel: prevent header bar from pushing content */
-#panel-live { padding: 0; }
-
-/* Fix admin panel black space */
-#panel-admin { padding-top: 0; }
-#panel-admin > div:first-child { margin-top: 0; }
 
 /* Fix admin panel layout - prevent empty grid from causing space */
 #adm-stats:empty { display: none; }
@@ -458,78 +442,71 @@ td.green{color:var(--green)}td.red{color:var(--red)}td.gold{color:var(--gold)}td
 
 /* Journal enhanced */
 #jrn-panel-history .table-wrap { overflow-x: auto; }
-#journal-list .trade-item { border-radius: var(--r); margin-bottom:6px; padding:10px 12px; background:var(--bg2); border:1px solid var(--border); transition:border-color 0.15s; }
-#journal-list .trade-item:hover { border-color: var(--border2); }
-#j-screenshot-area { transition: border-color 0.2s, background 0.2s; }
-#j-screenshot-area:hover { border-color: var(--gold); background: rgba(240,185,11,0.04); }
 
-/* Risk Manager */
-#rm-r-size, #rm-r-margin, #rm-r-qty { color: var(--t1); font-weight: 600; }
-#rm-r-tp1, #rm-r-tp2 { color: var(--green); }
 
-/* Backtest equity canvas */
-#bt-equity-canvas { display: block; border-radius: 6px; background: var(--bg2); }
+/* ── Panel special cases ────────────────────────────────────────────── */
 
-/* Special full-height panels — no padding, manage own layout */
-#panel-ai.active,
-#panel-live.active,
+/* Replay: flex column, fills height, no own scroll (inner card scrolls) */
+#panel-replay { display: none; }
 #panel-replay.active {
-  padding: 0;
-  overflow: hidden;
   display: flex !important;
   flex-direction: column;
+  padding: 0;
+  overflow: hidden;
 }
-#panel-replay.active {
-  /* replay already has its own CSS above */
+#panel-replay > .card {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.rp-chart-wrap {
+  flex: 1 1 0;
+  min-height: 0;
+  position: relative;
+  background: var(--bg2);
+  border-radius: 8px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+}
+#rp-canvas {
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  display: block;
 }
 
-/* Analysis AI panel */
+/* Live Trading: flex column, fills height */
+#panel-live { display: none; }
+#panel-live.active {
+  display: flex !important;
+  flex-direction: column;
+  padding: 0.875rem;
+  overflow: hidden;
+}
+
+/* Analysis AI: flex column chat interface */
+#panel-ai { display: none; }
 #panel-ai.active {
   display: flex !important;
   flex-direction: column;
-  padding: 0;
   overflow: hidden;
 }
 #panel-ai .chat-wrap {
-  flex: 1;
+  flex: 1 1 0;
   min-height: 0;
-  height: auto !important;
 }
 
-/* Bot control logs area */
+/* Bot logs: contained height */
 #bc-logs {
   height: 220px !important;
-  max-height: 220px !important;
   min-height: 120px !important;
+  max-height: 220px !important;
   flex: none !important;
 }
 
-/* Dashboard grid - 2 columns */  
-#panel-dashboard.active {
-  overflow-y: auto;
-}
-
-/* Gridbot panel */
-#panel-gridbot.active {
-  overflow-y: auto;
-}
-
-/* Risk panel */
-#panel-risk.active {
-  overflow-y: auto;
-}
-
-/* Bot control panel */
-#panel-botcontrol.active {
-  overflow-y: auto;
-}
-
-/* Analysis AI panel */
-#panel-analysisai.active {
-  overflow-y: auto;
-}
-
-/* Profile panel */
-#panel-profile.active {
-  overflow-y: auto;
-}
+/* Admin panel fix */
+#panel-admin { padding-top: 0; }
+#panel-admin > div:first-child { margin-top: 0; }

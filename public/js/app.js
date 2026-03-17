@@ -431,9 +431,12 @@ document.querySelectorAll('.nav-item').forEach(item => {
     const panel = el('panel-' + item.dataset.panel);
     if (panel) {
       panel.classList.add('active');
-      // Special panels need flex (CSS already handles via .active class)
-      if (item.dataset.panel === 'replay' || item.dataset.panel === 'live' || item.dataset.panel === 'ai') {
+      // Flex panels: CSS .panel.active handles display, but JS must override block→flex
+      const flexPanels = ['replay', 'live', 'ai'];
+      if (flexPanels.includes(item.dataset.panel)) {
         panel.style.display = 'flex';
+      } else {
+        panel.style.display = '';  // Reset any previous inline override
       }
     }
     // CRITICAL: always scroll back to top when switching panels

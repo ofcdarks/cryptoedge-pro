@@ -95,42 +95,6 @@
       }
     };
   </script>
-  <style>
-    /* Replay panel — fullscreen flex layout */
-    #panel-replay { display: none; flex-direction: column; gap: 0; }
-    #panel-replay.active {
-      display: flex !important;
-      height: calc(100vh - var(--top) - 2.5rem);
-      flex-direction: column;
-    }
-    #panel-replay > .card {
-      flex: 1 1 0;
-      min-height: 0;
-      overflow: hidden;
-      display: flex !important;
-      flex-direction: column;
-    }
-    /* Chart wrapper inside replay card */
-    #panel-replay .rp-chart-wrap {
-      flex: 1 1 0;
-      min-height: 0;
-      position: relative;
-      background: var(--bg2);
-      border-radius: 8px;
-      padding: 8px;
-      margin-bottom: 8px;
-      display: flex;
-      flex-direction: column;
-    }
-    #rp-canvas {
-      display: block;
-      width: 100% !important;
-      flex: 1 1 0;
-      min-height: 0;
-    }
-    /* Replay controls — never grow, stay at bottom */
-    .rp-controls { flex-shrink: 0; }
-  </style>
 </head>
 <body>
 <!-- ── Cookie Consent Banner ── -->
@@ -1410,7 +1374,7 @@
 
       <!-- ──────────── AI EXPERT ──────────── -->
       <div id="panel-ai" class="panel">
-        <div class="card chat-wrap" style="padding:0;height:100%">
+        <div class="card chat-wrap" style="padding:0;flex:1;min-height:0;">
           <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px">
             <div style="width:32px;height:32px;background:var(--gold);border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:#000;flex-shrink:0">IA</div>
             <div>
@@ -2543,7 +2507,7 @@
 
       <!-- ──────────── REPLAY HISTÓRICO ──────────── -->
       <div id="panel-replay" class="panel">
-        <div class="card" style="display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden;padding-bottom:6px">
+        <div class="card" style="padding-bottom:6px">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px;flex-shrink:0">
             <div class="card-title">⏪ Replay Histórico — Tick a Tick</div>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
