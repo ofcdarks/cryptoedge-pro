@@ -71,6 +71,8 @@ body{height:100%;overflow:hidden;font-family:var(--sans);background:var(--bg0);c
 .topbar{height:var(--top);background:var(--bg1);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 1.25rem;gap:1rem;flex-shrink:0}
 .content{flex:1;overflow-y:auto;overflow-x:hidden;padding:1.25rem;min-height:0}
 .panel{display:none}.panel.active{display:block}
+/* Ensure panels start at top and don't inherit scroll from other panels */
+.content{scroll-behavior:auto}
 
 /* ── Sidebar ─────────────────────────────────────────────────────────── */
 .logo{padding:0 1rem;height:var(--top);display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border)}
@@ -411,6 +413,9 @@ td.green{color:var(--green)}td.red{color:var(--red)}td.gold{color:var(--gold)}td
 .admin-mode #topbar-admin-btn { display: flex !important; }
 .admin-mode .admin-only { display: flex !important; }
 #topbar-admin-btn:hover { background: rgba(240,185,11,0.3) !important; transform: scale(1.05); }
+
+/* All panels: prevent black space / scroll residue */
+.panel.active { min-height: auto; }
 
 /* Fix admin panel black space */
 #panel-admin { padding-top: 0; }

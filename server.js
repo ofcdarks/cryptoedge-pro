@@ -12,6 +12,15 @@ const helmet       = require('helmet');
 const nodemailer   = require('nodemailer');
 const { execSync, execFile, spawn } = require('child_process');
 
+// ─── Stripe safe loader (must be before routes) ─────────────────────────────
+let _stripeLib = null;
+let _stripeAvailable = false;
+try { _stripeLib = require('stripe'); _stripeAvailable = true; } catch { _stripeAvailable = false; }
+function getStripe(key) {
+  if (!_stripeAvailable) throw new Error('Módulo stripe não instalado. Faça redeploy no EasyPanel.');
+  return _stripeLib(key);
+}
+
 const app = express();
 const db  = require('./db');
 const emailTpls = require('./templates/email');
@@ -2159,19 +2168,6 @@ app.post('/api/billing/stripe/portal', requireAuth, async (req, res) => {
     res.json({ ok:true, url:portal.url });
   } catch(e) { res.status(500).json({ ok:false, error:e.message }); }
 });
-
-// ─── Stripe safe loader ──────────────────────────────────────────────────────
-let _stripeLib = null;
-let _stripeAvailable = false;
-try {
-  _stripeLib = require('stripe');
-  _stripeAvailable = true;
-} catch { _stripeAvailable = false; }
-
-function getStripe(key) {
-  if (!_stripeAvailable) throw new Error('Módulo stripe não instalado. Faça redeploy ou execute: npm install stripe');
-  return _stripeLib(key);
-}
 
 // ─── Replay histórico tick-a-tick ─────────────────────────────────────────────
 app.get('/api/replay/klines', requireAuth, async (req, res) => {

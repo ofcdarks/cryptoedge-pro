@@ -434,6 +434,9 @@ document.querySelectorAll('.nav-item').forEach(item => {
       // Replay needs flex to fill viewport
       if (item.dataset.panel === 'replay') panel.style.display = 'flex';
     }
+    // CRITICAL: always scroll back to top when switching panels
+    const contentEl = document.querySelector('.content');
+    if (contentEl) contentEl.scrollTop = 0;
     // Para polling do bot ao sair do painel
     if (item.dataset.panel !== 'botcontrol' && _botAutoRefresh) {
       clearInterval(_botAutoRefresh); _botAutoRefresh = null;
