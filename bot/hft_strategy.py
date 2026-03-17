@@ -125,6 +125,12 @@ HFT_CONFIRM_MAX_DRIFT = float(os.environ.get('HFT_CONFIRM_MAX_DRIFT', '0.25'))  
 # Quando ativado, o capital base sobe a cada dia com o lucro do dia anterior
 # → cada trade usa um budget maior conforme o capital cresce
 HFT_COMPOUND      = os.environ.get('HFT_COMPOUND', 'true').lower() == 'true'
+
+# ── Visibilidade / Heartbeat ──────────────────────────────────────────────────
+# Intervalo do heartbeat em segundos (0 = desativado)
+HFT_HEARTBEAT_SEC  = int(os.environ.get('HFT_HEARTBEAT_SEC',  '300'))   # 5 min
+# Notificar via Telegram quando sinal pendente for gerado
+HFT_NOTIFY_SIGNAL  = os.environ.get('HFT_NOTIFY_SIGNAL', 'true').lower() == 'true'
 HFT_CAPITAL_FILE  = os.environ.get('HFT_CAPITAL_FILE', '/data/hft_capital.json')
 
 STRATEGY_NAMES = [
@@ -1227,6 +1233,12 @@ class HFTEngine:
                 f'conf={sig.get("confidence",0):.0%} | {sig["reason"]} '
                 f'[{sig.get("regime","?")}] → aguarda confirmação'
             )
+            # Telegram: avisa usuário que sinal foi encontrado
+            self.send_signal_alert(
+                pair, sig['side'], sig['score'], sig.get('count', 0),
+                sig['reason'], sig.get('regime', '?'), sig.get('rsi', 50),
+                sig.get('confidence', 0.5), sig.get('price', close)
+            )
         else:
             n = self._candle_count.get(pair, 0)
             if n > 0 and n % 20 == 0:
@@ -1261,6 +1273,74 @@ class HFTEngine:
             'daily_breakevens': getattr(self, 'daily_breakevens', 0),
             'pnl_summary':     self.get_pnl_summary(),
         }
+
+    def send_heartbeat(self):
+        """Heartbeat: prova que o bot está vivo e escaneando."""
+        total = self.daily_wins + self.daily_losses + getattr(self, 'daily_breakevens', 0)
+        pnl   = self.daily_pnl
+        icon  = '🟢' if pnl > 0 else ('⚪' if abs(pnl) < 0.0001 else '🔴')
+        open_pos = len(self.positions)
+        pending_count = len(self._pending)
+
+        # Coleta regime e RSI dos pares ativos
+        pair_lines = []
+        for pair in list(HFT_PAIRS)[:6]:
+            if len(self.closes.get(pair, [])) < 30:
+                pair_lines.append(f'  {pair.replace("USDT",""):6} aguardando dados...')
+                continue
+            regime  = self._detect_regime(pair)
+            rsi_v   = self._rsi(self.closes[pair]) if len(self.closes[pair]) >= 9 else 50
+            regime_icons = {'trending_up': '↗', 'trending_down': '↘', 'ranging': '↔', 'choppy': '〰'}
+            r_icon  = regime_icons.get(regime, '?')
+            pending = ' 📡' if pair in self._pending else ''
+            pos_str = ' 📌' if any(p['pair']==pair for p in self.positions.values()) else ''
+            pair_lines.append(f'  {pair.replace("USDT",""):6} RSI:{rsi_v:.0f} {r_icon} {regime}{pending}{pos_str}')
+
+        status_str = ''
+        if open_pos > 0:
+            pos_info = []
+            for pos in self.positions.values():
+                cur = list(self.closes.get(pos['pair'], [pos['entry']]))[-1]
+                pnl_pos = (cur - pos['entry']) * pos['qty'] if pos['side'] == 'BUY' else (pos['entry'] - cur) * pos['qty']
+                age_min = int((time.time() - pos['opened_at']) / 60)
+                pos_info.append(f'  📌 {pos["side"]} {pos["pair"].replace("USDT","")} @ ${pos["entry"]:.4f} | PnL: {"+$" if pnl_pos>=0 else "-$"}{abs(pnl_pos):.4f} ({age_min}min)')
+            status_str = '\n<b>Posições abertas:</b>\n' + '\n'.join(pos_info) + '\n'
+
+        pending_str = f'\n⏳ {pending_count} sinal(is) aguardando confirmação' if pending_count > 0 else ''
+        budget = self.capital * HFT_RISK_PCT / 100
+
+        self.notify(
+            f'💓 <b>HFT Heartbeat — Bot ativo</b>\n'
+            f'─────────────────────────\n'
+            f'⚡ Monitorando <b>{len(HFT_PAIRS)}</b> pares em {HFT_TIMEFRAME}\n'
+            f'💰 Capital: <code>${self.capital:.2f}</code> | Budget/trade: <code>${budget:.2f}</code>\n'
+            f'{icon} Hoje: <code>{"+$" if pnl>=0 else "-$"}{abs(pnl):.4f}</code> | {total}T WR:{(self.daily_wins/max(self.daily_wins+self.daily_losses,1)*100):.0f}%\n'
+            f'─────────────────────────\n'
+            f'<b>Status dos pares:</b>\n' + '\n'.join(pair_lines) +
+            f'\n{status_str}{pending_str}\n'
+            f'🕐 <i>{datetime.datetime.now().strftime("%d/%m %H:%M")}</i>'
+        )
+
+    def send_signal_alert(self, pair, side, score, count, reason, regime, rsi, confidence, price):
+        """Notifica quando sinal pendente é gerado — aguarda confirmação."""
+        if not HFT_NOTIFY_SIGNAL: return
+        dir_icon = '🔼' if side == 'BUY' else '🔽'
+        side_text = 'COMPRA' if side == 'BUY' else 'VENDA'
+        regime_icons = {'trending_up': '↗ Alta', 'trending_down': '↘ Baixa', 'ranging': '↔ Lateral', 'choppy': '〰 Chopy'}
+        reg_txt = regime_icons.get(regime, regime)
+        bar = lambda pct, n=8: '█' * min(n, round(pct/100*n)) + '░' * max(0, n - min(n, round(pct/100*n)))
+        self.notify(
+            f'{dir_icon} <b>Sinal detectado — {side_text} {pair.replace("USDT","")}</b>\n'
+            f'─────────────────────────\n'
+            f'💲 Preço: <code>${price:,.4f}</code>\n'
+            f'📡 Confiança: {bar(confidence*100)} {confidence*100:.0f}%\n'
+            f'📊 RSI: <code>{rsi:.0f}</code> | Regime: {reg_txt}\n'
+            f'🔢 {count} estratégias | Score: <code>{score:.1f}</code>\n'
+            f'📝 Motivo: <i>{reason}</i>\n'
+            f'─────────────────────────\n'
+            f'⏳ <i>Aguardando confirmação na próxima vela...</i>\n'
+            f'🕐 <i>{datetime.datetime.now().strftime("%H:%M:%S")}</i>'
+        )
 
     def send_periodic_update(self, period_label='30min'):
         total = self.daily_wins + self.daily_losses + getattr(self, 'daily_breakevens', 0)

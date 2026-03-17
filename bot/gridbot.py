@@ -1039,22 +1039,42 @@ def main():
         threading.Thread(target=_hft_daily_reset, daemon=True).start()
 
         # Periodic status update every 4 hours
-        def _hft_periodic_update():
+        def _hft_visibility_loop():
+            """Thread de visibilidade: heartbeat + update periódico."""
             import datetime as _dt
-            INTERVAL = int(os.environ.get('HFT_UPDATE_INTERVAL', '1800'))  # 30 min default
+            from hft_strategy import HFT_HEARTBEAT_SEC
+            UPDATE_INTERVAL = int(os.environ.get('HFT_UPDATE_INTERVAL', '1800'))  # 30 min
+            _last_heartbeat = 0
+            _last_update    = time.time()
+            _sleep_step     = 30  # verifica a cada 30s
+
             while state['running']:
-                time.sleep(INTERVAL)
+                time.sleep(_sleep_step)
                 eng = get_hft_engine()
                 if not eng or not state['running']: continue
+                now = time.time()
+
+                # ── Heartbeat (padrão: 5 min) ─────────────────────────────
+                hb_sec = HFT_HEARTBEAT_SEC
+                if hb_sec > 0 and now - _last_heartbeat >= hb_sec:
+                    try:
+                        eng.send_heartbeat()
+                        _last_heartbeat = now
+                    except Exception as _e:
+                        log.debug(f'  Heartbeat erro: {_e}')
+
+                # ── Update resumo (padrão: 30 min) — só se tiver trades ───
                 total = eng.daily_wins + eng.daily_losses + getattr(eng, 'daily_breakevens', 0)
-                if total == 0: continue
-                try:
-                    mins = INTERVAL // 60
-                    label = f'{mins}min' if mins < 60 else f'{mins//60}h'
-                    eng.send_periodic_update(label)
-                except Exception as _pe:
-                    log.debug(f'  Telegram periodic update erro: {_pe}')
-        threading.Thread(target=_hft_periodic_update, daemon=True).start()
+                if total > 0 and now - _last_update >= UPDATE_INTERVAL:
+                    try:
+                        mins = UPDATE_INTERVAL // 60
+                        label = f'{mins}min' if mins < 60 else f'{mins//60}h'
+                        eng.send_periodic_update(label)
+                        _last_update = now
+                    except Exception as _pe:
+                        log.debug(f'  Periodic update erro: {_pe}')
+
+        threading.Thread(target=_hft_visibility_loop, daemon=True).start()
 
         # Pre-load CLOSED klines from LIVE Binance (not testnet — testnet só tem BTC/ETH)
         log.info(f"  📦 HFT: Carregando histórico ({HFT_TIMEFRAME}) para {len(HFT_PAIRS)} pares (LIVE Binance)...")
