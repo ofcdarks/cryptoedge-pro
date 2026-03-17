@@ -6,7 +6,7 @@ Modos:
   auto            — envia sinal e entra automaticamente
 """
 import os, requests, logging, threading, time
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 log = logging.getLogger('CryptoEdge.Telegram')
 
@@ -65,7 +65,11 @@ def _edit_message(chat_id, message_id: int, text: str):
     except Exception: pass
 
 def _ts() -> str:
-    return datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+    # Use TZ offset from env var (ex: BOT_TZ_OFFSET=-3 for Brazil UTC-3)
+    import os
+    tz_offset = int(os.environ.get('BOT_TZ_OFFSET', '-3'))
+    tz = timezone(timedelta(hours=tz_offset))
+    return datetime.now(tz).strftime('%d/%m/%Y %H:%M:%S')
 
 def _bar(pct: float, total: int = 10) -> str:
     filled = max(0, min(total, round(pct / 100 * total)))

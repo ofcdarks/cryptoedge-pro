@@ -69,6 +69,12 @@ load_dotenv('.bot.env', override=True)  # frontend config takes priority
 # Normalize symbol after loading .bot.env
 SYMBOL = os.environ.get('BOT_SYMBOL', os.environ.get('SYMBOL', 'BTCUSDT')).upper().replace('/','').replace('-','')
 
+# Timezone-aware logging
+import os as _os
+_TZ_OFFSET = int(_os.environ.get('BOT_TZ_OFFSET', '-3'))
+_TZ = __import__('datetime').timezone(__import__('datetime').timedelta(hours=_TZ_OFFSET))
+logging.Formatter.converter = lambda *args: __import__('datetime').datetime.now(_TZ).timetuple()
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
