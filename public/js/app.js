@@ -431,8 +431,10 @@ document.querySelectorAll('.nav-item').forEach(item => {
     const panel = el('panel-' + item.dataset.panel);
     if (panel) {
       panel.classList.add('active');
-      // Replay needs flex to fill viewport
-      if (item.dataset.panel === 'replay') panel.style.display = 'flex';
+      // Special panels need flex (CSS already handles via .active class)
+      if (item.dataset.panel === 'replay' || item.dataset.panel === 'live' || item.dataset.panel === 'ai') {
+        panel.style.display = 'flex';
+      }
     }
     // CRITICAL: always scroll back to top when switching panels
     const contentEl = document.querySelector('.content');
