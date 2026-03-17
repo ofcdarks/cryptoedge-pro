@@ -5,6 +5,7 @@ Opera vela a vela identificando padrões históricos e prevendo o próximo movim
 """
 
 import os, time, json, logging, signal, sys, math
+from hft_strategy import init_hft, get_hft_engine, HFT_PAIRS, HFT_TIMEFRAME
 from decimal import Decimal
 from collections import deque
 from binance.client import Client
@@ -98,6 +99,9 @@ SESSION_LOSS  = float(os.environ.get('BOT_SESSION_LOSS','0'))  # para ao atingir
 TIMEFRAME  = os.environ.get('BOT_TIMEFRAME', '15m')
 STRATEGY   = os.environ.get('BOT_STRATEGY', 'pattern')
 TRADE_MODE = os.environ.get('BOT_TRADE_MODE', 'manual')  # 'manual' ou 'auto'
+
+# HFT — ativado automaticamente quando STRATEGY=hft
+HFT_MODE = (os.environ.get('BOT_STRATEGY', 'pattern').lower() == 'hft')
 
 # Multi-par scanner
 SCAN_ENABLED  = os.environ.get('BOT_SCAN_ENABLED', 'true').lower() == 'true'
@@ -751,6 +755,10 @@ def on_kline(msg):
 
     # Tick-level
     if STRATEGY=='scalping': scalping_on_tick(close); return
+    if STRATEGY=='hft':
+        engine = get_hft_engine()
+        if engine:
+            engine._check_exit(SYMBOL, close)
     if state['position']:    check_sl_tp(close)
     if STOP_LOSS>0 and close<=STOP_LOSS:
         log.warning(f"  ⛔ Stop global ${close:,.2f}!")
@@ -807,6 +815,10 @@ def on_kline(msg):
     elif STRATEGY=='trend':              trend_on_candle(close)
     elif STRATEGY=='macd':               macd_on_candle(close)
     elif STRATEGY=='breakout':           breakout_on_candle(close)
+    elif STRATEGY=='hft':
+        engine = get_hft_engine()
+        if engine:
+            engine.on_candle(SYMBOL, opn, high, low, close, vol, is_close)
 
 
 def on_ticker(msg):
@@ -938,6 +950,31 @@ def main():
     warm_up()
     if STRATEGY=='grid': grid_init()
 
+    # ── HFT: inicializa engine e agenda reset diário ─────────────────────────
+    if STRATEGY == 'hft':
+        def _hft_send(text):
+            try:
+                from telegram_notify import _send
+                _send(text)
+            except Exception: pass
+
+        hft = init_hft(CAPITAL, client, notify_fn=_hft_send)
+        log.info(f"  🚀 HFT Engine iniciado | Pares: {','.join(HFT_PAIRS[:5])}... | TF: {HFT_TIMEFRAME}")
+
+        # Reset diário à meia-noite
+        def _hft_daily_reset():
+            import datetime
+            while state['running']:
+                now = datetime.datetime.now()
+                tomorrow = (now + datetime.timedelta(days=1)).replace(
+                    hour=0, minute=0, second=30, microsecond=0)
+                secs = (tomorrow - now).total_seconds()
+                time.sleep(secs)
+                if state['running'] and get_hft_engine():
+                    get_hft_engine().reset_daily()
+
+        threading.Thread(target=_hft_daily_reset, daemon=True).start()
+
     from binance import ThreadedWebsocketManager
 
     ws_reconnects = 0
@@ -952,6 +989,34 @@ def main():
 
             if STRATEGY == 'scalping':
                 twm.start_symbol_ticker_socket(callback=on_ticker, symbol=SYMBOL)
+            elif STRATEGY == 'hft':
+                # HFT: WebSocket em múltiplos pares simultaneamente
+                def _make_hft_cb(pair_sym):
+                    def _cb(msg):
+                        if msg.get('e') == 'kline':
+                            k = msg['k']
+                            engine = get_hft_engine()
+                            if engine and engine.running:
+                                engine.on_candle(
+                                    pair_sym,
+                                    float(k['o']), float(k['h']),
+                                    float(k['l']), float(k['c']),
+                                    float(k['v']), k.get('x', False)
+                                )
+                    return _cb
+                for _pair in HFT_PAIRS:
+                    try:
+                        twm.start_kline_socket(
+                            callback=_make_hft_cb(_pair),
+                            symbol=_pair,
+                            interval=HFT_TIMEFRAME
+                        )
+                        log.info(f"  📡 HFT WebSocket: {_pair} ({HFT_TIMEFRAME})")
+                    except Exception as _e:
+                        log.warning(f"  ⚠ HFT: falha ao conectar {_pair}: {_e}")
+                # Also connect main SYMBOL for compatibility
+                if SYMBOL not in HFT_PAIRS:
+                    twm.start_kline_socket(callback=on_kline, symbol=SYMBOL, interval=HFT_TIMEFRAME)
             else:
                 twm.start_kline_socket(callback=on_kline, symbol=SYMBOL, interval=TIMEFRAME)
 

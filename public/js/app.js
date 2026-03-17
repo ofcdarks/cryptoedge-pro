@@ -438,6 +438,9 @@ document.querySelectorAll('.nav-item').forEach(item => {
       panel.scrollTop = 0;
     }
     // Para polling do bot ao sair do painel
+    if (item.dataset.panel !== 'hft' && _hftRefreshTimer) {
+      clearInterval(_hftRefreshTimer); _hftRefreshTimer = null;
+    }
     if (item.dataset.panel !== 'botcontrol' && _botAutoRefresh) {
       clearInterval(_botAutoRefresh); _botAutoRefresh = null;
       const autoBtn = document.getElementById('bc-auto-btn');
@@ -465,6 +468,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
     if (item.dataset.panel === 'admin')        { loadAdminPanel(); switchAdminTab('users'); }
     if (item.dataset.panel === 'alerts')      { loadAlerts(); buildAlertSymbolSelector(); }
     if (item.dataset.panel === 'scanner')     { /* ready on click */ }
+    if (item.dataset.panel === 'hft')          { initHFTPanel(); }
     if (item.dataset.panel === 'backtest')    { btStratChange(); }
     if (item.dataset.panel === 'pnlchart')   { loadPnLChart('week'); }
   });
@@ -6849,4 +6853,128 @@ function showPanel(panelName) {
   if (nav) nav.classList.add('active');
   if (pan) pan.classList.add('active');
   if (panelName === 'profile') loadProfile();
+}
+
+// ─── HFT BOT ──────────────────────────────────────────────────────────────────
+const HFT_PAIRS_DEFAULT = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT',
+  'DOGEUSDT','ADAUSDT','AVAXUSDT','MATICUSDT','DOTUSDT'];
+let _hftRefreshTimer = null;
+
+function initHFTPanel() {
+  // Renderiza seletor de pares
+  const sel = document.getElementById('hft-pair-selector');
+  if (sel && sel.children.length === 0) {
+    HFT_PAIRS_DEFAULT.forEach(pair => {
+      const btn = document.createElement('div');
+      const active = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT'].includes(pair);
+      btn.className = 'hft-pair-btn';
+      btn.dataset.pair = pair;
+      btn.textContent = pair.replace('USDT','');
+      btn.style.cssText = `padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;font-family:var(--mono);border:1px solid ${active ? 'var(--green)' : 'var(--border)'};background:${active ? 'var(--greendim)' : 'var(--bg3)'};color:${active ? 'var(--green)' : 'var(--t3)'};transition:all .15s`;
+      if (active) btn.dataset.active = '1';
+      btn.onclick = function() {
+        const on = btn.dataset.active === '1';
+        btn.dataset.active = on ? '' : '1';
+        btn.style.borderColor = on ? 'var(--border)' : 'var(--green)';
+        btn.style.background  = on ? 'var(--bg3)'    : 'var(--greendim)';
+        btn.style.color       = on ? 'var(--t3)'     : 'var(--green)';
+      };
+      sel.appendChild(btn);
+    });
+  }
+  loadHFTStats();
+  if (!_hftRefreshTimer) _hftRefreshTimer = setInterval(loadHFTStats, 5000);
+}
+
+async function loadHFTStats() {
+  try {
+    const r = await fetch('/api/hft/stats', { headers: auth.headers() });
+    const d = await r.json();
+    if (!d.ok) return;
+    const s = d.today;
+    const pnlEl = document.getElementById('hft-pnl');
+    if (pnlEl) {
+      pnlEl.textContent = `$${parseFloat(s.pnl || 0).toFixed(4)}`;
+      pnlEl.style.color = parseFloat(s.pnl) >= 0 ? 'var(--green)' : 'var(--red)';
+    }
+    const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+    set('hft-trades', s.total || 0);
+    set('hft-wr', s.wr ? s.wr + '%' : '—');
+    set('hft-open', s.open_positions || 0);
+    set('hft-pairs-active', s.pairs?.join(', ') || '—');
+
+    // Render trade list
+    const list = document.getElementById('hft-trades-list');
+    if (list && d.trades?.length > 0) {
+      list.innerHTML = d.trades.slice(0,15).map(t => {
+        const pnl = parseFloat(t.pnl || 0);
+        const icon = pnl > 0 ? '✅' : pnl < 0 ? '❌' : '⏳';
+        const dur = t.closed_at ? Math.round((new Date(t.closed_at) - new Date(t.opened_at))/1000) + 's' : 'aberta';
+        return `<div style="display:grid;grid-template-columns:24px 90px 60px 80px 80px 80px 1fr;gap:6px;padding:6px 0;border-bottom:1px solid var(--border);align-items:center">
+          <span>${icon}</span>
+          <span style="color:var(--t2)">${t.pair || ''}</span>
+          <span style="color:${t.side==='BUY'?'var(--green)':'var(--red)'}">${t.side || ''}</span>
+          <span>$${parseFloat(t.entry_price||0).toFixed(2)}</span>
+          <span style="color:${pnl>=0?'var(--green)':'var(--red)'}">$${pnl.toFixed(4)}</span>
+          <span style="color:var(--t3)">${dur}</span>
+          <span style="color:var(--t3);font-size:10px">${(t.reason||'').slice(0,40)}</span>
+        </div>`;
+      }).join('');
+    } else if (list) {
+      list.innerHTML = '<div style="color:var(--t3);text-align:center;padding:20px">Nenhuma operação ainda hoje</div>';
+    }
+  } catch {}
+}
+
+async function hftStart() {
+  const pairs = [...document.querySelectorAll('.hft-pair-btn[data-active="1"]')]
+    .map(b => b.dataset.pair);
+  if (pairs.length === 0) { showToast('❌ Selecione pelo menos 1 par', true); return; }
+
+  const config = {
+    strategy:   'hft',
+    timeframe:  document.getElementById('hft-tf')?.value    || '1m',
+    trade_mode: 'auto',
+    hft_risk_pct:   document.getElementById('hft-risk-pct')?.value   || '1.5',
+    hft_tp_pct:     document.getElementById('hft-tp-pct')?.value     || '0.35',
+    hft_sl_pct:     document.getElementById('hft-sl-pct')?.value     || '0.18',
+    hft_cooldown:   document.getElementById('hft-cooldown')?.value   || '45',
+    hft_daily_loss: document.getElementById('hft-daily-loss')?.value || '3.0',
+    hft_pairs:      pairs.join(','),
+    testnet:    document.getElementById('hft-testnet')?.checked ? 'true' : undefined,
+  };
+
+  const ok = await showConfirm('⚡ Iniciar HFT',
+    `O bot vai operar AUTOMATICAMENTE nos ${pairs.length} pares selecionados.\n\nTP: ${config.hft_tp_pct}% | SL: ${config.hft_sl_pct}% | Daily Loss Limit: ${config.hft_daily_loss}%\n\nSem confirmação manual — cada sinal é executado imediatamente.`);
+  if (!ok) return;
+
+  const r = await fetch('/api/bot/start', {
+    method: 'POST',
+    headers: { ...auth.headers(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(config)
+  });
+  const d = await r.json();
+  if (d.ok) {
+    showToast('⚡ HFT Bot iniciado!');
+    document.getElementById('hft-status-dot').style.background = 'var(--green)';
+    document.getElementById('hft-status-text').textContent = 'Rodando';
+    document.getElementById('hft-status-text').style.color = 'var(--green)';
+    document.getElementById('hft-badge').style.display = 'inline';
+  } else {
+    showToast('❌ ' + (d.error || 'Erro ao iniciar'), true);
+  }
+}
+
+async function hftStop() {
+  const ok = await showConfirm('Parar HFT', 'Confirma parar o HFT Bot? Posições abertas continuarão até fechar por TP/SL.');
+  if (!ok) return;
+  const r = await fetch('/api/bot/stop', { method: 'POST', headers: auth.headers() });
+  const d = await r.json();
+  if (d.ok || d.stopped) {
+    showToast('HFT Bot parado.');
+    document.getElementById('hft-status-dot').style.background = 'var(--t3)';
+    document.getElementById('hft-status-text').textContent = 'Parado';
+    document.getElementById('hft-status-text').style.color = 'var(--t3)';
+    document.getElementById('hft-badge').style.display = 'none';
+  }
 }

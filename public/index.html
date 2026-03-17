@@ -378,6 +378,11 @@
       <span>Grid Bot</span>
       <span class="nav-badge">BOT</span>
     </div>
+    <div class="nav-item" data-panel="hft" id="nav-hft">
+      <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+      <span>HFT Bot</span>
+      <span class="nav-badge" style="background:var(--red);display:none" id="hft-badge">⚡</span>
+    </div>
     <div class="nav-item" data-panel="botcontrol">
       <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>
       <span>Bot Control</span>
@@ -2505,6 +2510,113 @@
         </div>
       </div>
 
+
+      <!-- ──────────── HFT BOT ──────────── -->
+      <div id="panel-hft" class="panel">
+        <!-- Header -->
+        <div class="card" style="margin-bottom:10px">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+            <div>
+              <div class="card-title">⚡ HFT Bot — Alta Frequência</div>
+              <div style="font-size:12px;color:var(--t3);margin-top:2px">Realiza 20–80 operações por dia em múltiplos pares</div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <div id="hft-status-dot" style="width:10px;height:10px;border-radius:50%;background:var(--t3)"></div>
+              <span id="hft-status-text" style="font-size:12px;color:var(--t3);font-family:var(--mono)">Parado</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Métricas do dia -->
+        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:10px">
+          <div class="card" style="text-align:center;padding:10px">
+            <div id="hft-pnl" style="font-family:var(--mono);font-size:16px;font-weight:700;color:var(--green)">$0.00</div>
+            <div style="font-size:10px;color:var(--t3);margin-top:2px">P&L Hoje</div>
+          </div>
+          <div class="card" style="text-align:center;padding:10px">
+            <div id="hft-trades" style="font-family:var(--mono);font-size:16px;font-weight:700">0</div>
+            <div style="font-size:10px;color:var(--t3);margin-top:2px">Trades</div>
+          </div>
+          <div class="card" style="text-align:center;padding:10px">
+            <div id="hft-wr" style="font-family:var(--mono);font-size:16px;font-weight:700">—</div>
+            <div style="font-size:10px;color:var(--t3);margin-top:2px">Win Rate</div>
+          </div>
+          <div class="card" style="text-align:center;padding:10px">
+            <div id="hft-open" style="font-family:var(--mono);font-size:16px;font-weight:700;color:var(--gold)">0</div>
+            <div style="font-size:10px;color:var(--t3);margin-top:2px">Abertas</div>
+          </div>
+          <div class="card" style="text-align:center;padding:10px">
+            <div id="hft-pairs-active" style="font-family:var(--mono);font-size:12px;font-weight:600;color:var(--blue)">—</div>
+            <div style="font-size:10px;color:var(--t3);margin-top:2px">Pares ativos</div>
+          </div>
+        </div>
+
+        <!-- Config -->
+        <div class="card" style="margin-bottom:10px">
+          <div class="card-title" style="margin-bottom:12px">⚙️ Configuração HFT</div>
+          <div class="grid g3" style="gap:10px;margin-bottom:12px">
+            <div class="field">
+              <label>Capital por trade (%)</label>
+              <input type="number" id="hft-risk-pct" value="1.5" step="0.1" min="0.5" max="5">
+              <div style="font-size:10px;color:var(--t3);margin-top:3px">% do capital em cada operação</div>
+            </div>
+            <div class="field">
+              <label>Take Profit (%)</label>
+              <input type="number" id="hft-tp-pct" value="0.35" step="0.05" min="0.1" max="2">
+            </div>
+            <div class="field">
+              <label>Stop Loss (%)</label>
+              <input type="number" id="hft-sl-pct" value="0.18" step="0.05" min="0.05" max="1">
+            </div>
+            <div class="field">
+              <label>Timeframe</label>
+              <select id="hft-tf">
+                <option value="1m" selected>1m (+ trades)</option>
+                <option value="3m">3m (equilíbrio)</option>
+                <option value="5m">5m (+ preciso)</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Cooldown entre trades (s)</label>
+              <input type="number" id="hft-cooldown" value="45" step="5" min="10" max="300">
+            </div>
+            <div class="field">
+              <label>Daily Loss Limit (%)</label>
+              <input type="number" id="hft-daily-loss" value="3.0" step="0.5" min="0.5" max="10">
+              <div style="font-size:10px;color:var(--t3);margin-top:3px">Para o bot se atingir X% de perda no dia</div>
+            </div>
+          </div>
+
+          <!-- Pares HFT -->
+          <div class="field" style="margin-bottom:12px">
+            <label>Pares monitorados</label>
+            <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px" id="hft-pair-selector">
+              <!-- Gerado por JS -->
+            </div>
+          </div>
+
+          <div style="display:flex;gap:8px">
+            <button onclick="hftStart()" id="hft-start-btn" style="flex:1;padding:10px;background:var(--green);color:#000;font-weight:700;border:none;border-radius:6px;cursor:pointer;font-size:13px">⚡ Iniciar HFT</button>
+            <button onclick="hftStop()"  id="hft-stop-btn"  style="flex:1;padding:10px;background:var(--reddim);border:1px solid var(--red);color:var(--red);font-weight:700;border-radius:6px;cursor:pointer;font-size:13px">■ Parar HFT</button>
+          </div>
+
+          <!-- Aviso testnet/real -->
+          <div style="margin-top:10px;padding:10px;border-radius:6px;background:var(--golddim);border:1px solid var(--gold);font-size:12px;color:var(--t2)">
+            ⚠️ <b>HFT opera em AUTO — sem confirmação manual.</b> Certifique-se que está em Testnet para testar antes de usar com dinheiro real. Configure <code>BOT_TESTNET=false</code> apenas quando tiver validado a estratégia.
+          </div>
+        </div>
+
+        <!-- Últimos trades -->
+        <div class="card">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+            <div class="card-title">📋 Últimas operações HFT</div>
+            <button onclick="loadHFTStats()" style="font-size:11px;padding:4px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--t2);cursor:pointer">↺ Atualizar</button>
+          </div>
+          <div id="hft-trades-list" style="font-size:12px;font-family:var(--mono)">
+            <div style="color:var(--t3);text-align:center;padding:20px">Inicie o HFT para ver as operações aqui</div>
+          </div>
+        </div>
+      </div>
 
       <!-- ──────────── REPLAY HISTÓRICO ──────────── -->
       <div id="panel-replay" class="panel">
