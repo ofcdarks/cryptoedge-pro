@@ -1767,24 +1767,77 @@
 
       <!-- ──────────── PNL CHART ──────────── -->
       <div id="panel-pnlchart" class="panel">
-        <div class="grid g4" style="margin-bottom:12px" id="pnl-metrics"></div>
-        <div class="card" style="margin-bottom:10px">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-            <div class="card-title" style="margin:0">PnL Acumulado</div>
-            <div style="display:flex;gap:4px;flex-wrap:wrap">
-              <button class="btn btn-outline pnl-range-btn active-filter" data-range="week" onclick="loadPnLChart('week',this)" style="font-size:10px;padding:5px 10px">7d</button>
-              <button class="btn btn-outline pnl-range-btn" data-range="month" onclick="loadPnLChart('month',this)" style="font-size:10px;padding:5px 10px">30d</button>
-              <button class="btn btn-outline pnl-range-btn" data-range="all" onclick="loadPnLChart('all',this)" style="font-size:10px;padding:5px 10px">Tudo</button>
-              <button class="btn btn-outline" onclick="exportReport('excel')" style="font-size:10px;padding:5px 10px;color:var(--green)" title="Exportar Excel (.xlsx)">📊 Excel</button>
-              <button class="btn btn-outline" onclick="exportReport('pdf')"   style="font-size:10px;padding:5px 10px;color:var(--red)"   title="Exportar PDF">📄 PDF</button>
-              <button class="btn btn-outline" onclick="exportReport('csv')"   style="font-size:10px;padding:5px 10px" title="Exportar CSV">📥 CSV</button>
-            </div>
+        <!-- Header bar -->
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+          <div class="card-title">📈 Performance</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+            <button class="btn btn-outline pnl-range-btn active-filter" data-range="week"  onclick="loadPnLChart('week',this)"  style="font-size:11px">7d</button>
+            <button class="btn btn-outline pnl-range-btn" data-range="month" onclick="loadPnLChart('month',this)" style="font-size:11px">30d</button>
+            <button class="btn btn-outline pnl-range-btn" data-range="all"   onclick="loadPnLChart('all',this)"   style="font-size:11px">Tudo</button>
+            <button class="btn btn-outline" onclick="exportReport('csv')" style="font-size:11px">📥 CSV</button>
           </div>
-          <canvas id="pnl-cumulative-chart" style="width:100%;height:200px;display:block"></canvas>
         </div>
-        <div class="card">
-          <div class="card-title" style="margin-bottom:12px">PnL Diário</div>
-          <canvas id="pnl-daily-chart" style="width:100%;height:160px;display:block"></canvas>
+
+        <!-- KPI strip -->
+        <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin-bottom:10px">
+          <div class="card" style="padding:8px;text-align:center">
+            <div id="pf-total-pnl"  style="font-size:15px;font-weight:700;font-family:var(--mono);color:var(--green)">—</div>
+            <div style="font-size:9px;color:var(--t3);margin-top:2px">PnL Total</div>
+          </div>
+          <div class="card" style="padding:8px;text-align:center">
+            <div id="pf-wr"         style="font-size:15px;font-weight:700;font-family:var(--mono)">—</div>
+            <div style="font-size:9px;color:var(--t3);margin-top:2px">Win Rate</div>
+          </div>
+          <div class="card" style="padding:8px;text-align:center">
+            <div id="pf-trades"     style="font-size:15px;font-weight:700;font-family:var(--mono)">—</div>
+            <div style="font-size:9px;color:var(--t3);margin-top:2px">Trades</div>
+          </div>
+          <div class="card" style="padding:8px;text-align:center">
+            <div id="pf-sharpe"     style="font-size:15px;font-weight:700;font-family:var(--mono)">—</div>
+            <div style="font-size:9px;color:var(--t3);margin-top:2px">Sharpe</div>
+          </div>
+          <div class="card" style="padding:8px;text-align:center">
+            <div id="pf-pf"         style="font-size:15px;font-weight:700;font-family:var(--mono)">—</div>
+            <div style="font-size:9px;color:var(--t3);margin-top:2px">Prof. Factor</div>
+          </div>
+          <div class="card" style="padding:8px;text-align:center">
+            <div id="pf-maxdd"      style="font-size:15px;font-weight:700;font-family:var(--mono);color:var(--red)">—</div>
+            <div style="font-size:9px;color:var(--t3);margin-top:2px">Max DD</div>
+          </div>
+          <div class="card" style="padding:8px;text-align:center">
+            <div id="pf-streak"     style="font-size:15px;font-weight:700;font-family:var(--mono);color:var(--gold)">—</div>
+            <div style="font-size:9px;color:var(--t3);margin-top:2px">Best Streak</div>
+          </div>
+        </div>
+
+        <!-- Equity curve -->
+        <div class="card" style="margin-bottom:10px">
+          <div class="card-title" style="margin-bottom:10px">Equity Curve</div>
+          <div style="position:relative;height:200px"><canvas id="pnl-cumulative-chart"></canvas></div>
+        </div>
+
+        <!-- Pair breakdown + Daily PnL -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+          <div class="card">
+            <div class="card-title" style="margin-bottom:10px">PnL por Par</div>
+            <div style="position:relative;height:180px"><canvas id="pf-pair-chart"></canvas></div>
+          </div>
+          <div class="card">
+            <div class="card-title" style="margin-bottom:10px">PnL Diário</div>
+            <div style="position:relative;height:180px"><canvas id="pnl-daily-chart"></canvas></div>
+          </div>
+        </div>
+
+        <!-- Win/Loss distribution -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div class="card">
+            <div class="card-title" style="margin-bottom:10px">Distribuição de Trades</div>
+            <div style="position:relative;height:150px"><canvas id="pf-dist-chart"></canvas></div>
+          </div>
+          <div class="card">
+            <div class="card-title" style="margin-bottom:10px">Trades por Estratégia</div>
+            <div id="pf-strategy-breakdown" style="font-size:12px;font-family:var(--mono)"></div>
+          </div>
         </div>
       </div>
 
@@ -2660,6 +2713,11 @@
               <label>Daily Loss Limit (%)</label>
               <input type="number" id="hft-daily-loss" value="3.0" step="0.5" min="0.5" max="10">
               <div style="font-size:10px;color:var(--t3);margin-top:3px">Para o bot se atingir X% de perda no dia</div>
+            </div>
+            <div class="field">
+              <label>Máx. posições simultâneas</label>
+              <input type="number" id="hft-max-trades" value="3" step="1" min="1" max="20" oninput="updateMaxTradesHint()">
+              <div id="hft-max-hint" style="font-size:10px;color:var(--t3);margin-top:3px">3 posições ≈ $13.50 em uso (1.5% de $300)</div>
             </div>
           </div>
 

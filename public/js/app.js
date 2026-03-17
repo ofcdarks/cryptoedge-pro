@@ -474,7 +474,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
     if (item.dataset.panel === 'scanner')     { /* ready on click */ }
     if (item.dataset.panel === 'hft')          { initHFTPanel(); }
     if (item.dataset.panel === 'backtest')    { btStratChange(); }
-    if (item.dataset.panel === 'pnlchart')   { loadPnLChart('week'); }
+    if (item.dataset.panel === 'pnlchart')   { loadPnLChart('week'); loadPerformanceKPIs(7); }
   });
 });
 
@@ -3331,6 +3331,9 @@ async function runBacktest() {
   const strat   = document.getElementById('bt-strategy')?.value || 'trend';
   const config  = {
     capital:    document.getElementById('bt-capital')?.value   || '300',
+    hft_tp_pct:      parseFloat(document.getElementById('bt-hft-tp')?.value      || '0.35'),
+    hft_sl_pct:      parseFloat(document.getElementById('bt-hft-sl')?.value      || '0.18'),
+    hft_min_signals: parseInt(document.getElementById('bt-hft-min-sig')?.value   || '2'),
     rr:         document.getElementById('bt-rr')?.value        || '2.0',
     ema_fast:   document.getElementById('bt-ema-fast')?.value  || '9',
     ema_slow:   document.getElementById('bt-ema-slow')?.value  || '21',
@@ -3396,7 +3399,10 @@ function renderBacktestResults(d) {
       { label:'Avg Win', val: '+' + fmtUSD(d.avg_win), cls:'green' },
       { label:'Avg Loss', val: fmtUSD(d.avg_loss), cls:'red' },
       { label:'Profit Factor', val: d.profit_factor === 999 ? '∞' : d.profit_factor, cls: d.profit_factor >= 1.5 ? 'green' : 'gold' },
-    ].map(m => `<div class="metric"><label>${m.label}</label><div class="val ${m.cls}" style="font-size:16px">${m.val}</div></div>`).join('');
+    ].concat(d.strategy === 'hft' ? [
+      { label:'Trades/Dia', val: d.trades_per_day || '—', cls: '' },
+      { label:'Avg Duração', val: d.avg_duration_min ? d.avg_duration_min+'m' : '—', cls: '' },
+    ] : []).map(m => `<div class="metric"><label>${m.label}</label><div class="val ${m.cls}" style="font-size:16px">${m.val}</div></div>`).join('');
   }
 
   // Equity curve chart
@@ -6934,6 +6940,103 @@ async function refreshHFTDashboard() {
   } catch(e){}
 }
 
+// ─── Performance Panel ────────────────────────────────────────────────────────
+async function loadPerformanceKPIs(days) {
+  days = days || document.querySelector('.pnl-range-btn.active-filter')?.dataset?.range === 'week' ? 7 : 30;
+  try {
+    const r = await fetch(`/api/performance/stats?days=${days}`, { headers: auth.headers() });
+    const d = await r.json();
+    if (!d.ok || d.empty) return;
+    const set = (id, v, color) => {
+      const e = document.getElementById(id);
+      if (!e) return;
+      e.textContent = v;
+      if (color) e.style.color = color;
+    };
+    const pnlColor = d.total_pnl >= 0 ? 'var(--green)' : 'var(--red)';
+    set('pf-total-pnl', (d.total_pnl>=0?'+':'')+'$'+parseFloat(d.total_pnl).toFixed(4), pnlColor);
+    set('pf-wr',   d.win_rate+'%', d.win_rate>=55?'var(--green)':d.win_rate>=45?'var(--gold)':'var(--red)');
+    set('pf-trades', d.total_trades);
+    set('pf-sharpe', d.sharpe?.toFixed(2)||'—', d.sharpe>=2?'var(--green)':d.sharpe>=1?'var(--gold)':'var(--t2)');
+    set('pf-pf',    d.pf>=999?'∞':d.pf?.toFixed(2)||'—', d.pf>=1.5?'var(--green)':d.pf>=1?'var(--gold)':'var(--red)');
+    set('pf-maxdd', d.maxDD?'-$'+parseFloat(d.maxDD).toFixed(4):'—');
+    set('pf-streak', d.best_streak>0?d.best_streak+'W':'—');
+
+    // Pair breakdown
+    await loadPairBreakdown(days);
+  } catch(e) { console.error('perf kpis:', e); }
+}
+
+async function loadPairBreakdown(days=30) {
+  try {
+    const r = await fetch(`/api/performance/by-pair?days=${days}`, { headers: auth.headers() });
+    const d = await r.json();
+    if (!d.ok || !d.pairs?.length) return;
+
+    // Pair PnL bar chart
+    const pairCanvas = document.getElementById('pf-pair-chart');
+    if (pairCanvas && typeof Chart !== 'undefined') {
+      if (window._pairChart) window._pairChart.destroy();
+      const sorted = d.pairs.sort((a,b) => b.pnl - a.pnl);
+      window._pairChart = new Chart(pairCanvas, {
+        type: 'bar',
+        data: {
+          labels: sorted.map(p => p.pair.replace('USDT','')),
+          datasets: [{
+            data: sorted.map(p => parseFloat(p.pnl.toFixed(4))),
+            backgroundColor: sorted.map(p => p.pnl>=0 ? 'rgba(29,158,117,.7)' : 'rgba(226,75,74,.7)'),
+            borderColor:     sorted.map(p => p.pnl>=0 ? '#1d9e75' : '#e24b4a'),
+            borderWidth: 1, borderRadius: 3
+          }]
+        },
+        options: { responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
+          scales: { x:{ticks:{color:'#888',font:{size:10}}}, y:{ticks:{callback:v=>'$'+v,color:'#888',font:{size:10}}} }
+        }
+      });
+    }
+
+    // Win/Loss distribution donut
+    const distCanvas = document.getElementById('pf-dist-chart');
+    if (distCanvas && typeof Chart !== 'undefined') {
+      if (window._distChart) window._distChart.destroy();
+      const totalW = d.pairs.reduce((s,p)=>s+p.wins,0);
+      const totalL = d.pairs.reduce((s,p)=>s+p.losses,0);
+      window._distChart = new Chart(distCanvas, {
+        type: 'doughnut',
+        data: {
+          labels: ['Wins', 'Losses'],
+          datasets: [{ data: [totalW, totalL], backgroundColor: ['rgba(29,158,117,.8)','rgba(226,75,74,.8)'], borderWidth: 0 }]
+        },
+        options: { responsive:true, maintainAspectRatio:false, plugins:{
+          legend:{position:'bottom',labels:{color:'#888',font:{size:10},boxWidth:10}},
+          tooltip:{callbacks:{label:ctx=>`${ctx.label}: ${ctx.raw} (${Math.round(ctx.raw/(totalW+totalL||1)*100)}%)`}}
+        }}
+      });
+    }
+
+    // Strategy breakdown text
+    const breakdown = document.getElementById('pf-strategy-breakdown');
+    if (breakdown) {
+      const byStrat = {};
+      d.pairs.forEach(p => {
+        const k = p.strategy||'pattern';
+        if (!byStrat[k]) byStrat[k] = {trades:0,wins:0,pnl:0};
+        byStrat[k].trades += p.trades; byStrat[k].wins += p.wins; byStrat[k].pnl += p.pnl;
+      });
+      breakdown.innerHTML = Object.entries(byStrat).sort((a,b)=>b[1].trades-a[1].trades).map(([strat,s])=>{
+        const wr = s.trades>0?Math.round(s.wins/s.trades*100):0;
+        const pnlColor = s.pnl>=0?'var(--green)':'var(--red)';
+        return `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)">
+          <span style="color:var(--t1);font-weight:500">${strat.toUpperCase()}</span>
+          <span style="color:var(--t3)">${s.trades}T</span>
+          <span style="color:${wr>=50?'var(--green)':'var(--red)'}">${wr}%</span>
+          <span style="color:${pnlColor}">${s.pnl>=0?'+':''}$${s.pnl.toFixed(4)}</span>
+        </div>`;
+      }).join('') || '<div style="color:var(--t3);padding:10px">Sem dados ainda</div>';
+    }
+  } catch(e) {}
+}
+
 // ─── HFT BOT ──────────────────────────────────────────────────────────────────
 const HFT_PAIRS_DEFAULT = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT',
   'DOGEUSDT','ADAUSDT','AVAXUSDT','MATICUSDT','DOTUSDT'];
@@ -7009,23 +7112,45 @@ async function loadHFTStats() {
     const list = document.getElementById('hft-trades-list');
     if (list && d.trades?.length > 0) {
       list.innerHTML = d.trades.slice(0,15).map(t => {
-        const pnl = parseFloat(t.pnl || 0);
-        const icon = pnl > 0 ? '✅' : pnl < 0 ? '❌' : '⏳';
-        const dur = t.closed_at ? Math.round((new Date(t.closed_at) - new Date(t.opened_at))/1000) + 's' : 'aberta';
-        return `<div style="display:grid;grid-template-columns:24px 90px 60px 80px 80px 80px 1fr;gap:6px;padding:6px 0;border-bottom:1px solid var(--border);align-items:center">
-          <span>${icon}</span>
-          <span style="color:var(--t2)">${t.pair || ''}</span>
-          <span style="color:${t.side==='BUY'?'var(--green)':'var(--red)'}">${t.side || ''}</span>
-          <span>$${parseFloat(t.entry_price||0).toFixed(2)}</span>
-          <span style="color:${pnl>=0?'var(--green)':'var(--red)'}">$${pnl.toFixed(4)}</span>
+        const pnl   = parseFloat(t.pnl || 0);
+        const open  = !t.closed_at;
+        const icon  = open ? '⏳' : pnl > 0 ? '✅' : '❌';
+        const dur   = open ? 'aberta' : (Math.round((new Date(t.closed_at) - new Date(t.opened_at))/1000) + 's');
+        const sym   = t.symbol || t.pair || '—';
+        const ep    = parseFloat(t.entry || t.entry_price || 0);
+        const eFmt  = ep > 0 ? '$' + (ep < 10 ? ep.toFixed(5) : ep.toFixed(2)) : '—';
+        const sc    = t.side === 'BUY' ? 'var(--green)' : 'var(--red)';
+        const pc    = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--t3)';
+        const pFmt  = pnl !== 0 ? (pnl>0?'+':'') + '$' + pnl.toFixed(4) : open ? '—' : '$0.0000';
+        return `<div style="display:grid;grid-template-columns:22px 88px 52px 100px 100px 65px 1fr;gap:6px;padding:7px 0;border-bottom:1px solid var(--border);align-items:center;font-size:12px">
+          <span style="font-size:13px">${icon}</span>
+          <span style="font-weight:500;color:var(--t1)">${sym}</span>
+          <span style="color:${sc};font-weight:600">${t.side||'—'}</span>
+          <span style="font-family:var(--mono)">${eFmt}</span>
+          <span style="font-family:var(--mono);color:${pc};font-weight:600">${pFmt}</span>
           <span style="color:var(--t3)">${dur}</span>
-          <span style="color:var(--t3);font-size:10px">${(t.reason||'').slice(0,40)}</span>
+          <span style="color:var(--t3);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${t.reason||''}">${(t.reason||'').slice(0,45)}</span>
         </div>`;
       }).join('');
     } else if (list) {
       list.innerHTML = '<div style="color:var(--t3);text-align:center;padding:20px">Nenhuma operação ainda hoje</div>';
     }
   } catch {}
+}
+
+function updateMaxTradesHint() {
+  const maxT   = parseInt(document.getElementById('hft-max-trades')?.value || '3');
+  const risk   = parseFloat(document.getElementById('hft-risk-pct')?.value || '1.5');
+  const hint   = document.getElementById('hft-max-hint');
+  if (!hint) return;
+  // Try to get capital from bot config
+  const capEl = document.getElementById('hft-capital');
+  const cap   = capEl ? parseFloat(capEl.value) : 300;
+  const perTrade = cap * risk / 100;
+  const total    = perTrade * maxT;
+  const rec      = Math.max(1, Math.min(20, Math.floor(cap * 0.10 / perTrade)));
+  hint.textContent = `${maxT} posições ≈ $${total.toFixed(2)} em uso ($${perTrade.toFixed(2)}/trade) · Recomendado: ${rec}`;
+  hint.style.color = maxT > rec * 2 ? 'var(--red)' : maxT > rec ? 'var(--gold)' : 'var(--t3)';
 }
 
 async function hftStart() {
@@ -7035,17 +7160,20 @@ async function hftStart() {
     .map(b => b.dataset.pair);
   if (pairs.length === 0) { showToast('❌ Selecione pelo menos 1 par', true); return; }
 
+  const riskPct = parseFloat(document.getElementById('hft-risk-pct')?.value || '1.5');
+  const maxT    = parseInt(document.getElementById('hft-max-trades')?.value || '3');
   const config = {
-    strategy:   'hft',
-    timeframe:  document.getElementById('hft-tf')?.value    || '1m',
-    trade_mode: 'auto',
-    hft_risk_pct:   document.getElementById('hft-risk-pct')?.value   || '1.5',
-    hft_tp_pct:     document.getElementById('hft-tp-pct')?.value     || '0.35',
-    hft_sl_pct:     document.getElementById('hft-sl-pct')?.value     || '0.18',
-    hft_cooldown:   document.getElementById('hft-cooldown')?.value   || '45',
-    hft_daily_loss: document.getElementById('hft-daily-loss')?.value || '3.0',
-    hft_pairs:      pairs.join(','),
-    testnet:    document.getElementById('hft-testnet')?.checked ? 'true' : undefined,
+    strategy:        'hft',
+    timeframe:       document.getElementById('hft-tf')?.value || '1m',
+    trade_mode:      'auto',
+    hft_risk_pct:    String(riskPct),
+    hft_tp_pct:      document.getElementById('hft-tp-pct')?.value     || '0.35',
+    hft_sl_pct:      document.getElementById('hft-sl-pct')?.value     || '0.18',
+    hft_cooldown:    document.getElementById('hft-cooldown')?.value   || '45',
+    hft_daily_loss:  document.getElementById('hft-daily-loss')?.value || '3.0',
+    hft_max_trades:  String(maxT),
+    hft_pairs:       pairs.join(','),
+    testnet:         document.getElementById('hft-testnet')?.checked ? 'true' : undefined,
   };
 
   const ok = await showConfirm('⚡ Iniciar HFT',

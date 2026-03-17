@@ -124,7 +124,16 @@ class Backtester:
             lk = self.klines[-1]
             self._close(float(lk[4]), lk[0], 'FIM DO BACKTEST')
 
-        return self._metrics()
+        result = self._metrics()
+        if self.strategy == 'hft' and result.get('trades', 0) > 0:
+            if self.klines:
+                candles_per_day = 1440
+                days = max(1, len(self.klines) / candles_per_day)
+                result['trades_per_day'] = round(result['trades'] / days, 1)
+            durations = [t.get('duration_min', 0) for t in self.trades if t.get('duration_min')]
+            if durations:
+                result['avg_duration_min'] = round(sum(durations) / len(durations), 1)
+        return result
 
     def _signal(self, close, high, low, vol):
         r   = rsi(self.closes)

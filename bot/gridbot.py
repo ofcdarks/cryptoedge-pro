@@ -995,6 +995,28 @@ def main():
 
         threading.Thread(target=_hft_daily_reset, daemon=True).start()
 
+        # Periodic status update every 4 hours
+        def _hft_periodic_update():
+            import datetime as _dt
+            while state['running']:
+                time.sleep(4 * 3600)  # 4 hours
+                eng = get_hft_engine()
+                if eng and state['running']:
+                    total = eng.daily_wins + eng.daily_losses
+                    if total > 0:
+                        wr = eng.daily_wins / total * 100
+                        pnl_icon = '🟢' if eng.daily_pnl >= 0 else '🔴'
+                        try:
+                            from telegram_notify import _send
+                            _send(
+                                f'⏰ <b>HFT Update ({_dt.datetime.now().strftime("%H:%M")})</b>\n'
+                                f'{pnl_icon} PnL hoje: <code>{"+"if eng.daily_pnl>=0 else ""}${eng.daily_pnl:.4f}</code>\n'
+                                f'📈 {total} trades | {eng.daily_wins}W/{eng.daily_losses}L | WR:{wr:.0f}%\n'
+                                f'📌 Posições abertas: {len(eng.positions)}'
+                            )
+                        except Exception: pass
+        threading.Thread(target=_hft_periodic_update, daemon=True).start()
+
         # Pre-load CLOSED klines from LIVE Binance (not testnet — testnet só tem BTC/ETH)
         log.info(f"  📦 HFT: Carregando histórico ({HFT_TIMEFRAME}) para {len(HFT_PAIRS)} pares (LIVE Binance)...")
         try:
@@ -1115,6 +1137,14 @@ def main():
              f"W:{state['wins']} L:{state['losses']} WR:{wr:.0f}%")
     log.info(f"{'═'*62}")
     multi_scanner.stop()
+    # Send HFT daily summary on stop
+    if STRATEGY == 'hft':
+        try:
+            eng = get_hft_engine()
+            if eng and (eng.daily_wins + eng.daily_losses) > 0:
+                eng.send_daily_summary()
+        except Exception as _se:
+            log.debug(f'HFT summary on stop failed: {_se}')
     notify_stop(SYMBOL, state['pnl'], state['wins'], state['losses'])
     # Limpa PID file ao encerrar (se foi criado)
     pid_file = os.environ.get('BOT_PID_FILE', '')

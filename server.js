@@ -2617,6 +2617,24 @@ app.post('/api/bot/test-telegram', requireAuth, async (req, res) => {
 });
 
 // ── Performance + HFT stats ───────────────────────────────────────────────────
+app.get('/api/performance/by-pair', requireAuth, (req, res) => {
+  try {
+    const days = parseInt(req.query.days||'30');
+    const rows = db.all(`
+      SELECT symbol as pair, strategy,
+        COUNT(*) as trades,
+        SUM(CASE WHEN pnl>0 THEN 1 ELSE 0 END) as wins,
+        SUM(pnl) as pnl,
+        AVG(CASE WHEN pnl>0 THEN pnl END) as avg_win,
+        AVG(CASE WHEN pnl<=0 THEN pnl END) as avg_loss
+      FROM bot_trades WHERE closed_at IS NOT NULL
+        AND opened_at>=datetime('now','-'||?||' days')
+        AND username=?
+      GROUP BY symbol, strategy ORDER BY trades DESC`, [days, req.user]);
+    res.json({ok:true, pairs: rows.map(r=>({...r,pnl:parseFloat((r.pnl||0).toFixed(4))}))});
+  } catch(e){res.json({ok:false,error:e.message});}
+});
+
 app.get('/api/performance/stats', requireAuth, (req, res) => {
   try {
     const days = parseInt(req.query.days||'30');

@@ -519,8 +519,36 @@ class HFTEngine:
             'consec_losses': self.consec_losses,
         }
 
+    def send_daily_summary(self):
+        total = self.daily_wins + self.daily_losses
+        wr    = self.daily_wins / total * 100 if total > 0 else 0
+        # top pair by pnl
+        top_pairs = sorted(self.pair_stats.items(), key=lambda x: x[1]['pnl'], reverse=True)
+        pair_lines = '\n'.join(
+            f"  {'✅' if s['pnl']>=0 else '❌'} {p.replace('USDT',''):6} "
+            f"{s['wins']}W/{s['losses']}L  "
+            f"{'+'if s['pnl']>=0 else ''}${s['pnl']:.4f}"
+            for p, s in top_pairs[:6] if s['wins']+s['losses'] > 0
+        ) or '  Nenhum trade hoje'
+        pnl_icon = '🟢' if self.daily_pnl >= 0 else '🔴'
+        self.notify(
+            f'📊 <b>Resumo Diário HFT</b>\n'
+            f'{'─'*28}\n'
+            f'{pnl_icon} PnL: <code>{"+"if self.daily_pnl>=0 else ""}${self.daily_pnl:.4f}</code>\n'
+            f'📈 Trades: <code>{total}</code> ({self.daily_wins}W/{self.daily_losses}L)\n'
+            f'🎯 Win Rate: <code>{wr:.1f}%</code>\n'
+            f'{'─'*28}\n'
+            f'<b>Por par:</b>\n{pair_lines}\n'
+            f'{'─'*28}\n'
+            f'🕐 <i>{__import__("datetime").datetime.now().strftime("%d/%m/%Y %H:%M")}</i>'
+        )
+
     def reset_daily(self):
         log.info(f'  🔄 HFT reset diário | Fechando {len(self.positions)} posições')
+        # Send summary before reset
+        if self.daily_wins + self.daily_losses > 0:
+            try: self.send_daily_summary()
+            except: pass
         self.daily_pnl = 0.0; self.daily_wins = 0; self.daily_losses = 0
         self.trades_today = []; self.consec_losses = 0; self.paused_until = 0
         self.pair_stats = {p: {'wins':0,'losses':0,'pnl':0.0} for p in HFT_PAIRS}
