@@ -96,8 +96,11 @@
     };
   </script>
   <style>
-    #panel-replay.active { display: flex !important; }
-    #panel-replay .card  { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+    /* Replay panel fullscreen */
+    #panel-replay { flex-direction: column; gap: 0; }
+    #panel-replay.active { display: flex !important; height: calc(100vh - var(--top) - 2.5rem); }
+    #panel-replay > .card { flex: 1; min-height: 0; overflow: hidden; display: flex !important; flex-direction: column; }
+    #rp-canvas { display: block; width: 100% !important; }
   </style>
 </head>
 <body>
@@ -2511,7 +2514,7 @@
 
       <!-- ──────────── REPLAY HISTÓRICO ──────────── -->
       <div id="panel-replay" class="panel" style="height:calc(100vh - var(--top) - 2.5rem);display:none;flex-direction:column;gap:0">
-        <div class="card" style="display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden">
+        <div class="card" style="display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden;padding-bottom:6px">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px;flex-shrink:0">
             <div class="card-title">⏪ Replay Histórico — Tick a Tick</div>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -2603,7 +2606,19 @@
           </div>
           <div id="rp-position-info" style="margin-top:10px;padding:10px;border-radius:6px;background:var(--bg2);font-size:12px;display:none"></div>
           <!-- IA Narração -->
-          <div id="rp-ia-narration" style="display:none;margin-top:10px;padding:12px;border-radius:8px;background:var(--bg2);border:1px solid var(--border2)"></div>
+          <div id="rp-ia-narration" style="display:none;margin-top:8px;padding:10px;border-radius:8px;background:var(--bg2);border:1px solid var(--border2);flex-shrink:0"></div>
+          <script>
+            // Resize observer: redraw canvas when replay panel size changes
+            (function(){
+              const obs = new ResizeObserver(() => {
+                if (typeof _replayDraw === 'function' && window._rp && window._rp.klines.length) _replayDraw();
+              });
+              document.addEventListener('DOMContentLoaded', () => {
+                const p = document.getElementById('panel-replay');
+                if (p) obs.observe(p);
+              });
+            })();
+          </script>
         </div>
       </div>
 

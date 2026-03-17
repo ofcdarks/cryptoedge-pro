@@ -429,7 +429,11 @@ document.querySelectorAll('.nav-item').forEach(item => {
     document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
     item.classList.add('active');
     const panel = el('panel-' + item.dataset.panel);
-    if (panel) panel.classList.add('active');
+    if (panel) {
+      panel.classList.add('active');
+      // Replay needs flex to fill viewport
+      if (item.dataset.panel === 'replay') panel.style.display = 'flex';
+    }
     // Para polling do bot ao sair do painel
     if (item.dataset.panel !== 'botcontrol' && _botAutoRefresh) {
       clearInterval(_botAutoRefresh); _botAutoRefresh = null;
@@ -2675,6 +2679,7 @@ const _rp = {
   position: null, pnl: 0, wins: 0, losses: 0,
   chart: null, ctx: null,
 };
+window._rp = _rp; // expose for resize observer
 
 async function replayLoad() {
   const symbol   = document.getElementById('rp-symbol')?.value   || 'BTCUSDT';
@@ -2814,12 +2819,16 @@ function _replayDraw() {
   const canvas = document.getElementById('rp-canvas');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
-  const dpr = window.devicePixelRatio||1;
-  // Use actual canvas size (flex fills container)
-  const W = canvas.offsetWidth  || canvas.parentElement?.clientWidth  || 800;
-  const H = canvas.offsetHeight || canvas.parentElement?.clientHeight || 420;
-  canvas.width  = W * dpr;
-  canvas.height = H * dpr;
+  const dpr = window.devicePixelRatio || 1;
+  // Canvas is flex:1 so it fills its parent - read parent height
+  const parent = canvas.parentElement;
+  const W = parent ? parent.clientWidth  : 800;
+  const H = parent ? Math.max(parent.clientHeight - 20, 200) : 400;
+  // Only resize if dimensions changed (prevents infinite loops)
+  if (canvas.width !== W * dpr || canvas.height !== H * dpr) {
+    canvas.width  = W * dpr;
+    canvas.height = H * dpr;
+  }
   ctx.scale(dpr, dpr);
   const PAD = {l:55,r:15,t:15,b:30};
   ctx.clearRect(0,0,W,H);

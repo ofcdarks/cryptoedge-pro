@@ -2075,7 +2075,7 @@ app.post('/api/billing/stripe/checkout', requireAuth, async (req, res) => {
   const PRICES = { pro: process.env.STRIPE_PRICE_PRO||'', expert: process.env.STRIPE_PRICE_EXPERT||'' };
   if (!PRICES[plan]) return res.status(400).json({ ok:false, error:'Configure STRIPE_PRICE_PRO e STRIPE_PRICE_EXPERT no .env' });
   try {
-    const stripe = require('stripe')(stripeKey);
+    const stripe = getStripe(stripeKey);
     const session = await stripe.checkout.sessions.create({
       mode:'subscription', payment_method_types:['card'],
       line_items:[{price:PRICES[plan], quantity:1}],
@@ -2096,7 +2096,7 @@ app.post('/api/billing/stripe/webhook', express.raw({type:'application/json'}), 
   if (!stripeKey) return res.status(400).json({ error:'Stripe não configurado' });
   let event;
   try {
-    const stripe = require('stripe')(stripeKey);
+    const stripe = getStripe(stripeKey);
     if (webhookSec) {
       event = stripe.webhooks.constructEvent(req.body, req.headers['stripe-signature'], webhookSec);
     } else {
@@ -2148,7 +2148,7 @@ app.post('/api/billing/stripe/portal', requireAuth, async (req, res) => {
   const stripeKey = process.env.STRIPE_SECRET_KEY || '';
   if (!stripeKey) return res.json({ ok:false, error:'Stripe não configurado' });
   try {
-    const stripe   = require('stripe')(stripeKey);
+    const stripe   = getStripe(stripeKey);
     const sub      = db.get('SELECT stripe_id FROM subscriptions WHERE username=? ORDER BY started_at DESC LIMIT 1',[req.user]);
     if (!sub?.stripe_id) return res.json({ ok:false, error:'Sem assinatura Stripe ativa' });
     const session  = await stripe.checkout.sessions.retrieve(sub.stripe_id);
@@ -2159,6 +2159,19 @@ app.post('/api/billing/stripe/portal', requireAuth, async (req, res) => {
     res.json({ ok:true, url:portal.url });
   } catch(e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
+// ─── Stripe safe loader ──────────────────────────────────────────────────────
+let _stripeLib = null;
+let _stripeAvailable = false;
+try {
+  _stripeLib = require('stripe');
+  _stripeAvailable = true;
+} catch { _stripeAvailable = false; }
+
+function getStripe(key) {
+  if (!_stripeAvailable) throw new Error('Módulo stripe não instalado. Faça redeploy ou execute: npm install stripe');
+  return _stripeLib(key);
+}
 
 // ─── Replay histórico tick-a-tick ─────────────────────────────────────────────
 app.get('/api/replay/klines', requireAuth, async (req, res) => {
