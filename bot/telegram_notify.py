@@ -176,21 +176,30 @@ def notify_start(symbol: str, strategy: str, capital: float, testnet: bool):
 
     # HFT: mostrar todos os pares monitorados
     if strategy.lower() == 'hft':
-        pairs_str = os.environ.get('HFT_PAIRS', symbol)
+        pairs_str  = os.environ.get('HFT_PAIRS', symbol)
         pairs_list = [p.strip() for p in pairs_str.split(',')]
-        tf  = os.environ.get('HFT_TIMEFRAME', '1m')
-        tp  = os.environ.get('HFT_TP_PCT', '0.35')
-        sl  = os.environ.get('HFT_SL_PCT', '0.18')
-        dl  = os.environ.get('HFT_DAILY_LOSS', '3.0')
+        tf         = os.environ.get('HFT_TIMEFRAME',  '1m')
+        tp         = os.environ.get('HFT_TP_PCT',     '0.35')
+        sl         = os.environ.get('HFT_SL_PCT',     '0.18')
+        dl         = os.environ.get('HFT_DAILY_LOSS', '3.0')
+        risk_pct   = os.environ.get('HFT_RISK_PCT',   '1.5')
         pairs_display = ', '.join(p.replace('USDT','') for p in pairs_list[:5])
         if len(pairs_list) > 5: pairs_display += f' +{len(pairs_list)-5}'
+        # Calcula lucro estimado por win com base no capital e risk reais
+        try:
+            budget   = float(capital) * float(risk_pct) / 100
+            per_win  = budget * float(tp) / 100
+            win_info = f'  💡 Budget/trade: <code>${budget:.2f}</code> → lucro/win: <code>${per_win:.4f}</code>'
+        except Exception:
+            win_info = ''
         _send(
             f'{mode_icon} <b>HFT Bot Iniciado ⚡</b>\n'
             f'{SEP}\n'
-            f'🌐 Pares:  <code>{pairs_display}</code> ({len(pairs_list)} total)\n'
-            f'⏱ TF:     <code>{tf}</code>  |  🎮 <code>{"TESTNET" if testnet else "REAL ⚠️"}</code>\n'
-            f'💰 Capital: <code>${capital:,.2f} USDT</code>  (1.5% por trade)\n'
+            f'🌐 Pares: <code>{pairs_display}</code> ({len(pairs_list)} total)\n'
+            f'⏱ TF:    <code>{tf}</code>  |  🎮 <code>{"TESTNET" if testnet else "REAL ⚠️"}</code>\n'
+            f'💰 Capital: <code>${capital:,.2f} USDT</code>  ({risk_pct}% por trade)\n'
             f'🎯 TP: <code>{tp}%</code>  🛡 SL: <code>{sl}%</code>  🛑 Daily: <code>{dl}%</code>\n'
+            f'{win_info}\n'
             f'{SEP}\n'
             f'<i>⚡ Monitorando {len(pairs_list)} pares em AUTO...</i>\n'
             f'🕐 <i>{_ts()}</i>'

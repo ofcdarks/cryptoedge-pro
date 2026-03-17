@@ -1256,18 +1256,48 @@ class HFTEngine:
         m = summary['monthly']; a = summary['annual']
         m_icon = '🟢' if m['pnl'] >= 0 else '🔴'
         a_icon = '🟢' if a['pnl'] >= 0 else '🔴'
+
+        # ── Projeção de lucro com base no capital real ─────────────────────────
+        risk_pct  = float(os.environ.get('HFT_RISK_PCT', '1.5'))
+        tp_pct    = float(os.environ.get('HFT_TP_PCT',   '0.35'))
+        sl_pct    = float(os.environ.get('HFT_SL_PCT',   '0.18'))
+        capital   = self.capital
+        budget    = capital * risk_pct / 100
+        per_win   = budget * tp_pct / 100
+        per_loss  = budget * sl_pct / 100
+        wins_real = self.daily_wins
+        loss_real = self.daily_losses
+        res_real  = wins_real * per_win - loss_real * per_loss
+        roi_day   = res_real / capital * 100 if capital > 0 else 0
+        # Projeção mensal baseada no WR real de hoje (22 dias úteis, 20 trades/dia)
+        avg_day   = res_real if total > 0 else 0
+        proj_mo   = avg_day * 22
+        roi_mo    = roi_day * 22
+        proj_line = (
+            f'───────────────────────\n'
+            f'💡 <b>Projeção — Capital Real</b>\n'
+            f'   Capital: <code>${capital:,.2f} USDT</code>  Risk: <code>{risk_pct}%</code>\n'
+            f'   Lucro/win: <code>${per_win:.4f}</code>  Perda/loss: <code>${per_loss:.4f}</code>\n'
+            f'   Resultado hoje: <code>{"+" if res_real>=0 else ""}${res_real:.4f}</code> ({roi_day:+.2f}%)\n'
+            f'   Proj. mensal: <code>{"+" if proj_mo>=0 else ""}${proj_mo:.2f}</code> ({roi_mo:+.1f}%/mês)\n'
+        )
+
+        pnl_sign = "+" if self.daily_pnl >= 0 else ""
+        m_sign   = "+" if m["pnl"] >= 0 else ""
+        a_sign   = "+" if a["pnl"] >= 0 else ""
         self.notify(
             f'📊 <b>Resumo Diário HFT</b>\n'
             f'───────────────────────\n'
-            f'{icon} <b>Hoje:</b> <code>{"+"if self.daily_pnl>=0 else ""}${self.daily_pnl:.4f}</code>\n'
+            f'{icon} <b>Hoje:</b> <code>{pnl_sign}${self.daily_pnl:.4f}</code>\n'
             f'📈 {total} trades | {self.daily_wins}W/{self.daily_losses}L{be_str} | WR:{wr:.1f}%\n'
             f'───────────────────────\n'
-            f'{m_icon} <b>Mês:</b> <code>{"+"if m["pnl"]>=0 else ""}${m["pnl"]:.4f}</code> | {m["wins"]}W/{m["losses"]}L WR:{m["win_rate"]}%\n'
-            f'{a_icon} <b>Ano:</b> <code>{"+"if a["pnl"]>=0 else ""}${a["pnl"]:.4f}</code> | {a["wins"]}W/{a["losses"]}L WR:{a["win_rate"]}%\n'
+            f'{m_icon} <b>Mês:</b> <code>{m_sign}${m["pnl"]:.4f}</code> | {m["wins"]}W/{m["losses"]}L WR:{m["win_rate"]}%\n'
+            f'{a_icon} <b>Ano:</b> <code>{a_sign}${a["pnl"]:.4f}</code> | {a["wins"]}W/{a["losses"]}L WR:{a["win_rate"]}%\n'
             f'───────────────────────\n'
             f'<b>Por par:</b>\n{pair_ln}\n'
             f'<b>Top estratégias:</b> {st_ln}\n'
             f'{ai_line}'
+            f'{proj_line}'
             f'🕐 <i>{datetime.datetime.now().strftime("%d/%m/%Y %H:%M")}</i>'
         )
 

@@ -326,6 +326,7 @@ async function init() {
     ['registration_mode', 'invite'],
     ['platform_name',     'CryptoEdge Pro'],
     ['max_users',         '100'],
+    ['hft_max_risk_pct',  '10'],
   ].forEach(([k,v]) => {
     try { _db.run("INSERT OR IGNORE INTO platform_settings (key,value) VALUES (?,?)", [k,v]); } catch(e){}
   });

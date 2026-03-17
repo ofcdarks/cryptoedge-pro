@@ -583,10 +583,10 @@
         <div class="grid g4" style="margin-bottom:10px">
           <div class="metric"><label>P&L Hoje</label><div class="val green" id="d-pnl">$0.00</div><div class="sub" id="d-trades-sub">0 trades</div></div>
           <div class="metric"><label>Win Rate</label><div class="val gold" id="d-winrate">—</div><div class="sub" id="d-wl">0W / 0L</div></div>
-          <div class="metric" style="cursor:pointer" onclick="loadRealBalance()" title="Clique para atualizar">
-            <label id="d-bal-label">Saldo Binance</label>
+          <div class="metric" style="cursor:pointer" onclick="loadStats()" title="Clique para atualizar">
+            <label id="d-bal-label">Capital Total</label>
             <div class="val" id="d-bal">$—</div>
-            <div class="sub" id="d-bal-sub">Clique para carregar</div>
+            <div class="sub" id="d-bal-sub">Saldo + PnL hoje</div>
           </div>
           <div class="metric"><label>Fear & Greed</label><div class="val" id="d-fng-val">—</div><div class="sub" id="d-fng-label">Carregando...</div></div>
         </div>
@@ -2513,7 +2513,18 @@
                   <option value="closed">🔒 Fechado — sem novos cadastros</option>
                 </select>
               </div>
-              <div class="field" style="margin-bottom:16px"><label>Limite máximo de usuários</label><input type="number" id="plat-max-users" placeholder="100" min="1"></div>
+              <div class="field" style="margin-bottom:14px"><label>Limite máximo de usuários</label><input type="number" id="plat-max-users" placeholder="100" min="1"></div>
+              <div style="border:1px solid rgba(239,159,39,.35);border-radius:8px;padding:12px;margin-bottom:14px;background:rgba(239,159,39,.05)">
+                <div style="font-size:11px;font-weight:700;color:var(--gold);margin-bottom:10px">⚡ Limites HFT Bot</div>
+                <div class="field" style="margin-bottom:0">
+                  <label style="display:flex;align-items:center;justify-content:space-between">
+                    <span>Risk máximo por trade (%)</span>
+                    <span id="plat-max-risk-hint" style="font-size:10px;color:var(--t3)">usuários não podem ultrapassar este valor</span>
+                  </label>
+                  <input type="number" id="plat-max-risk-pct" placeholder="10" min="0.5" max="50" step="0.5">
+                  <div style="font-size:10px;color:var(--t3);margin-top:3px">Padrão: 10% — recomendado ≤ 5% para segurança</div>
+                </div>
+              </div>
               <button class="btn btn-gold btn-full" onclick="savePlatformSettings()">💾 Salvar Configurações</button>
             </div>
             <div class="card">
@@ -2732,19 +2743,58 @@
         <!-- Config -->
         <div class="card" style="margin-bottom:10px">
           <div class="card-title" style="margin-bottom:12px">⚙️ Configuração HFT</div>
+
+          <!-- Profit Preview Banner -->
+          <div id="hft-profit-preview" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;background:rgba(29,158,117,.08);border:1px solid rgba(29,158,117,.3);border-radius:8px;padding:10px 14px;margin-bottom:12px">
+            <div style="font-size:11px;color:var(--t3)">💰 Previsão por win</div>
+            <div style="display:flex;gap:16px;flex-wrap:wrap">
+              <div style="text-align:center"><div style="font-size:10px;color:var(--t3)">Budget/trade</div><div id="prev-budget" style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--t1)">$4.50</div></div>
+              <div style="text-align:center"><div style="font-size:10px;color:var(--t3)">Lucro/win</div><div id="prev-per-win" style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--green)">$0.016</div></div>
+              <div style="text-align:center"><div style="font-size:10px;color:var(--t3)">Estimado/dia</div><div id="prev-per-day" style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--green)">$0.00</div></div>
+              <div style="text-align:center"><div style="font-size:10px;color:var(--t3)">Estimado/mês</div><div id="prev-per-month" style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--blue)">$0.00</div></div>
+            </div>
+          </div>
+
+          <!-- Alerta Testnet -->
+          <div id="hft-testnet-warn" style="display:flex;align-items:center;gap:8px;background:rgba(239,159,39,.1);border:1px solid rgba(239,159,39,.4);border-radius:8px;padding:9px 12px;margin-bottom:12px;font-size:11px;color:var(--gold)">
+            🧪 <b>TESTNET ATIVO</b> — resultados são simulados. Nenhum dinheiro real é usado. Mude para <b>Real</b> quando validado.
+          </div>
+
           <div class="grid g3" style="gap:10px;margin-bottom:12px">
             <div class="field">
-              <label>Capital por trade (%)</label>
-              <input type="number" id="hft-risk-pct" value="1.5" step="0.1" min="0.5" max="5">
+              <label style="display:flex;align-items:center;justify-content:space-between">
+                <span>Capital a usar (USDT)</span>
+                <button onclick="syncHFTCapitalFromBinance()" id="hft-cap-sync-btn"
+                  style="font-size:10px;padding:2px 8px;border-radius:4px;border:1px solid var(--border);background:transparent;color:var(--t2);cursor:pointer">
+                  🔄 Sincronizar saldo
+                </button>
+              </label>
+              <input type="number" id="hft-capital" value="300" step="10" min="10" oninput="updateHFTProfitPreview();scheduleHFTSave()">
+              <div id="hft-capital-hint" style="font-size:10px;color:var(--t3);margin-top:3px">
+                Saldo real: <span id="hft-real-balance" style="color:var(--t2)">clique em sincronizar</span>
+                — <span id="hft-capital-pct-hint">usando 100% do capital</span>
+              </div>
+            </div>
+            <div class="field">
+              <label>Modo de operação</label>
+              <select id="hft-testnet" onchange="updateHFTTestnetWarn();scheduleHFTSave()">
+                <option value="true" selected>🧪 Testnet (simulado)</option>
+                <option value="paper">📋 Paper Trading</option>
+                <option value="false">🔴 Real (dinheiro real)</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Risk por trade (%)</label>
+              <input type="number" id="hft-risk-pct" value="1.5" step="0.1" min="0.5" max="10" oninput="updateHFTProfitPreview();scheduleHFTSave()">
               <div style="font-size:10px;color:var(--t3);margin-top:3px">% do capital em cada operação</div>
             </div>
             <div class="field">
               <label>Take Profit (%)</label>
-              <input type="number" id="hft-tp-pct" value="0.35" step="0.05" min="0.1" max="2" oninput="updateTrailPreview()">
+              <input type="number" id="hft-tp-pct" value="0.35" step="0.05" min="0.1" max="2" oninput="updateTrailPreview();updateHFTProfitPreview();scheduleHFTSave()">
             </div>
             <div class="field">
               <label>Stop Loss (%)</label>
-              <input type="number" id="hft-sl-pct" value="0.18" step="0.05" min="0.05" max="1">
+              <input type="number" id="hft-sl-pct" value="0.18" step="0.05" min="0.05" max="1" oninput="updateHFTProfitPreview();scheduleHFTSave()">
             </div>
             <div class="field">
               <label>Timeframe</label>
@@ -2756,16 +2806,16 @@
             </div>
             <div class="field">
               <label>Cooldown entre trades (s)</label>
-              <input type="number" id="hft-cooldown" value="45" step="5" min="10" max="300">
+              <input type="number" id="hft-cooldown" value="45" step="5" min="10" max="300" oninput="scheduleHFTSave()">
             </div>
             <div class="field">
               <label>Daily Loss Limit (%)</label>
-              <input type="number" id="hft-daily-loss" value="3.0" step="0.5" min="0.5" max="10">
+              <input type="number" id="hft-daily-loss" value="3.0" step="0.5" min="0.5" max="10" oninput="scheduleHFTSave()">
               <div style="font-size:10px;color:var(--t3);margin-top:3px">Para o bot se atingir X% de perda no dia</div>
             </div>
             <div class="field">
               <label>Máx. posições simultâneas</label>
-              <input type="number" id="hft-max-trades" value="3" step="1" min="1" max="20" oninput="updateMaxTradesHint()">
+              <input type="number" id="hft-max-trades" value="3" step="1" min="1" max="20" oninput="updateMaxTradesHint();scheduleHFTSave()">
               <div id="hft-max-hint" style="font-size:10px;color:var(--t3);margin-top:3px">3 posições ≈ $13.50 em uso (1.5% de $300)</div>
             </div>
           </div>

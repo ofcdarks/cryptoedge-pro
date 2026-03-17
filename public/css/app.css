@@ -525,6 +525,15 @@ td.green{color:var(--green)}td.red{color:var(--red)}td.gold{color:var(--gold)}td
   min-height: 200px;
 }
 
+/* FIX: Impede o iframe do TradingView de vazar sobre outros painéis.
+   O JS alterna visibility ao trocar de painel, mas como redundância
+   também garantimos que o contêiner pai some com o painel. */
+#panel-dashboard:not(.active) #tradingview-widget,
+#panel-dashboard:not(.active) #tv-loading {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 /* Admin panel: no top gap */
 #panel-admin { padding-top: 0; }
 #panel-admin > div:first-child { margin-top: 0; }

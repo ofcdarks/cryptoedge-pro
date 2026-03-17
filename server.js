@@ -391,6 +391,74 @@ app.get('/api/trades/stats', requireAuth, (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── Dashboard Summary — une bot_trades + trades manuais + saldo Binance ──────
+app.get('/api/dashboard/summary', requireAuth, async (req, res) => {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+
+    // Bot trades (HFT/pattern) — hoje
+    const botToday = db.all(
+      `SELECT pnl, result FROM bot_trades WHERE username=? AND status='closed' AND closed_at >= ?`,
+      [req.user, today + ' 00:00:00']
+    );
+    // Trades manuais (journal) — hoje
+    const manualToday = db.all(
+      `SELECT pnl, result FROM trades WHERE username=? AND created_at >= ?`,
+      [req.user, today + ' 00:00:00']
+    );
+
+    // Bot trades — total
+    const botAll = db.all(`SELECT pnl FROM bot_trades WHERE username=? AND status='closed'`, [req.user]);
+    // Trades manuais — total
+    const manualAll = db.all(`SELECT pnl, result FROM trades WHERE username=?`, [req.user]);
+
+    const sumPnl = arr => arr.reduce((s, t) => s + (parseFloat(t.pnl) || 0), 0);
+
+    const todayAll   = [...botToday, ...manualToday];
+    const pnlToday   = sumPnl(todayAll);
+    const winsToday  = botToday.filter(t => (t.pnl||0) > 0).length +
+                       manualToday.filter(t => t.result === 'win').length;
+    const lossesToday= botToday.filter(t => (t.pnl||0) < 0).length +
+                       manualToday.filter(t => t.result === 'loss').length;
+    const totalToday = todayAll.length;
+    const wrToday    = totalToday > 0 ? ((winsToday / totalToday) * 100).toFixed(1) : 0;
+
+    const pnlTotal  = sumPnl(botAll) + sumPnl(manualAll);
+    const winsAll   = botAll.filter(t => (t.pnl||0) > 0).length +
+                      manualAll.filter(t => t.result === 'win').length;
+    const totalAll  = botAll.length + manualAll.length;
+
+    // Tenta buscar saldo Binance (sem await longo — usa cache se disponível)
+    let binanceBalance = null;
+    try {
+      const user   = db.get('SELECT binance_key, binance_secret, binance_secret_enc FROM users WHERE username=?', [req.user]);
+      const apiKey = user?.binance_key || process.env.BINANCE_API_KEY || '';
+      const secret = user?.binance_secret_enc
+        ? (decryptSecret(user.binance_secret_enc) || process.env.BINANCE_SECRET_KEY || '')
+        : (user?.binance_secret || process.env.BINANCE_SECRET_KEY || '');
+      if (apiKey && secret) {
+        const ts = Date.now();
+        const mkSig = qs => crypto.createHmac('sha256', secret).update(qs).digest('hex');
+        const qs = `timestamp=${ts}&recvWindow=10000`;
+        const rF = await axios.get(`https://fapi.binance.com/fapi/v2/balance?${qs}&signature=${mkSig(qs)}`,
+          { headers: { 'X-MBX-APIKEY': apiKey }, timeout: 5000 });
+        const usdtB = rF.data.find(b => b.asset === 'USDT');
+        if (usdtB) binanceBalance = parseFloat(usdtB.balance);
+      }
+    } catch { /* sem chaves ou erro — ignora */ }
+
+    const capitalTotal = binanceBalance !== null ? binanceBalance + pnlToday : null;
+
+    res.json({
+      ok: true,
+      today: { pnl: +pnlToday.toFixed(4), wins: winsToday, losses: lossesToday, total: totalToday, wr: +wrToday },
+      all:   { pnl: +pnlTotal.toFixed(4), wins: winsAll, total: totalAll, wr: totalAll > 0 ? +((winsAll/totalAll)*100).toFixed(1) : 0 },
+      binance: binanceBalance !== null ? +binanceBalance.toFixed(2) : null,
+      capital_total: capitalTotal !== null ? +capitalTotal.toFixed(2) : null,
+    });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // Export CSV dos trades
 app.get('/api/trades/export/csv', requireAuth, (req, res) => {
   try {
@@ -822,6 +890,37 @@ function _getBotAutostart() {
   try { const r = db.get('SELECT value FROM platform_settings WHERE key=?',[BOT_STATE_KEY]); return r?.value==='1'; } catch { return false; }
 }
 
+// ─── HFT User Settings — persiste config HFT por usuário no banco ─────────────
+app.get('/api/hft/user-settings', requireAuth, (req, res) => {
+  try {
+    const row = db.get('SELECT data FROM settings WHERE username=?', [req.user]);
+    const all = row ? JSON.parse(row.data || '{}') : {};
+    res.json({ ok: true, hft: all.hft || {} });
+  } catch(e) { res.json({ ok: true, hft: {} }); }
+});
+
+app.post('/api/hft/user-settings', requireAuth, (req, res) => {
+  try {
+    const { hft } = req.body || {};
+    if (!hft || typeof hft !== 'object') return res.status(400).json({ ok: false, error: 'hft required' });
+    // Merge com settings existentes do usuário
+    const row  = db.get('SELECT data FROM settings WHERE username=?', [req.user]);
+    const prev = row ? JSON.parse(row.data || '{}') : {};
+    const next = JSON.stringify({ ...prev, hft });
+    if (row) db.run('UPDATE settings SET data=?, updated_at=datetime("now") WHERE username=?', [next, req.user]);
+    else     db.insert('settings', { username: req.user, data: next });
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// ─── Admin: lê limite máximo de risk HFT (público para o frontend mostrar) ────
+app.get('/api/hft/max-risk', requireAuth, (req, res) => {
+  try {
+    const v = db.get("SELECT value FROM platform_settings WHERE key='hft_max_risk_pct'")?.value || '10';
+    res.json({ ok: true, max_risk_pct: parseFloat(v) });
+  } catch(e) { res.json({ ok: true, max_risk_pct: 10 }); }
+});
+
 app.get('/api/bot/status', requireAuth, (req, res) => {
   const pid = _botPid();
   // Read current strategy from .bot.env
@@ -889,8 +988,13 @@ app.post('/api/bot/start', requireAuth, async (req, res) => {
     if (body.capital)    env['BOT_CAPITAL']    = String(body.capital);
     if (body.symbol)     env['BOT_SYMBOL']     = body.symbol.toUpperCase();
 
-    // HFT específicos
-    if (body.hft_risk_pct)   env['HFT_RISK_PCT']   = String(body.hft_risk_pct);
+    // HFT específicos — valida risk contra limite do admin
+    if (body.hft_risk_pct) {
+      const maxRisk = parseFloat(db.get("SELECT value FROM platform_settings WHERE key='hft_max_risk_pct'")?.value || '10');
+      const reqRisk = parseFloat(body.hft_risk_pct);
+      if (reqRisk > maxRisk) return res.status(400).json({ ok: false, error: `Risk máximo permitido: ${maxRisk}% (configurado pelo admin)` });
+      env['HFT_RISK_PCT'] = String(reqRisk);
+    }
     if (body.hft_tp_pct)     env['HFT_TP_PCT']      = String(body.hft_tp_pct);
     if (body.hft_sl_pct)     env['HFT_SL_PCT']      = String(body.hft_sl_pct);
     if (body.hft_cooldown)   env['HFT_COOLDOWN']    = String(body.hft_cooldown);

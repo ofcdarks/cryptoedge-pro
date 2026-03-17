@@ -441,6 +441,18 @@ document.querySelectorAll('.nav-item').forEach(item => {
       // Always reset scroll to top on panel switch
       panel.scrollTop = 0;
     }
+    // FIX: TradingView iframe tem compositing layer proprio e vaza sobre outros paineis.
+    // Esconde o widget ao sair do dashboard e mostra ao retornar.
+    const tvWidget = document.getElementById('tradingview-widget');
+    if (tvWidget) {
+      if (item.dataset.panel === 'dashboard') {
+        tvWidget.style.visibility = 'visible';
+        tvWidget.style.pointerEvents = 'auto';
+      } else {
+        tvWidget.style.visibility = 'hidden';
+        tvWidget.style.pointerEvents = 'none';
+      }
+    }
     // Para polling do bot ao sair do painel
     if (item.dataset.panel !== 'hft' && _hftRefreshTimer) {
       clearInterval(_hftRefreshTimer); _hftRefreshTimer = null;
@@ -1116,39 +1128,58 @@ async function loadTrades() {
 
 async function loadStats() {
   try {
-    const res = await fetch('/api/trades/stats', { headers: auth.headers() });
+    const res = await fetch('/api/dashboard/summary', { headers: auth.headers() });
     if (!res.ok) return;
     const s = await res.json();
-    if (s.error) return;
+    if (!s.ok) return;
 
-    // Safe number parsing — prevents NaN/undefined in UI
-    const total   = parseInt(s.total)   || 0;
-    const wins    = parseInt(s.wins)    || 0;
-    const losses  = parseInt(s.losses)  || 0;
-    const winRate = isNaN(parseFloat(s.winRate))  ? 0 : parseFloat(s.winRate);
-    const pnl     = isNaN(parseFloat(s.totalPnl)) ? 0 : parseFloat(s.totalPnl);
+    const pnlToday  = s.today.pnl || 0;
+    const wins      = s.today.wins || 0;
+    const losses    = s.today.losses || 0;
+    const total     = s.today.total || 0;
+    const wr        = s.today.wr || 0;
 
-    // Journal stats
-    if (el('st-total')) el('st-total').textContent = total;
+    // Journal stats (all-time)
+    if (el('st-total')) el('st-total').textContent = s.all.total;
     if (el('st-wr')) {
-      el('st-wr').textContent = winRate.toFixed(1) + '%';
-      el('st-wr').style.color = winRate >= 50 ? 'var(--green)' : 'var(--red)';
+      el('st-wr').textContent = s.all.wr.toFixed(1) + '%';
+      el('st-wr').style.color = s.all.wr >= 50 ? 'var(--green)' : 'var(--red)';
     }
     if (el('st-pnl')) {
-      el('st-pnl').textContent = fmtUSD(pnl);
-      el('st-pnl').className = 'val ' + (pnl >= 0 ? 'green' : 'red');
+      el('st-pnl').textContent = fmtUSD(s.all.pnl);
+      el('st-pnl').className = 'val ' + (s.all.pnl >= 0 ? 'green' : 'red');
     }
-    if (el('st-wl')) el('st-wl').textContent = wins + ' / ' + losses;
+    if (el('st-wl')) el('st-wl').textContent = s.all.wins + ' / ' + (s.all.total - s.all.wins);
 
-    // Dashboard stats
+    // Dashboard — P&L Hoje (bot + manual juntos)
     if (el('d-pnl')) {
-      el('d-pnl').textContent = (pnl >= 0 ? '+' : '') + fmtUSD(Math.abs(pnl));
-      el('d-pnl').className = 'val ' + (pnl >= 0 ? 'green' : 'red');
+      el('d-pnl').textContent = (pnlToday >= 0 ? '+' : '') + fmtUSD(Math.abs(pnlToday));
+      el('d-pnl').className = 'val ' + (pnlToday >= 0 ? 'green' : 'red');
     }
-    if (el('d-winrate')) el('d-winrate').textContent = total > 0 ? winRate.toFixed(1) + '%' : '—';
-    if (el('d-trades-sub')) el('d-trades-sub').textContent = total + ' trade' + (total !== 1 ? 's' : '') + ' registrado' + (total !== 1 ? 's' : '');
+    if (el('d-winrate')) el('d-winrate').textContent = total > 0 ? wr.toFixed(1) + '%' : '—';
+    if (el('d-trades-sub')) el('d-trades-sub').textContent = total + ' trade' + (total !== 1 ? 's' : '') + ' hoje (bot + manual)';
     if (el('d-wl')) el('d-wl').textContent = wins + 'W / ' + losses + 'L';
-  } catch {}
+
+    // Card "Saldo Binance" — mostra capital total (saldo + PnL hoje)
+    const balEl  = el('d-bal');
+    const subEl  = el('d-bal-sub');
+    const lblEl  = el('d-bal-label');
+    if (s.binance !== null && s.capital_total !== null) {
+      if (balEl) {
+        balEl.textContent = '$' + s.capital_total.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        balEl.className = 'val ' + (s.capital_total >= s.binance ? 'green' : 'red');
+      }
+      if (lblEl) lblEl.textContent = 'Capital Total';
+      if (subEl) {
+        const diff = pnlToday >= 0 ? '+$' + pnlToday.toFixed(4) : '-$' + Math.abs(pnlToday).toFixed(4);
+        subEl.textContent = 'Saldo $' + s.binance.toFixed(2) + ' + PnL hoje ' + diff;
+      }
+    } else if (s.binance !== null) {
+      if (balEl) { balEl.textContent = '$' + s.binance.toFixed(2); balEl.className = 'val green'; }
+      if (lblEl) lblEl.textContent = 'Saldo Binance';
+      if (subEl) subEl.textContent = 'PnL hoje: ' + (pnlToday >= 0 ? '+' : '') + '$' + pnlToday.toFixed(4);
+    }
+  } catch(e) {}
 }
 
 function renderTradeList(trades) {
@@ -5923,20 +5954,22 @@ async function loadPlatformSettings() {
     if (!d.ok) return;
     const s = d.settings;
     const setVal = (id, v) => { const e=document.getElementById(id); if(e) e.value=v||''; };
-    setVal('plat-name',      s.platform_name);
-    setVal('plat-reg-mode',  s.registration_mode);
-    setVal('plat-max-users', s.max_users);
+    setVal('plat-name',         s.platform_name);
+    setVal('plat-reg-mode',     s.registration_mode);
+    setVal('plat-max-users',    s.max_users);
+    setVal('plat-max-risk-pct', s.hft_max_risk_pct || '10');
   } catch(e) {}
 }
 
 async function savePlatformSettings() {
-  const name    = document.getElementById('plat-name')?.value.trim();
-  const regMode = document.getElementById('plat-reg-mode')?.value;
-  const maxUsers= document.getElementById('plat-max-users')?.value;
+  const name       = document.getElementById('plat-name')?.value.trim();
+  const regMode    = document.getElementById('plat-reg-mode')?.value;
+  const maxUsers   = document.getElementById('plat-max-users')?.value;
+  const maxRiskPct = document.getElementById('plat-max-risk-pct')?.value || '10';
   try {
     const r = await fetch('/api/admin/settings', {
       method:'POST', headers: auth.headers(),
-      body: JSON.stringify({ settings: { platform_name:name, registration_mode:regMode, max_users:maxUsers } })
+      body: JSON.stringify({ settings: { platform_name:name, registration_mode:regMode, max_users:maxUsers, hft_max_risk_pct:maxRiskPct } })
     });
     const d = await r.json();
     if (d.ok) showToast('✅ Configurações salvas!');
@@ -7043,6 +7076,34 @@ const HFT_PAIRS_DEFAULT = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT',
 let _hftRefreshTimer = null;
 
 function initHFTPanel() {
+  // Carrega configurações salvas do banco (persiste entre reloads)
+  Promise.all([
+    fetch('/api/hft/user-settings', { headers: auth.headers() }).then(r => r.json()).catch(() => ({ hft: {} })),
+    fetch('/api/hft/max-risk',      { headers: auth.headers() }).then(r => r.json()).catch(() => ({ max_risk_pct: 10 })),
+    fetch('/api/bot/config',        { headers: auth.headers() }).then(r => r.json()).catch(() => ({ config: {} })),
+  ]).then(([userSet, maxRisk, botCfg]) => {
+    const hft = userSet.hft || {};
+    const cfg = botCfg.config || {};
+    const setV = (id, val) => { const el = document.getElementById(id); if (el && val !== undefined) el.value = val; };
+    // Banco tem prioridade; .bot.env é fallback
+    setV('hft-capital',    hft.capital    || cfg.BOT_CAPITAL     || '300');
+    setV('hft-risk-pct',   hft.risk_pct   || cfg.HFT_RISK_PCT    || '1.5');
+    setV('hft-tp-pct',     hft.tp_pct     || cfg.HFT_TP_PCT      || '0.35');
+    setV('hft-sl-pct',     hft.sl_pct     || cfg.HFT_SL_PCT      || '0.18');
+    setV('hft-cooldown',   hft.cooldown   || cfg.HFT_COOLDOWN    || '45');
+    setV('hft-daily-loss', hft.daily_loss || cfg.HFT_DAILY_LOSS  || '3.0');
+    setV('hft-max-trades', hft.max_trades || '3');
+    const tnVal = hft.testnet || cfg.BOT_TESTNET || 'true';
+    const tnEl  = document.getElementById('hft-testnet');
+    if (tnEl) tnEl.value = tnVal === 'false' ? 'false' : tnVal === 'paper' ? 'paper' : 'true';
+    // Aplica limite máximo de risk definido pelo admin
+    const maxR = maxRisk.max_risk_pct || 10;
+    const riskEl = document.getElementById('hft-risk-pct');
+    if (riskEl) { riskEl.max = maxR; riskEl.title = `Máximo permitido: ${maxR}%`; }
+    updateHFTTestnetWarn();
+    updateHFTProfitPreview();
+    updateMaxTradesHint();
+  });
   // Inicializa trail stop + AI preview
   setTimeout(() => {
     applyTrailPreset('equilibrado');
@@ -7072,6 +7133,8 @@ function initHFTPanel() {
   }
   loadHFTStats();
   if (!_hftRefreshTimer) _hftRefreshTimer = setInterval(loadHFTStats, 5000);
+  // Busca saldo real da Binance silenciosamente ao abrir o painel
+  syncHFTCapitalFromBinance(true);
 }
 
 // ─── Trail Stop Progressivo — UI ─────────────────────────────────────────────
@@ -7212,13 +7275,139 @@ function getAIConfig() {
 
 // ─── HFT Start / Stop ─────────────────────────────────────────────────────────
 
+// ─── Sincroniza capital HFT com saldo real da Binance ─────────────────────────
+let _cachedBinanceBalance = null;
+
+async function syncHFTCapitalFromBinance(silent = false) {
+  const btn     = document.getElementById('hft-cap-sync-btn');
+  const balSpan = document.getElementById('hft-real-balance');
+  const capEl   = document.getElementById('hft-capital');
+  if (btn) { btn.textContent = '⏳ Buscando...'; btn.disabled = true; }
+  try {
+    const r = await fetch('/api/binance/balance', { headers: auth.headers() });
+    const d = await r.json();
+    if (d.ok && d.totalUSDT) {
+      const bal = parseFloat(d.totalUSDT);
+      _cachedBinanceBalance = bal;
+      if (balSpan) {
+        balSpan.textContent = '$' + bal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        balSpan.style.color = 'var(--green)';
+      }
+      // Preenche o campo automaticamente com o saldo real
+      if (capEl) {
+        capEl.value = bal.toFixed(2);
+        capEl.style.borderColor = 'rgba(29,158,117,.5)';
+      }
+      updateHFTProfitPreview();
+      scheduleHFTSave();
+      if (!silent) showToast('✅ Capital sincronizado: $' + bal.toFixed(2) + ' USDT');
+    } else {
+      const msg = d.error || 'Erro ao buscar saldo';
+      if (balSpan) { balSpan.textContent = '⚠️ ' + msg.slice(0, 40); balSpan.style.color = 'var(--red)'; }
+      if (!silent) showToast('⚠️ ' + msg.slice(0, 60), true);
+    }
+  } catch(e) {
+    if (balSpan) { balSpan.textContent = '⚠️ Sem conexão'; balSpan.style.color = 'var(--red)'; }
+    if (!silent) showToast('❌ ' + e.message, true);
+  } finally {
+    if (btn) { btn.textContent = '🔄 Sincronizar saldo'; btn.disabled = false; }
+  }
+}
+
 function updateMaxTradesHint() {
-  const maxT  = parseInt(document.getElementById('hft-max-trades')?.value || '3');
-  const risk  = parseFloat(document.getElementById('hft-risk-pct')?.value  || '1.5');
-  const capEl = document.getElementById('hft-capital');
-  const cap   = capEl ? parseFloat(capEl.value || '300') : 300;
-  const hint  = document.getElementById('hft-max-hint');
+  const maxT = parseInt(document.getElementById('hft-max-trades')?.value || '3');
+  const risk = parseFloat(document.getElementById('hft-risk-pct')?.value || '1.5');
+  const cap  = parseFloat(document.getElementById('hft-capital')?.value  || '300');
+  const hint = document.getElementById('hft-max-hint');
   if (hint) hint.textContent = `${maxT} posições ≈ $${(maxT * cap * risk / 100).toFixed(2)} em uso (${risk}% de $${cap})`;
+  updateHFTProfitPreview();
+}
+
+function updateHFTTestnetWarn() {
+  const tn   = document.getElementById('hft-testnet')?.value;
+  const warn = document.getElementById('hft-testnet-warn');
+  if (!warn) return;
+  if (tn === 'false') {
+    warn.style.display = 'flex';
+    warn.style.background = 'rgba(227,68,68,.1)';
+    warn.style.borderColor = 'rgba(227,68,68,.4)';
+    warn.style.color = 'var(--red)';
+    warn.innerHTML = '🔴 <b>MODO REAL ATIVO</b> — operações usarão dinheiro real. Certifique-se que testou em Testnet antes.';
+  } else if (tn === 'paper') {
+    warn.style.display = 'flex';
+    warn.style.background = 'rgba(55,138,221,.08)';
+    warn.style.borderColor = 'rgba(55,138,221,.3)';
+    warn.style.color = 'var(--blue)';
+    warn.innerHTML = '📋 <b>PAPER TRADING</b> — simulação com preços reais mas sem dinheiro real.';
+  } else {
+    warn.style.display = 'flex';
+    warn.style.background = 'rgba(239,159,39,.1)';
+    warn.style.borderColor = 'rgba(239,159,39,.4)';
+    warn.style.color = 'var(--gold)';
+    warn.innerHTML = '🧪 <b>TESTNET ATIVO</b> — resultados são simulados. Nenhum dinheiro real é usado. Mude para <b>Real</b> quando validado.';
+  }
+}
+
+function updateHFTProfitPreview() {
+  const cap    = parseFloat(document.getElementById('hft-capital')?.value   || '300');
+  const risk   = parseFloat(document.getElementById('hft-risk-pct')?.value  || '1.5');
+  const tp     = parseFloat(document.getElementById('hft-tp-pct')?.value    || '0.35');
+  const sl     = parseFloat(document.getElementById('hft-sl-pct')?.value    || '0.18');
+  const budget = cap * risk / 100;
+  const perWin = budget * tp / 100;
+  const perLoss= budget * sl / 100;
+  // Estimativa conservadora: 20 trades/dia, WR ~70%
+  const dayTrades = 20, wr = 0.70;
+  const perDay    = dayTrades * wr * perWin - dayTrades * (1-wr) * perLoss;
+  const perMonth  = perDay * 22;
+  const fmtVal = v => Math.abs(v) < 0.01 ? '$' + v.toFixed(4) : Math.abs(v) < 1 ? '$' + v.toFixed(3) : '$' + v.toFixed(2);
+  const e = id => document.getElementById(id);
+  if (e('prev-budget'))    e('prev-budget').textContent    = fmtVal(budget);
+  if (e('prev-per-win'))   e('prev-per-win').textContent   = fmtVal(perWin);
+  if (e('prev-per-day'))   { e('prev-per-day').textContent = fmtVal(perDay);   e('prev-per-day').style.color   = perDay >= 0 ? 'var(--green)' : 'var(--red)'; }
+  if (e('prev-per-month')) { e('prev-per-month').textContent = fmtVal(perMonth); e('prev-per-month').style.color = perMonth >= 0 ? 'var(--blue)' : 'var(--red)'; }
+  // Mostra % do saldo real que está sendo usado
+  const pctHint = e('hft-capital-pct-hint');
+  if (pctHint) {
+    if (_cachedBinanceBalance && _cachedBinanceBalance > 0) {
+      const pct = (cap / _cachedBinanceBalance * 100).toFixed(0);
+      pctHint.textContent = `usando ${pct}% do saldo real`;
+      pctHint.style.color = pct > 100 ? 'var(--red)' : pct > 80 ? 'var(--gold)' : 'var(--t3)';
+    } else {
+      pctHint.textContent = 'usando ' + cap + ' USDT';
+      pctHint.style.color = 'var(--t3)';
+    }
+  }
+  // Cor do risk-pct como indicador de risco
+  const riskEl = document.getElementById('hft-risk-pct');
+  if (riskEl) riskEl.style.borderColor = risk <= 2 ? '' : risk <= 5 ? 'rgba(239,159,39,.6)' : 'rgba(227,68,68,.6)';
+}
+
+// ─── HFT Settings — persiste no banco ao iniciar ─────────────────────────────
+let _hftSaveTimer = null;
+function scheduleHFTSave() {
+  if (_hftSaveTimer) clearTimeout(_hftSaveTimer);
+  _hftSaveTimer = setTimeout(saveHFTSettings, 1200);
+}
+
+async function saveHFTSettings() {
+  try {
+    const hft = {
+      capital:    document.getElementById('hft-capital')?.value    || '300',
+      risk_pct:   document.getElementById('hft-risk-pct')?.value   || '1.5',
+      tp_pct:     document.getElementById('hft-tp-pct')?.value     || '0.35',
+      sl_pct:     document.getElementById('hft-sl-pct')?.value     || '0.18',
+      cooldown:   document.getElementById('hft-cooldown')?.value   || '45',
+      daily_loss: document.getElementById('hft-daily-loss')?.value || '3.0',
+      max_trades: document.getElementById('hft-max-trades')?.value || '3',
+      testnet:    document.getElementById('hft-testnet')?.value    || 'true',
+    };
+    await fetch('/api/hft/user-settings', {
+      method: 'POST',
+      headers: { ...auth.headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hft })
+    });
+  } catch(e) {}
 }
 
 async function hftStart() {
@@ -7240,6 +7429,8 @@ async function hftStart() {
   }
 
   const riskPct = parseFloat(document.getElementById('hft-risk-pct')?.value || '1.5');
+  const capital = parseFloat(document.getElementById('hft-capital')?.value   || '300');
+  const testnet = document.getElementById('hft-testnet')?.value ?? 'true';
   const maxT    = parseInt(document.getElementById('hft-max-trades')?.value   || '3');
 
   // Lê trail config com fallback seguro
@@ -7254,6 +7445,8 @@ async function hftStart() {
     strategy:       'hft',
     timeframe:      document.getElementById('hft-tf')?.value         || '1m',
     trade_mode:     'auto',
+    capital:        String(capital),
+    testnet:        testnet,
     hft_risk_pct:   String(riskPct),
     hft_tp_pct:     document.getElementById('hft-tp-pct')?.value     || '0.40',
     hft_sl_pct:     document.getElementById('hft-sl-pct')?.value     || '0.20',
@@ -7271,13 +7464,16 @@ async function hftStart() {
   const aiLine    = aiEnabled
     ? `IA Expert: ATIVA (conf mín ${document.getElementById('hft-ai-min-conf')?.value || 55}%)\n`
     : 'IA Expert: desativada\n';
+  const modeLabel = testnet === 'false' ? '🔴 REAL' : testnet === 'paper' ? '📋 Paper' : '🧪 Testnet';
   const ok = await showConfirm('⚡ Iniciar HFT',
     `O bot vai operar AUTOMATICAMENTE nos ${pairs.length} pares selecionados.
 
-TP: ${config.hft_tp_pct}% | SL: ${config.hft_sl_pct}% | Daily Loss Limit: ${config.hft_daily_loss}%
+Capital: $${capital} | Modo: ${modeLabel} | Risk: ${riskPct}%
+TP: ${config.hft_tp_pct}% | SL: ${config.hft_sl_pct}% | Daily Loss: ${config.hft_daily_loss}%
 ${trailInfo}${aiLine}
 Sem confirmação manual — cada sinal é executado imediatamente.`);
   if (!ok) return;
+  await saveHFTSettings(); // persiste config no banco antes de iniciar
   if (startBtn) { startBtn.disabled = true; startBtn.textContent = '⏳ Iniciando...'; }
   try {
     const r = await fetch('/api/bot/start', {
