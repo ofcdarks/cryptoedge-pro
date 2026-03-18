@@ -106,7 +106,25 @@ def _stop_poller():
         _pending.clear()
 
 def _poll_loop():
+    # Inicializa offset com o update mais recente para não reprocessar
+    # mensagens antigas que já foram enviadas antes do bot iniciar
     offset = 0
+    try:
+        token = _token()
+        if token:
+            r0 = requests.get(
+                f'https://api.telegram.org/bot{token}/getUpdates',
+                params={'offset': -1, 'limit': 1},
+                timeout=10
+            )
+            if r0.status_code == 200:
+                results = r0.json().get('result', [])
+                if results:
+                    offset = results[-1]['update_id'] + 1
+                    log.info(f'  📲 Telegram poller: offset inicial = {offset} (pulando mensagens antigas)')
+    except Exception as _ie:
+        log.debug(f'  Telegram offset init erro: {_ie}')
+
     while _poller_running:
         try:
             token = _token()
@@ -145,30 +163,41 @@ def _poll_loop():
 
                     elif txt in ('/status', '/info', '/saldo'):
                         try:
+                            import os as _os2
                             from hft_strategy import get_hft_engine
                             eng = get_hft_engine()
                             if eng:
-                                s = eng.get_stats()
-                                pnl = s.get('daily_pnl', 0)
+                                s    = eng.get_stats()
+                                pnl  = s.get('daily_pnl', 0)
                                 wins = s.get('daily_wins', 0)
                                 losses = s.get('daily_losses', 0)
-                                cap = eng.capital
-                                budget = round(cap * float(_os.environ.get('HFT_RISK_PCT','10')) / 100, 2)
-                                icon = '🟢' if pnl >= 0 else '🔴'
+                                cap  = eng.capital
+                                risk_pct = float(_os2.environ.get('HFT_RISK_PCT', '10'))
+                                budget = round(cap * risk_pct / 100, 2)
+                                icon   = '🟢' if pnl >= 0 else '🔴'
+                                run_icon = '▶️' if eng.running else '⏸'
+                                total = wins + losses
+                                wr_str = f'{wins/(total)*100:.0f}%' if total > 0 else 'N/A'
+                                trade_line = (
+                                    f'📈 {wins}W / {losses}L | WR: {wr_str}'
+                                    if total > 0 else '📊 Nenhum trade hoje ainda'
+                                )
                                 _send(
-                                    f'📊 <b>Status HFT</b>\n'
-                                    f'💰 Capital: <code>${cap:.2f}</code> | Budget/trade: <code>${budget:.2f}</code>\n'
+                                    f'📊 <b>Status HFT</b> {run_icon}\n'
+                                    f'──────────────────────\n'
+                                    f'💰 Capital: <code>${cap:.2f}</code> | Budget: <code>${budget:.2f}</code>\n'
                                     f'{icon} P&L hoje: <code>{"+" if pnl>=0 else ""}${pnl:.4f}</code>\n'
-                                    f'📈 {wins}W / {losses}L | WR: {wins/(wins+losses)*100:.0f}%' if (wins+losses)>0 else
-                                    f'📊 Nenhum trade hoje ainda',
+                                    f'{trade_line}\n'
+                                    f'🕐 <i>{_ts()}</i>',
                                     chat_id_override=stop_chat
                                 )
                             else:
-                                _send('⚠️ Bot não está ativo no momento.', chat_id_override=stop_chat)
+                                _send('⏳ <b>Engine HFT ainda inicializando...</b>\nAguarde alguns segundos e tente /status novamente.', chat_id_override=stop_chat)
                         except Exception as _e:
                             _send(f'⚠️ Erro ao obter status: {_e}', chat_id_override=stop_chat)
 
                     elif txt in ('/ajuda', '/help', '/comandos'):
+                        # Só responde se for um comando novo (não repetir em loop)
                         _send(
                             '📋 <b>Comandos disponíveis:</b>\n'
                             '/status — saldo e P&L atual\n'
@@ -177,6 +206,8 @@ def _poll_loop():
                             '/ajuda — esta mensagem',
                             chat_id_override=stop_chat
                         )
+                    elif txt and not txt.startswith('/'):
+                        pass  # ignora mensagens de texto que não são comandos
 
                 cq = upd.get('callback_query')
                 if not cq: continue

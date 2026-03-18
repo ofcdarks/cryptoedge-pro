@@ -295,6 +295,12 @@ class HFTEngine:
         self._ai_skipped = 0    # trades ignorados pela IA
         self._ai_approved = 0   # trades aprovados pela IA
 
+        # ── Analytics (histórico de performance por par/hora)
+        try:
+            self.analytics = get_analytics() if _ANALYTICS_OK else None
+        except Exception:
+            self.analytics = None
+
         # ── Juros compostos: carrega capital persistido da sessão anterior ──
         if HFT_COMPOUND:
             self.capital = self._load_capital()
