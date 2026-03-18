@@ -1058,47 +1058,16 @@ def main():
                     log.info('  Bot reativado via /start Telegram')
 
         def _hft_visibility_loop():
-            """Thread de visibilidade: heartbeat + update periódico."""
-            import datetime as _dt
-            from hft_strategy import HFT_HEARTBEAT_SEC
-            UPDATE_INTERVAL = int(os.environ.get('HFT_UPDATE_INTERVAL', '1800'))  # 30 min
-            _last_heartbeat = 0
-            _last_update    = time.time()
-            _sleep_step     = 30  # verifica a cada 30s
-            _first_hb_sent  = False
-
+            """Thread auxiliar: só verifica flags de /stop e /start do Telegram.
+            Heartbeat e updates periódicos são gerenciados pela thread
+            iniciada em init_hft() → _start_visibility_thread()."""
             while state['running']:
-                time.sleep(_sleep_step)
+                time.sleep(30)
                 eng = get_hft_engine()
                 if not eng: continue
                 if not state['running']: break
-                now = time.time()
 
                 _hft_check_telegram_flags()
-                # ── Heartbeat: envia imediatamente na primeira vez, depois a cada N min ──
-                hb_sec = HFT_HEARTBEAT_SEC
-                if hb_sec > 0:
-                    # Primeiro heartbeat: 30s após iniciar (não espera 5min)
-                    first_delay = 30
-                    due = _last_heartbeat + (first_delay if not _first_hb_sent else hb_sec)
-                    if now >= due:
-                        try:
-                            eng.send_heartbeat()
-                            _last_heartbeat = now
-                            _first_hb_sent  = True
-                        except Exception as _e:
-                            log.debug(f'  Heartbeat erro: {_e}')
-
-                # ── Update resumo (padrão: 30 min) — só se tiver trades ───
-                total = eng.daily_wins + eng.daily_losses + getattr(eng, 'daily_breakevens', 0)
-                if total > 0 and now - _last_update >= UPDATE_INTERVAL:
-                    try:
-                        mins = UPDATE_INTERVAL // 60
-                        label = f'{mins}min' if mins < 60 else f'{mins//60}h'
-                        eng.send_periodic_update(label)
-                        _last_update = now
-                    except Exception as _pe:
-                        log.debug(f'  Periodic update erro: {_pe}')
 
         threading.Thread(target=_hft_visibility_loop, daemon=True).start()
 
