@@ -28,9 +28,9 @@ SEP = '―' * 26
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
-def _send(text: str, reply_markup: dict = None) -> dict:
+def _send(text: str, reply_markup: dict = None, chat_id_override: str = None) -> dict:
     token   = _token()
-    chat_id = _chat_id()
+    chat_id = chat_id_override or _chat_id()
     if not token or not chat_id:
         return {}
     payload = {'chat_id': chat_id, 'text': text,
