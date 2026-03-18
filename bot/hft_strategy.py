@@ -122,6 +122,10 @@ HFT_TZ_OFFSET    = int(os.environ.get('HFT_TZ_OFFSET',    '-3'))   # UTC-3 BRT
 HFT_CONFIRM_MAX_DRIFT = float(os.environ.get('HFT_CONFIRM_MAX_DRIFT', '0.80'))  # era 0.15 → 0.80% para 1m candles
 # Pula confirmação de vela (entra direto no sinal) — útil em tendências fortes
 HFT_SKIP_CONFIRM = os.environ.get('HFT_SKIP_CONFIRM', 'false').lower() == 'true'
+# Spot: só opera BUY (não tem ativo para vender short)
+HFT_ONLY_BUY     = os.environ.get('HFT_ONLY_BUY', 'false').lower() == 'true'
+# Tipo de mercado: 'spot' ou 'futures' — define qual API de ordens usar
+HFT_MARKET       = os.environ.get('BOT_MARKET', 'spot').lower()
 
 # ── Juros Compostos ───────────────────────────────────────────────────────────
 # Quando ativado, o capital base sobe a cada dia com o lucro do dia anterior
@@ -676,6 +680,9 @@ class HFTEngine:
                     'confidence': min(buy_score / 6.0, 1.0)}
 
         if sell_count >= min_sg and sell_score >= min_sc and sell_score > buy_score * 1.4:
+            if HFT_ONLY_BUY:
+                return {'side': None, 'score': 0, 'strategies': [],
+                        'reason': f'SELL ignorado (HFT_ONLY_BUY=true) [{regime}]'}
             return {'side': 'SELL', 'score': sell_score, 'count': sell_count,
                     'reason': ' + '.join(sell_reasons[:3]),
                     'strategies': list(set(sell_strats)),
@@ -903,13 +910,20 @@ class HFTEngine:
                 log.info(f'  [TESTNET] HFT {pair} {side} {qty:.6f} @ ${price:,.4f} | TP ${tp:,.4f} | SL ${sl:,.4f} | R:R 1:{rr:.1f}')
                 order_id = int(time.time())
             else:
-                order    = self.client.create_order(symbol=pair, side=b_side,
-                               type=ORDER_TYPE_MARKET, quantity=qty)
-                order_id = order.get('orderId', 0)
-                fills    = order.get('fills', [])
-                if fills:
-                    price = sum(float(f['price'])*float(f['qty']) for f in fills) / \
-                            sum(float(f['qty']) for f in fills)
+                if HFT_MARKET == 'futures':
+                    order    = self.client.futures_create_order(
+                        symbol=pair, side=b_side, type='MARKET', quantity=qty)
+                    order_id = order.get('orderId', 0)
+                    avg_p    = order.get('avgPrice') or order.get('price') or str(price)
+                    price    = float(avg_p) if avg_p else price
+                else:
+                    order    = self.client.create_order(symbol=pair, side=b_side,
+                                   type=ORDER_TYPE_MARKET, quantity=qty)
+                    order_id = order.get('orderId', 0)
+                    fills    = order.get('fills', [])
+                    if fills:
+                        price = sum(float(f['price'])*float(f['qty']) for f in fills) / \
+                                sum(float(f['qty']) for f in fills)
 
             key = f'{pair}_{int(time.time()*1000)}'
             self.positions[key] = {
@@ -944,7 +958,10 @@ class HFTEngine:
         cs = SIDE_SELL if side == 'BUY' else SIDE_BUY
         try:
             if not HFT_TESTNET:
-                self.client.create_order(symbol=pair, side=cs, type=ORDER_TYPE_MARKET, quantity=qty)
+                if HFT_MARKET == 'futures':
+                    self.client.futures_create_order(symbol=pair, side=cs, type='MARKET', quantity=qty)
+                else:
+                    self.client.create_order(symbol=pair, side=cs, type=ORDER_TYPE_MARKET, quantity=qty)
         except Exception as e:
             log.error(f'  HFT close {pair} erro: {e}')
 
