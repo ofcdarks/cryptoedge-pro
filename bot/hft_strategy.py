@@ -121,7 +121,7 @@ HFT_TZ_OFFSET    = int(os.environ.get('HFT_TZ_OFFSET',    '-3'))   # UTC-3 BRT
 # Confirmação: máximo de desvio de preço permitido para confirmar sinal (%)
 HFT_CONFIRM_MAX_DRIFT = float(os.environ.get('HFT_CONFIRM_MAX_DRIFT', '0.80'))  # era 0.15 → 0.80% para 1m candles
 # Pula confirmação de vela (entra direto no sinal) — útil em tendências fortes
-HFT_SKIP_CONFIRM = os.environ.get('HFT_SKIP_CONFIRM', 'false').lower() == 'true'
+HFT_SKIP_CONFIRM = os.environ.get('HFT_SKIP_CONFIRM', 'true').lower() == 'true'  # padrão: entra direto
 # Spot: só opera BUY (não tem ativo para vender short)
 HFT_ONLY_BUY     = os.environ.get('HFT_ONLY_BUY', 'false').lower() == 'true'
 # Tipo de mercado: 'spot' ou 'futures' — define qual API de ordens usar
