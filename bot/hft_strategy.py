@@ -1797,22 +1797,31 @@ class HFTEngine:
         m_icon = '🟢' if m['pnl'] >= 0 else '🔴'
         a_icon = '🟢' if a['pnl'] >= 0 else '🔴'
 
-        # ── Projeção de lucro com base no capital real ─────────────────────────
-        risk_pct  = float(os.environ.get('HFT_RISK_PCT', '1.5'))
-        tp_pct    = float(os.environ.get('HFT_TP_PCT',   '0.35'))
-        sl_pct    = float(os.environ.get('HFT_SL_PCT',   '0.18'))
+        # ── Projeção de lucro baseada em dados REAIS ─────────────────────────
+        risk_pct  = float(os.environ.get('HFT_RISK_PCT', HFT_RISK_PCT))
+        tp_pct    = HFT_TP_PCT
+        sl_pct    = HFT_SL_PCT
         capital   = self.capital
+        leverage  = HFT_LEVERAGE
+        fee_rate  = HFT_FEE_RATE
         budget    = capital * risk_pct / 100
-        per_win   = budget * tp_pct / 100
-        per_loss  = budget * sl_pct / 100
+        position  = budget * leverage
+        fee_rt    = position * fee_rate * 2  # taxa real round-trip
+        # Lucro/perda LÍQUIDOS reais (após taxa)
+        per_win   = position * tp_pct / 100 - fee_rt
+        per_loss  = position * sl_pct / 100 + fee_rt
         wins_real = self.daily_wins
         loss_real = self.daily_losses
-        res_real  = wins_real * per_win - loss_real * per_loss
+        # PnL real do dia (o que realmente aconteceu)
+        res_real  = self.daily_pnl
         roi_day   = res_real / capital * 100 if capital > 0 else 0
-        # Projeção mensal baseada no WR real de hoje (22 dias úteis, 20 trades/dia)
-        avg_day   = res_real if total > 0 else 0
-        proj_mo   = avg_day * 22
-        roi_mo    = roi_day * 22
+        # Projeção mensal: usa PnL médio por trade real × trades estimados por dia
+        avg_trade = res_real / total if total > 0 else 0
+        trades_per_day = 8  # estimativa 3m timeframe
+        proj_day  = avg_trade * trades_per_day
+        proj_mo   = proj_day * 22
+        roi_mo    = proj_mo / capital * 100 if capital > 0 else 0
+        avg_day   = res_real  # mantém compatibilidade
         proj_line = (
             f'───────────────────────\n'
             f'💡 <b>Projeção — Capital Real</b>\n'

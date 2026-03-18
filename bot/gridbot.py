@@ -1065,22 +1065,29 @@ def main():
             _last_heartbeat = 0
             _last_update    = time.time()
             _sleep_step     = 30  # verifica a cada 30s
+            _first_hb_sent  = False
 
             while state['running']:
                 time.sleep(_sleep_step)
                 eng = get_hft_engine()
-                if not eng or not state['running']: continue
+                if not eng: continue
+                if not state['running']: break
                 now = time.time()
 
                 _hft_check_telegram_flags()
-                # ── Heartbeat (padrão: 5 min) ─────────────────────────────
+                # ── Heartbeat: envia imediatamente na primeira vez, depois a cada N min ──
                 hb_sec = HFT_HEARTBEAT_SEC
-                if hb_sec > 0 and now - _last_heartbeat >= hb_sec:
-                    try:
-                        eng.send_heartbeat()
-                        _last_heartbeat = now
-                    except Exception as _e:
-                        log.debug(f'  Heartbeat erro: {_e}')
+                if hb_sec > 0:
+                    # Primeiro heartbeat: 30s após iniciar (não espera 5min)
+                    first_delay = 30
+                    due = _last_heartbeat + (first_delay if not _first_hb_sent else hb_sec)
+                    if now >= due:
+                        try:
+                            eng.send_heartbeat()
+                            _last_heartbeat = now
+                            _first_hb_sent  = True
+                        except Exception as _e:
+                            log.debug(f'  Heartbeat erro: {_e}')
 
                 # ── Update resumo (padrão: 30 min) — só se tiver trades ───
                 total = eng.daily_wins + eng.daily_losses + getattr(eng, 'daily_breakevens', 0)
