@@ -980,7 +980,13 @@ class HFTEngine:
             )
             return True
         except Exception as e:
-            log.error(f'  HFT {pair} {side} erro: {e}')
+            err_str = str(e)
+            log.error(f'  HFT {pair} {side} ERRO: {err_str}')
+            self.notify(
+                f'❌ ERRO ao executar {side} {pair.replace("USDT","")}\n'
+                f'Preço: ${price:,.4f} | Qty: {qty}\n'
+                f'Erro Binance: {err_str[:200]}'
+            )
             return False
 
     def _close_position(self, key, price, reason):
