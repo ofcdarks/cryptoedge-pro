@@ -7710,9 +7710,11 @@ function _hftRenderTrades(trades, pagination) {
     // Duração
     let durStr = '—';
     if (t.opened_at) {
+      // SQLite armazena em UTC sem 'Z' — adiciona 'Z' para JS interpretar corretamente
+      const parseUTC = s => new Date(s.includes('Z') || s.includes('+') ? s : s + 'Z');
       const secs = isOpen
-        ? Math.floor((Date.now() - new Date(t.opened_at).getTime()) / 1000)
-        : (t.closed_at ? Math.floor((new Date(t.closed_at) - new Date(t.opened_at)) / 1000) : 0);
+        ? Math.floor((Date.now() - parseUTC(t.opened_at).getTime()) / 1000)
+        : (t.closed_at ? Math.floor((parseUTC(t.closed_at) - parseUTC(t.opened_at)) / 1000) : 0);
       durStr = secs < 60 ? secs + 's' : secs < 3600 ? Math.floor(secs/60) + 'm' : (secs/3600).toFixed(1) + 'h';
     }
 

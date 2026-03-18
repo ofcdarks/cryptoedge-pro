@@ -282,6 +282,8 @@ class HFTEngine:
         if HFT_COMPOUND:
             self.capital = self._load_capital()
 
+        self._last_pos_sync = 0  # timestamp última sincronização de posições com Binance
+
         log.info('  🚀 HFT Engine v3.1 ADAPTIVE + CONFIRMATION + CALIBRATION + AI iniciado')
         if HFT_COMPOUND:
             log.info(f'  💰 Juros compostos: ATIVO | capital atual = ${self.capital:.2f}')
@@ -948,8 +950,16 @@ class HFTEngine:
                     order    = self.client.futures_create_order(
                         symbol=pair, side=b_side, type='MARKET', quantity=qty)
                     order_id = order.get('orderId', 0)
-                    avg_p    = order.get('avgPrice') or order.get('price') or str(price)
-                    price    = float(avg_p) if avg_p else price
+                    # avgPrice pode vir "0" no market order — busca o preço real
+                    avg_p = float(order.get('avgPrice') or 0)
+                    if avg_p <= 0:
+                        # Busca o preço atual como fallback
+                        try:
+                            tk = self.client.futures_symbol_ticker(symbol=pair)
+                            avg_p = float(tk.get('price', price))
+                        except:
+                            avg_p = price
+                    price = avg_p
                 else:
                     order    = self.client.create_order(symbol=pair, side=b_side,
                                    type=ORDER_TYPE_MARKET, quantity=qty)
@@ -1065,12 +1075,72 @@ class HFTEngine:
             log.warning(f'  ⏸ HFT: {self.consec_losses} losses → pausa {pause}s')
             self.notify(f'HFT pausado {pause}s ({self.consec_losses} losses seguidos)')
 
+    def _sync_positions_with_binance(self):
+        """Verifica posições abertas na Binance e fecha as que já foram liquidadas ou atingiram SL/TP."""
+        if HFT_MARKET != 'futures' or HFT_TESTNET: return
+        now = time.time()
+        if now - self._last_pos_sync < 30: return  # no máximo a cada 30s
+        self._last_pos_sync = now
+        try:
+            binance_positions = {
+                p['symbol']: p for p in self.client.futures_position_information()
+                if float(p.get('positionAmt', 0)) != 0
+            }
+            for key, pos in list(self.positions.items()):
+                pair = pos['pair']
+                # Se par não tem mais posição na Binance → foi liquidada ou fechada
+                if pair not in binance_positions:
+                    log.warning(f'  ⚠ {pair} não encontrado nas posições Binance — fechando internamente')
+                    cur = list(self.closes.get(pair, [pos['entry']]))[-1]
+                    self._close_position(key, cur, 'Sync: posição não encontrada na Binance')
+                else:
+                    bp = binance_positions[pair]
+                    real_entry = float(bp.get('entryPrice', 0))
+                    real_pnl   = float(bp.get('unRealizedProfit', 0))
+                    # Atualiza entry se estava zero
+                    if pos['entry'] <= 0 and real_entry > 0:
+                        atr_v = self._atr(self.highs.get(pair, []), self.lows.get(pair, []), self.closes.get(pair, []))
+                        if atr_v <= 0: atr_v = real_entry * 0.002
+                        sl_d = max(atr_v, real_entry * HFT_SL_PCT / 100)
+                        tp_d = max(atr_v * 2, sl_d * HFT_MIN_RR)
+                        side = pos['side']
+                        self.positions[key]['entry'] = real_entry
+                        self.positions[key]['sl'] = real_entry - sl_d if side == 'BUY' else real_entry + sl_d
+                        self.positions[key]['tp'] = real_entry + tp_d if side == 'BUY' else real_entry - tp_d
+                        log.info(f'  🔧 Sync {pair}: entry=${real_entry:.4f} PnL=${real_pnl:+.4f}')
+        except Exception as e:
+            log.debug(f'  Sync Binance erro: {e}')
+
     def _check_exit(self, pair, price):
         for key, pos in list(self.positions.items()):
             if pos['pair'] != pair: continue
             side  = pos['side']
             age   = time.time() - pos['opened_at']
             entry = pos['entry']
+
+            # Corrige posições abertas com preço zero (bug de captura de avgPrice)
+            if entry <= 0:
+                log.info(f'  🔧 HFT {pair} corrigindo entry=0 → usando preço atual ${price:,.4f}')
+                atr_v = self._atr(self.highs[pair], self.lows[pair], self.closes[pair])
+                if atr_v <= 0: atr_v = price * 0.002
+                min_rr = self._get_pair_param(pair, 'min_rr', HFT_MIN_RR)
+                sl_d   = max(atr_v, price * HFT_SL_PCT / 100)
+                tp_d   = max(atr_v * 2, sl_d * min_rr)
+                new_sl = price - sl_d if side == 'BUY' else price + sl_d
+                new_tp = price + tp_d if side == 'BUY' else price - tp_d
+                self.positions[key]['entry'] = price
+                self.positions[key]['sl']    = new_sl
+                self.positions[key]['tp']    = new_tp
+                # Atualiza no DB
+                try:
+                    p = _json.dumps({'id': pos.get('db_id'), 'entry': price, 'sl': new_sl, 'tp': new_tp}).encode()
+                    r = urllib.request.Request(f'{_APP_URL}/api/bot/trade/fix-entry', data=p,
+                                               headers=_BOT_HEADER, method='POST')
+                    urllib.request.urlopen(r, timeout=3)
+                except: pass
+                entry = price
+                log.info(f'  ✅ {pair} entry corrigido: ${price:,.4f} TP:${new_tp:,.4f} SL:${new_sl:,.4f}')
+
             tp    = pos['tp']
             sl_orig = pos['sl']
 
@@ -1246,6 +1316,8 @@ class HFTEngine:
 
         # Ticks: verificar SL/TP apenas (sem I/O de disco por tick)
         self._check_exit(pair, close)
+        # Sincronização periódica com Binance (max 1x a cada 30s)
+        self._sync_positions_with_binance()
 
         if not is_closed: return
         # Vela fechada: verificar flags de fechamento manual (1x por vela, não por tick)

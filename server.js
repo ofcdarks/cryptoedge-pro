@@ -1803,6 +1803,16 @@ app.post('/api/bot/trade/open', requireBotOrAuth, (req, res) => {
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+app.post('/api/bot/trade/fix-entry', requireBotOrAuth, (req, res) => {
+  try {
+    const { id, entry, sl, tp } = req.body;
+    if (!id) return res.json({ ok: false });
+    db.run("UPDATE bot_trades SET entry=?,sl=?,tp=? WHERE id=?",
+      [parseFloat(entry), parseFloat(sl||0), parseFloat(tp||0), id], true);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 app.post('/api/bot/trade/close', requireBotOrAuth, (req, res) => {
   try {
     const { id, exit_price, pnl, reason } = req.body;
