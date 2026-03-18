@@ -7102,6 +7102,7 @@ function initHFTPanel() {
     if (riskEl) { riskEl.max = maxR; riskEl.title = `Máximo permitido: ${maxR}%`; }
     updateHFTTestnetWarn();
     updateHFTProfitPreview();
+  loadHFTAnalytics();
     updateMaxTradesHint();
   });
   // Inicializa trail stop + AI preview
@@ -7554,6 +7555,56 @@ async function hftManualClose(tradeId, sym) {
     if (d.ok) { showToast('✅ Sinal de fechamento enviado para ' + sym); setTimeout(loadHFTStats, 2000); }
     else showToast('❌ ' + (d.error || 'Erro'), true);
   } catch(e) { showToast('❌ ' + e.message, true); }
+}
+
+async function loadHFTAnalytics() {
+  const el = document.getElementById('hft-analytics-content');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/hft/analytics', { headers: auth.headers() });
+    const d = await r.json();
+    if (!d.ok || !d.data) { el.innerHTML = '<div style="color:var(--t3);padding:12px">Sem dados suficientes ainda — precisa de pelo menos 5 trades por par.</div>'; return; }
+    const { pairs, hours, pairRank, hourRank, total } = d.data;
+
+    const statusColor = s => s === 'LIBERADO' ? 'var(--green)' : s === 'CAUTELA' ? 'var(--gold)' : s === 'BLOQUEADO' ? 'var(--red)' : 'var(--t3)';
+    const statusBg    = s => s === 'LIBERADO' ? 'rgba(29,158,117,.1)' : s === 'CAUTELA' ? 'rgba(239,159,39,.1)' : s === 'BLOQUEADO' ? 'rgba(226,75,74,.1)' : 'transparent';
+
+    let html = `<div style="color:var(--t3);font-size:11px;margin-bottom:8px">${total} trades analisadas</div>`;
+
+    // Pair ranking table
+    html += `<div style="font-weight:500;color:var(--t2);margin-bottom:6px;font-size:11px">RANKING DE PARES</div>`;
+    html += `<table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:14px">`;
+    html += `<tr style="color:var(--t3);border-bottom:1px solid var(--border)"><td>Par</td><td style="text-align:right">Score</td><td style="text-align:right">WR%</td><td style="text-align:right">PnL avg</td><td style="text-align:right">N</td><td style="text-align:center">Status</td></tr>`;
+    for (const [pair, d2] of Object.entries(pairs).sort((a,b)=>(b[1].score||0)-(a[1].score||0))) {
+      const sc = d2.score?.toFixed(2) || '-';
+      const st = d2.status;
+      html += `<tr style="border-bottom:0.5px solid var(--border)">
+        <td style="padding:4px 2px;font-family:var(--mono)">${pair.replace('USDT','')}</td>
+        <td style="text-align:right;font-family:var(--mono)">${sc}</td>
+        <td style="text-align:right;font-family:var(--mono)">${d2.wr?.toFixed(1)||'-'}%</td>
+        <td style="text-align:right;font-family:var(--mono);color:${d2.pnl>=0?'var(--green)':'var(--red)'}">${d2.pnl>0?'+':''}${d2.pnl?.toFixed(3)||'-'}</td>
+        <td style="text-align:right;color:var(--t3)">${d2.n}</td>
+        <td style="text-align:center"><span style="font-size:10px;padding:1px 6px;border-radius:10px;background:${statusBg(st)};color:${statusColor(st)}">${st}</span></td>
+      </tr>`;
+    }
+    html += '</table>';
+
+    // Hour ranking
+    if (hourRank.length > 0) {
+      html += `<div style="font-weight:500;color:var(--t2);margin-bottom:6px;font-size:11px">MELHORES HORÁRIOS</div>`;
+      html += `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px">`;
+      for (const [h, d2] of hourRank.slice(0,8)) {
+        html += `<div style="padding:4px 8px;border-radius:6px;background:${statusBg(d2.status)};border:1px solid ${statusColor(d2.status)};font-size:11px">
+          <span style="color:var(--t2)">${h}</span>
+          <span style="color:${statusColor(d2.status)};margin-left:4px">${d2.score?.toFixed(2)||'-'}</span>
+          <span style="color:var(--t3);font-size:10px"> WR${d2.wr?.toFixed(0)||'-'}%</span>
+        </div>`;
+      }
+      html += '</div>';
+    }
+
+    el.innerHTML = html;
+  } catch(e) { el.innerHTML = `<div style="color:var(--red)">Erro: ${e.message}</div>`; }
 }
 
 async function loadHFTStats() {

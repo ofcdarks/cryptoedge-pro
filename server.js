@@ -2802,6 +2802,62 @@ app.get('/api/performance/stats', requireAuth, (req, res) => {
 });
 
 // ─── HFT Manual Close ────────────────────────────────────────────────────────
+// ─── HFT Analytics API ──────────────────────────────────────────────────────
+app.get('/api/hft/analytics', requireAuth, (req, res) => {
+  try {
+    const eng = global._hftEngineRef;
+    if (!eng || !eng.analytics) return res.json({ ok: true, data: null });
+    // Analytics data is fetched via Python stats endpoint
+    const stats = db.all(
+      `SELECT pair, side, pnl, reason, strategy,
+        strftime('%H', opened_at) as hour,
+        strftime('%w', opened_at) as wday,
+        CAST((julianday(COALESCE(closed_at,datetime('now')))-julianday(opened_at))*86400 AS INTEGER) as dur_sec,
+        opened_at, closed_at
+       FROM bot_trades
+       WHERE username=? AND strategy='hft' AND status='closed'
+       ORDER BY opened_at DESC LIMIT 500`,
+      [req.user]
+    );
+    // Compute analytics from DB data
+    const pairs = {}, hours = {}, strategies = {};
+    for (const t of stats) {
+      const win = (t.pnl || 0) > 0;
+      const pnl = parseFloat(t.pnl || 0);
+      // By pair
+      if (!pairs[t.pair]) pairs[t.pair] = { wins:0, losses:0, pnl:0, n:0 };
+      pairs[t.pair].n++; pairs[t.pair].pnl = Math.round((pairs[t.pair].pnl + pnl)*10000)/10000;
+      win ? pairs[t.pair].wins++ : pairs[t.pair].losses++;
+      // By hour
+      const h = t.hour + 'h';
+      if (!hours[h]) hours[h] = { wins:0, losses:0, pnl:0, n:0 };
+      hours[h].n++; hours[h].pnl = Math.round((hours[h].pnl + pnl)*10000)/10000;
+      win ? hours[h].wins++ : hours[h].losses++;
+    }
+    // Add WR and score
+    const score = (d) => {
+      if (d.n < 5) return null;
+      const wr = d.wins / d.n;
+      const avgPnl = d.pnl / d.n;
+      const pnlNorm = Math.min(Math.max(avgPnl / 0.5 + 0.5, 0), 1);
+      return Math.round((0.35*wr + 0.30*pnlNorm + 0.35*wr)*1000)/1000;
+    };
+    for (const p of Object.keys(pairs)) {
+      pairs[p].wr = pairs[p].n > 0 ? Math.round(pairs[p].wins/pairs[p].n*1000)/10 : 0;
+      pairs[p].score = score(pairs[p]);
+      pairs[p].status = !pairs[p].score ? 'sem dados' : pairs[p].score >= 0.75 ? 'LIBERADO' : pairs[p].score >= 0.60 ? 'CAUTELA' : 'BLOQUEADO';
+    }
+    for (const h of Object.keys(hours)) {
+      hours[h].wr = hours[h].n > 0 ? Math.round(hours[h].wins/hours[h].n*1000)/10 : 0;
+      hours[h].score = score(hours[h]);
+      hours[h].status = !hours[h].score ? 'sem dados' : hours[h].score >= 0.75 ? 'LIBERADO' : hours[h].score >= 0.60 ? 'CAUTELA' : 'BLOQUEADO';
+    }
+    const pairRank = Object.entries(pairs).filter(([,d])=>d.score).sort((a,b)=>b[1].score-a[1].score);
+    const hourRank = Object.entries(hours).filter(([,d])=>d.score).sort((a,b)=>b[1].score-a[1].score);
+    res.json({ ok: true, data: { pairs, hours, pairRank, hourRank, total: stats.length } });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // ─── HFT Force Clear Stale Positions (fechadas na Binance mas ainda no DB) ──
 app.post('/api/hft/clear-stale', requireAuth, async (req, res) => {
   try {

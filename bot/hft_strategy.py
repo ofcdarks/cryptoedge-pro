@@ -36,6 +36,14 @@ from collections import deque
 from decimal import Decimal
 import datetime
 
+# Analytics Engine
+try:
+    from hft_analytics import get_analytics, HFTAnalytics
+    _ANALYTICS_OK = True
+except ImportError:
+    _ANALYTICS_OK = False
+    def get_analytics(): return None
+
 # AI Advisor (lazy import para não crashar se módulo não existir)
 try:
     from hft_ai_advisor import get_ai_advisor, HFTAIAdvisor
@@ -123,6 +131,12 @@ HFT_TZ_OFFSET    = int(os.environ.get('HFT_TZ_OFFSET',    '-3'))   # UTC-3 BRT
 
 # Confirmação: máximo de desvio de preço permitido para confirmar sinal (%)
 HFT_CONFIRM_MAX_DRIFT = float(os.environ.get('HFT_CONFIRM_MAX_DRIFT', '0.80'))  # era 0.15 → 0.80% para 1m candles
+
+# ── Filtro de Amplitude e Lucro Mínimo ───────────────────────────────────────
+HFT_MIN_ATR_PCT    = float(os.environ.get('HFT_MIN_ATR_PCT',    '0.20'))  # ATR mínimo por vela (%)
+HFT_MIN_NET_PROFIT = float(os.environ.get('HFT_MIN_NET_PROFIT', '0.12'))  # lucro líquido mínimo ($)
+HFT_FEE_RATE       = float(os.environ.get('HFT_FEE_RATE',       '0.0004'))# taxa taker 0.04%
+HFT_LEVERAGE       = int(os.environ.get('HFT_LEVERAGE',          '5'))     # alavancagem Binance
 # Pula confirmação de vela (entra direto no sinal) — útil em tendências fortes
 HFT_SKIP_CONFIRM = os.environ.get('HFT_SKIP_CONFIRM', 'false').lower() == 'true'  # confirmação de vela ativa
 # Spot: só opera BUY (não tem ativo para vender short)
@@ -562,6 +576,30 @@ class HFTEngine:
         regime = self._detect_regime(pair)
         if regime == 'choppy':
             return {'side': None, 'score': 0, 'reason': 'choppy', 'strategies': []}
+
+        # ── FILTRO CRÍTICO: não entra se não cobrir a taxa ──────────────────
+        # Calcula taxa real round-trip + lucro mínimo exigido
+        budget_v     = self.capital * HFT_RISK_PCT / 100
+        position_v   = budget_v * HFT_LEVERAGE
+        fee_rt_usdt  = position_v * HFT_FEE_RATE * 2          # taxa entrada + saída em $
+        min_gross    = fee_rt_usdt + HFT_MIN_NET_PROFIT        # mínimo bruto = taxa + lucro mínimo
+        min_tp_pct   = min_gross / position_v * 100             # % mínimo do TP
+
+        # Bloqueia se o TP configurado não cobre taxa + lucro mínimo
+        if HFT_TP_PCT < min_tp_pct:
+            return {'side': None, 'score': 0,
+                    'reason': f'TP {HFT_TP_PCT}% não cobre taxa ${fee_rt_usdt:.3f} + lucro mín ${HFT_MIN_NET_PROFIT} (precisa ≥{min_tp_pct:.2f}%)',
+                    'strategies': []}
+
+        # Bloqueia se ATR atual é menor que o mínimo para atingir o TP
+        atr_check     = self._atr(highs, lows, closes)
+        atr_pct_check = atr_check / close * 100 if close > 0 else 0
+        # ATR mínimo = pelo menos 30% do TP (movimento precisa existir)
+        atr_min_for_tp = HFT_TP_PCT * 0.30
+        if atr_pct_check < max(HFT_MIN_ATR_PCT, atr_min_for_tp):
+            return {'side': None, 'score': 0,
+                    'reason': f'{pair.replace("USDT","")} sem amplitude ATR={atr_pct_check:.3f}% — não cobre taxa ${fee_rt_usdt:.3f}',
+                    'strategies': []}
 
         # ADX mínimo: só opera em mercado com direção clara
         adx_min = float(os.environ.get('HFT_ADX_MIN', '18'))
@@ -1113,6 +1151,33 @@ class HFTEngine:
         wr    = self.daily_wins / total * 100 if total else 0
         be_str = f' (BE:{getattr(self,"daily_breakevens",0)})' if getattr(self,'daily_breakevens',0) > 0 else ''
         log.info(f'  {icon} HFT FECHA {pair} | ${pnl:+.4f} | {int(duration)}s | {reason} | {total}T WR:{wr:.0f}%{be_str} PnL:${self.daily_pnl:+.4f}')
+
+        # ── Analytics: registra trade completa ───────────────────────────
+        if self.analytics:
+            try:
+                fee_est = abs(pos.get('qty', 0) * price * 0.0004 * 2)  # 0.04% cada lado × 5x
+                rsi_rec = self._rsi(self.closes.get(pair, [])) if len(self.closes.get(pair, [])) >= 9 else 50
+                adx_rec = self._adx(self.highs.get(pair, []), self.lows.get(pair, []), self.closes.get(pair, []))
+                vol_recs = list(self.volumes.get(pair, []))
+                avg_v = sum(vol_recs[-6:-1]) / 5 if len(vol_recs) >= 6 else 1
+                vol_r = vol_recs[-1] / avg_v if avg_v > 0 and vol_recs else 1.0
+                tp_p  = abs(pos.get('tp', price) - pos.get('entry', price)) / pos.get('entry', price) * 100 if pos.get('entry') else 0
+                sl_p  = abs(pos.get('sl', price) - pos.get('entry', price)) / pos.get('entry', price) * 100 if pos.get('entry') else 0
+                self.analytics.record(
+                    pair=pair, side=side,
+                    entry=pos.get('entry', 0), exit_price=price,
+                    qty=pos.get('qty', 0),
+                    pnl_gross=pnl, fee=fee_est, duration_sec=duration,
+                    rsi=rsi_rec, adx=adx_rec,
+                    regime=self._detect_regime(pair) if len(self.closes.get(pair,[])) >= 50 else 'unknown',
+                    volume_ratio=vol_r, score=pos.get('confidence', 0.5),
+                    confidence=pos.get('confidence', 0.5),
+                    strategies=pos.get('strategies', []),
+                    entry_reason=pos.get('reason', ''), exit_reason=reason,
+                    tp_pct=tp_p, sl_pct=sl_p,
+                )
+            except Exception as _ae:
+                log.debug(f'Analytics record error: {_ae}')
         result_str = 'Break-even' if is_be else f'P&L: ${pnl:+.4f}'
         self.notify(
             f'{icon} HFT fechou {pair} | {result_str} ({int(duration)}s)\n'
@@ -1448,6 +1513,18 @@ class HFTEngine:
                 entry_conf = sig.get('confidence', 0.5)
                 entry_reason = f'[DIRECT] {sig["reason"]}'
 
+                # ── Analytics: verifica score do par e horário ─────────
+                if self.analytics:
+                    hour_now = datetime.datetime.now().hour
+                    can_enter, stake_mult_a, analytics_reason = self.analytics.should_enter(pair, sig['side'], hour_now)
+                    if not can_enter:
+                        log.info(f'  🚫 Analytics bloqueou {pair}: {analytics_reason}')
+                        self.notify(f'🚫 Analytics bloqueou {sig["side"]} {pair.replace("USDT","")}\n{analytics_reason}')
+                        return
+                    if stake_mult_a < 1.0:
+                        entry_conf = min(entry_conf, 0.4)  # reduz size em modo cautela
+                        log.info(f'  ⚠️ Analytics CAUTELA {pair}: stake {stake_mult_a:.0%}')
+
                 if self.ai_advisor and self.ai_advisor.enabled:
                     atr_now = self._atr(self.highs[pair], self.lows[pair], self.closes[pair])
                     if atr_now <= 0: atr_now = close * 0.002
@@ -1563,6 +1640,7 @@ class HFTEngine:
             'ai_advisor': self.ai_advisor.get_stats() if self.ai_advisor else {'enabled': False},
             'ai_skipped':      self._ai_skipped,
             'compound_enabled': HFT_COMPOUND,
+            'analytics': self.analytics.get_full_report() if self.analytics else None,
             'capital_current': round(self.capital, 4),
             'budget_per_trade': round(self.capital * HFT_RISK_PCT / 100, 4),
             'ai_approved':     self._ai_approved,
@@ -1604,7 +1682,17 @@ class HFTEngine:
             r_icon  = regime_icons.get(regime, '?')
             pending = ' 📡' if pair in self._pending else ''
             pos_str = ' 📌' if any(p['pair']==pair for p in self.positions.values()) else ''
-            pair_lines.append(f'  {pair.replace("USDT",""):6} RSI:{rsi_v:.0f} {r_icon} {regime}{pending}{pos_str}')
+            # Amplitude indicator
+            atr_v   = self._atr(self.highs.get(pair,[]), self.lows.get(pair,[]), self.closes.get(pair,[]))
+            atr_p   = atr_v / list(self.closes.get(pair,[1]))[-1] * 100 if self.closes.get(pair) else 0
+            amp_str = f' ATR:{atr_p:.2f}%' if atr_p > 0 else ''
+            # Analytics status
+            if self.analytics:
+                an_s = self.analytics.get_pair_status(pair)
+                an_str = f' [{an_s["status"][:4]}]' if an_s.get('score') else ''
+            else:
+                an_str = ''
+            pair_lines.append(f'  {pair.replace("USDT",""):6} RSI:{rsi_v:.0f} {r_icon} {regime}{amp_str}{an_str}{pending}{pos_str}')
 
         status_str = ''
         if open_pos > 0:
