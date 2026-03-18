@@ -120,6 +120,8 @@ HFT_TZ_OFFSET    = int(os.environ.get('HFT_TZ_OFFSET',    '-3'))   # UTC-3 BRT
 
 # Confirmação: máximo de desvio de preço permitido para confirmar sinal (%)
 HFT_CONFIRM_MAX_DRIFT = float(os.environ.get('HFT_CONFIRM_MAX_DRIFT', '0.25'))  # era 0.15
+# Pula confirmação de vela (entra direto no sinal) — útil em tendências fortes
+HFT_SKIP_CONFIRM = os.environ.get('HFT_SKIP_CONFIRM', 'false').lower() == 'true'
 
 # ── Juros Compostos ───────────────────────────────────────────────────────────
 # Quando ativado, o capital base sobe a cada dia com o lucro do dia anterior
@@ -711,23 +713,31 @@ class HFTEngine:
             del self._pending[pair]
             return False
 
-        # Verificar se a vela confirma a direção
-        bullish_candle = close > open_ * 1.0001
-        bearish_candle = close < open_ * 0.9999
-        confirmed = (side == 'BUY' and bullish_candle) or (side == 'SELL' and bearish_candle)
+        # Pula confirmação se HFT_SKIP_CONFIRM=true
+        if HFT_SKIP_CONFIRM:
+            log.info(f'  ✅ HFT {pair} {side} SKIP_CONFIRM ativo — entrando direto (drift={drift:.3f}%)')
+        else:
+            # Verificar se a vela confirma a direção
+            bullish_candle = close > open_ * 1.0001
+            bearish_candle = close < open_ * 0.9999
+            confirmed = (side == 'BUY' and bullish_candle) or (side == 'SELL' and bearish_candle)
 
-        if not confirmed:
-            # Vela não confirmou — dá mais 1 chance se confiança >= 80%
-            attempts = pending.get('attempts', 0) + 1
-            confidence = pending.get('confidence', 0.5)
-            if confidence >= 0.80 and attempts <= 1:
-                self._pending[pair]['attempts'] = attempts
-                log.info(f'  ⏳ HFT {pair} {side} não confirmado — confiança {confidence:.0%} ≥ 80%, aguarda mais 1 vela (tentativa {attempts})')
-                return False
-            # Descarta
-            log.info(f'  ✗ HFT {pair} {side} NÃO confirmado (vela {"baixa" if side=="BUY" else "alta"}) → descartado')
-            del self._pending[pair]
-            return False
+            if not confirmed:
+                attempts = pending.get('attempts', 0) + 1
+                confidence = pending.get('confidence', 0.5)
+                # Após 1 tentativa frustrada, sinais >= 75% entram mesmo sem vela a favor
+                # Isso cobre mercados laterais/tendência onde a confirmação raramente vem
+                if confidence >= 0.75 and attempts <= 1:
+                    self._pending[pair]['attempts'] = attempts
+                    log.info(f'  ⏳ HFT {pair} {side} vela não confirmou — conf {confidence:.0%} ≥ 75%, aguarda +1 vela')
+                    return False
+                elif confidence >= 0.75 and attempts > 1:
+                    log.info(f'  ➡️ HFT {pair} {side} 2ª tentativa conf {confidence:.0%} — entrando sem confirmação de vela')
+                    # Continua para entrada
+                else:
+                    log.info(f'  ✗ HFT {pair} {side} NÃO confirmado conf={confidence:.0%} → descartado')
+                    del self._pending[pair]
+                    return False
 
         # ── CONFIRMADO → consultar IA antes de entrar ──────────────────
         log.info(f'  ✅ HFT {pair} {side} CONFIRMADO em ${close:,.4f} (drift={drift:.3f}%) | {pending["reason"]}')
