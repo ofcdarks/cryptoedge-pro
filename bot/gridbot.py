@@ -914,12 +914,11 @@ def main():
         notify_start(SYMBOL, STRATEGY, CAPITAL, TESTNET)
     else:
         log.info("  🔄 Reconectando (sem notificação Telegram)...")
-        # Reinicia o poller do Telegram se modo manual
-        if TRADE_MODE == 'manual':
-            try:
-                from telegram_notify import _start_poller
-                _start_poller()
-            except Exception: pass
+        # Reinicia o poller do Telegram sempre (recebe /status /stop /start)
+        try:
+            from telegram_notify import _start_poller
+            _start_poller()
+        except Exception: pass
     log.info(f"  Timeframe: {TIMEFRAME} | Stop global: ${STOP_LOSS:,.0f}")
     if SESSION_GAIN > 0 or SESSION_LOSS > 0:
         log.info(f"  🎯 Session Manager: GAIN +${SESSION_GAIN:.2f} | LOSS -${SESSION_LOSS:.2f}")
