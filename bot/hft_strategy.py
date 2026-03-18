@@ -109,7 +109,7 @@ HFT_RISK_PCT     = float(os.environ.get('HFT_RISK_PCT',    '15.0')) # 15% — bu
 HFT_MAX_TRADES   = int(os.environ.get('HFT_MAX_TRADES',    '5'))   # era 3 → mais oportunidades
 HFT_DAILY_LOSS   = float(os.environ.get('HFT_DAILY_LOSS',  '3.0'))
 HFT_COOLDOWN     = int(os.environ.get('HFT_COOLDOWN',      '45'))
-HFT_TIME_EXIT    = int(os.environ.get('HFT_TIME_EXIT',     '480'))
+HFT_TIME_EXIT    = int(os.environ.get('HFT_TIME_EXIT',     '1800'))  # 30min — tempo para TP 1.5% em 3m
 HFT_MIN_SIGNALS  = int(os.environ.get('HFT_MIN_SIGNALS',   '3'))
 HFT_PAIRS        = [p.strip() for p in os.environ.get('HFT_PAIRS',
     'BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,MATICUSDT,DOTUSDT'
@@ -1199,94 +1199,96 @@ class HFTEngine:
             if pnl_pct > pos.get('peak_pnl_pct', 0.0):
                 self.positions[key]['peak_pnl_pct'] = pnl_pct
 
-            # --- TRAILING STOP PROGRESSIVO (4 niveis) --------------------
-            # Conforme o lucro cresce, o SL sobe travando parte do ganho.
-            # Isso garante que apos atingir L1 (BE) a posicao nunca fecha no negativo.
-            cur_level = pos.get('trail_level', 0)
-            trail_sl  = pos.get('trail_sl')
-            new_level = cur_level
-            new_tsl   = trail_sl
+            if HFT_TRAIL_ENABLED:
+                # --- TRAILING STOP PROGRESSIVO (4 niveis) --------------------
+                # Conforme o lucro cresce, o SL sobe travando parte do ganho.
+                # Isso garante que apos atingir L1 (BE) a posicao nunca fecha no negativo.
+                cur_level = pos.get('trail_level', 0)
+                trail_sl  = pos.get('trail_sl')
+                new_level = cur_level
+                new_tsl   = trail_sl
 
-            # Nivel 4: trava 75% do pnl_pct atual (trailing dinamico)
-            if pnl_pct >= HFT_TRAIL_L4:
-                lock = pnl_pct * 0.75
-                if side == 'BUY':
-                    cand = entry * (1 + lock / 100)
-                    if trail_sl is None or cand > trail_sl:
-                        new_tsl = cand; new_level = 4
-                else:
-                    cand = entry * (1 - lock / 100)
-                    if trail_sl is None or cand < trail_sl:
-                        new_tsl = cand; new_level = 4
+                # Nivel 4: trava 75% do pnl_pct atual (trailing dinamico)
+                if pnl_pct >= HFT_TRAIL_L4:
+                    lock = pnl_pct * 0.75
+                    if side == 'BUY':
+                        cand = entry * (1 + lock / 100)
+                        if trail_sl is None or cand > trail_sl:
+                            new_tsl = cand; new_level = 4
+                    else:
+                        cand = entry * (1 - lock / 100)
+                        if trail_sl is None or cand < trail_sl:
+                            new_tsl = cand; new_level = 4
 
-            # Nivel 3: trava 60% do pnl_pct atual
-            elif pnl_pct >= HFT_TRAIL_L3 and cur_level < 3:
-                lock = pnl_pct * 0.60
-                if side == 'BUY':
-                    cand = entry * (1 + lock / 100)
-                    if trail_sl is None or cand > trail_sl:
-                        new_tsl = cand; new_level = 3
-                else:
-                    cand = entry * (1 - lock / 100)
-                    if trail_sl is None or cand < trail_sl:
-                        new_tsl = cand; new_level = 3
+                # Nivel 3: trava 60% do pnl_pct atual
+                elif pnl_pct >= HFT_TRAIL_L3 and cur_level < 3:
+                    lock = pnl_pct * 0.60
+                    if side == 'BUY':
+                        cand = entry * (1 + lock / 100)
+                        if trail_sl is None or cand > trail_sl:
+                            new_tsl = cand; new_level = 3
+                    else:
+                        cand = entry * (1 - lock / 100)
+                        if trail_sl is None or cand < trail_sl:
+                            new_tsl = cand; new_level = 3
 
-            # Nivel 2: trava 40% do pnl_pct
-            elif pnl_pct >= HFT_TRAIL_L2 and cur_level < 2:
-                lock = pnl_pct * 0.40
-                if side == 'BUY':
-                    cand = entry * (1 + lock / 100)
-                    if trail_sl is None or cand > trail_sl:
-                        new_tsl = cand; new_level = 2
-                else:
-                    cand = entry * (1 - lock / 100)
-                    if trail_sl is None or cand < trail_sl:
-                        new_tsl = cand; new_level = 2
+                # Nivel 2: trava 40% do pnl_pct
+                elif pnl_pct >= HFT_TRAIL_L2 and cur_level < 2:
+                    lock = pnl_pct * 0.40
+                    if side == 'BUY':
+                        cand = entry * (1 + lock / 100)
+                        if trail_sl is None or cand > trail_sl:
+                            new_tsl = cand; new_level = 2
+                    else:
+                        cand = entry * (1 - lock / 100)
+                        if trail_sl is None or cand < trail_sl:
+                            new_tsl = cand; new_level = 2
 
-            # Nivel 1 (Break-Even): SL = entry + buffer minimo
-            elif pnl_pct >= HFT_TRAIL_L1 and cur_level < 1:
-                buf = HFT_TRAIL_BE_BUF / 100
-                if side == 'BUY':
-                    cand = entry * (1 + buf)
-                    if trail_sl is None or cand > trail_sl:
-                        new_tsl = cand; new_level = 1
-                else:
-                    cand = entry * (1 - buf)
-                    if trail_sl is None or cand < trail_sl:
-                        new_tsl = cand; new_level = 1
-
-            # Nos niveis L3/L4, trail segue o preco dinamicamente (sobe com o preco)
-            if cur_level >= 3 and pnl_pct >= HFT_TRAIL_L3:
-                lock_pct = 0.75 if cur_level >= 4 else 0.60
-                lock = pnl_pct * lock_pct
-                if side == 'BUY':
-                    dyn = entry * (1 + lock / 100)
-                    if trail_sl is None or dyn > trail_sl:
-                        new_tsl = dyn
-                else:
-                    dyn = entry * (1 - lock / 100)
-                    if trail_sl is None or dyn < trail_sl:
-                        new_tsl = dyn
-
-            # Aplica novo nivel/SL se mudou
-            if new_level > cur_level or (new_tsl is not None and new_tsl != trail_sl):
-                if new_tsl is not None:
-                    # Garantia: apos L1, SL nunca fica abaixo do entry
+                # Nivel 1 (Break-Even): SL = entry + buffer minimo
+                elif pnl_pct >= HFT_TRAIL_L1 and cur_level < 1:
                     buf = HFT_TRAIL_BE_BUF / 100
-                    if new_level >= 1 and side == 'BUY'  and new_tsl < entry * (1 + buf):
-                        new_tsl = entry * (1 + buf)
-                    if new_level >= 1 and side == 'SELL' and new_tsl > entry * (1 - buf):
-                        new_tsl = entry * (1 - buf)
-                    self.positions[key]['trail_sl']     = new_tsl
-                    self.positions[key]['trail_level']  = new_level
-                    self.positions[key]['be_activated'] = new_level >= 1
-                    if new_level > cur_level:
-                        lnames = {1: 'BE', 2: 'Lock-40%', 3: 'Lock-60%', 4: 'Lock-75%'}
-                        locked_pct = (new_tsl - entry) / entry * 100 if side == 'BUY' else (entry - new_tsl) / entry * 100
-                        log.info(
-                            f'  TRAIL L{new_level} ({lnames[new_level]}) {pair} {side} '
-                            f'pnl=+{pnl_pct:.3f}% SL travado={locked_pct:+.3f}% (${new_tsl:,.5f})'
-                        )
+                    if side == 'BUY':
+                        cand = entry * (1 + buf)
+                        if trail_sl is None or cand > trail_sl:
+                            new_tsl = cand; new_level = 1
+                    else:
+                        cand = entry * (1 - buf)
+                        if trail_sl is None or cand < trail_sl:
+                            new_tsl = cand; new_level = 1
+
+                # Nos niveis L3/L4, trail segue o preco dinamicamente (sobe com o preco)
+                if cur_level >= 3 and pnl_pct >= HFT_TRAIL_L3:
+                    lock_pct = 0.75 if cur_level >= 4 else 0.60
+                    lock = pnl_pct * lock_pct
+                    if side == 'BUY':
+                        dyn = entry * (1 + lock / 100)
+                        if trail_sl is None or dyn > trail_sl:
+                            new_tsl = dyn
+                    else:
+                        dyn = entry * (1 - lock / 100)
+                        if trail_sl is None or dyn < trail_sl:
+                            new_tsl = dyn
+
+                # Aplica novo nivel/SL se mudou
+                if new_level > cur_level or (new_tsl is not None and new_tsl != trail_sl):
+                    if new_tsl is not None:
+                        # Garantia: apos L1, SL nunca fica abaixo do entry
+                        buf = HFT_TRAIL_BE_BUF / 100
+                        if new_level >= 1 and side == 'BUY'  and new_tsl < entry * (1 + buf):
+                            new_tsl = entry * (1 + buf)
+                        if new_level >= 1 and side == 'SELL' and new_tsl > entry * (1 - buf):
+                            new_tsl = entry * (1 - buf)
+                        self.positions[key]['trail_sl']     = new_tsl
+                        self.positions[key]['trail_level']  = new_level
+                        self.positions[key]['be_activated'] = new_level >= 1
+                        if new_level > cur_level:
+                            lnames = {1: 'BE', 2: 'Lock-40%', 3: 'Lock-60%', 4: 'Lock-75%'}
+                            locked_pct = (new_tsl - entry) / entry * 100 if side == 'BUY' else (entry - new_tsl) / entry * 100
+                            log.info(
+                                f'  TRAIL L{new_level} ({lnames[new_level]}) {pair} {side} '
+                                f'pnl=+{pnl_pct:.3f}% SL travado={locked_pct:+.3f}% (${new_tsl:,.5f})'
+                            )
+
 
             # SL ativo = trail (se habilitado) ou fixo
             if HFT_TRAIL_ENABLED:
