@@ -998,6 +998,10 @@ app.post('/api/bot/start', requireAuth, async (req, res) => {
     if (body.hft_tp_pct)     env['HFT_TP_PCT']      = String(body.hft_tp_pct);
     if (body.hft_compound !== undefined) env['HFT_COMPOUND']      = String(body.hft_compound);
     if (body.hft_skip_confirm !== undefined) env['HFT_SKIP_CONFIRM'] = String(body.hft_skip_confirm);
+    env['HFT_AI_ENABLED'] = process.env.HFT_AI_ENABLED || 'true';
+    if (process.env.LAOZHANG_API_KEY) env['LAOZHANG_API_KEY'] = process.env.LAOZHANG_API_KEY;
+    if (process.env.LAOZHANG_BASE_URL) env['LAOZHANG_BASE_URL'] = process.env.LAOZHANG_BASE_URL;
+    if (process.env.AI_MODEL) env['HFT_AI_MODEL_FAST'] = process.env.AI_MODEL;
     if (body.hft_only_buy !== undefined)     env['HFT_ONLY_BUY']     = String(body.hft_only_buy);
     if (body.hft_max_drift)  env['HFT_CONFIRM_MAX_DRIFT'] = String(body.hft_max_drift);
     if (body.hft_sl_pct)     env['HFT_SL_PCT']      = String(body.hft_sl_pct);
@@ -2795,6 +2799,32 @@ app.get('/api/performance/stats', requireAuth, (req, res) => {
 });
 
 // ─── HFT Manual Close ────────────────────────────────────────────────────────
+// ─── HFT Force Clear Stale Positions (fechadas na Binance mas ainda no DB) ──
+app.post('/api/hft/clear-stale', requireAuth, async (req, res) => {
+  try {
+    const { ids } = req.body;  // array de IDs para forçar fechamento
+    const now = new Date().toISOString();
+    let cleared = 0;
+    if (ids && ids.length > 0) {
+      for (const id of ids) {
+        db.run(
+          "UPDATE bot_trades SET status='closed', exit_price=entry, pnl=0, reason='Fechado manualmente na Binance', closed_at=? WHERE id=? AND username=? AND status='open'",
+          [now, id, req.user], true
+        );
+        cleared++;
+      }
+    } else {
+      // Fecha TODAS as abertas se não especificou IDs
+      db.run(
+        "UPDATE bot_trades SET status='closed', exit_price=entry, pnl=0, reason='Limpeza manual', closed_at=? WHERE username=? AND status='open' AND strategy='hft'",
+        [now, req.user], true
+      );
+      cleared = -1;
+    }
+    res.json({ ok: true, cleared });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 app.post('/api/hft/close', requireAuth, async (req, res) => {
   try {
     const { trade_id, pair } = req.body;

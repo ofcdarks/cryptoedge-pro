@@ -7524,6 +7524,20 @@ async function hftStop() {
   }
 }
 
+async function hftClearStale() {
+  if (!await showConfirm('Limpar posições', 'Remove do painel todas as posições que já foram fechadas na Binance. Continue?')) return;
+  try {
+    const r = await fetch('/api/hft/clear-stale', {
+      method: 'POST',
+      headers: { ...auth.headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    const d = await r.json();
+    if (d.ok) { showToast('✅ Posições limpas com sucesso'); setTimeout(loadHFTStats, 1000); }
+    else showToast('❌ ' + (d.error || 'Erro'), true);
+  } catch(e) { showToast('❌ ' + e.message, true); }
+}
+
 async function hftManualClose(tradeId, sym) {
   if (!await showConfirm('Fechar ' + sym, `Fechar a posição ${sym} agora ao preço de mercado?`)) return;
   try {

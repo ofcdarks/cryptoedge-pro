@@ -273,7 +273,7 @@ class HFTEngine:
         # ── AI Advisor
         # AI Advisor desativado por padrão no HFT — latência de 3-4s prejudica entradas em 1m
         # Para ativar: HFT_AI_ENABLED=true no .bot.env ou variáveis de ambiente
-        _ai_default = os.environ.get('HFT_AI_ENABLED', 'false').lower() == 'true'
+        _ai_default = os.environ.get('HFT_AI_ENABLED', 'true').lower() == 'true'  # ativado por padrão
         self.ai_advisor = (get_ai_advisor() if _AI_MODULE_OK else None) if _ai_default else None
         self._ai_skipped = 0    # trades ignorados pela IA
         self._ai_approved = 0   # trades aprovados pela IA
@@ -675,6 +675,10 @@ class HFTEngine:
             return {'side': None, 'score': 0, 'reason': f'divergencia [{regime}]', 'strategies': []}
 
         if buy_count >= min_sg and buy_score >= min_sc and buy_score > sell_score * 1.4:
+            # Bloqueia BUY em tendência de baixa (evita operar contra o mercado)
+            if regime == 'trending_down':
+                return {'side': None, 'score': 0, 'strategies': [],
+                        'reason': f'BUY bloqueado em trending_down (opera só na tendência)'}
             return {'side': 'BUY', 'score': buy_score, 'count': buy_count,
                     'reason': ' + '.join(buy_reasons[:3]),
                     'strategies': list(set(buy_strats)),
@@ -685,6 +689,10 @@ class HFTEngine:
             if HFT_ONLY_BUY:
                 return {'side': None, 'score': 0, 'strategies': [],
                         'reason': f'SELL ignorado (HFT_ONLY_BUY=true) [{regime}]'}
+            # Bloqueia SELL em tendência de alta (evita operar contra o mercado)
+            if regime == 'trending_up':
+                return {'side': None, 'score': 0, 'strategies': [],
+                        'reason': f'SELL bloqueado em trending_up (opera só na tendência)'}
             return {'side': 'SELL', 'score': sell_score, 'count': sell_count,
                     'reason': ' + '.join(sell_reasons[:3]),
                     'strategies': list(set(sell_strats)),
@@ -1385,11 +1393,74 @@ class HFTEngine:
         if sig['side']:
             if HFT_SKIP_CONFIRM:
                 log.info(f'  ⚡ HFT DIRETO {sig["side"]} {pair} score={sig["score"]:.1f} conf={sig.get("confidence",0):.0%}')
+
+                # ── Consulta IA antes de entrar ──────────────────────────────
+                ai_result  = None
+                tp_mult    = 1.0
+                sl_mult    = 1.0
+                entry_conf = sig.get('confidence', 0.5)
+                entry_reason = f'[DIRECT] {sig["reason"]}'
+
+                if self.ai_advisor and self.ai_advisor.enabled:
+                    atr_now = self._atr(self.highs[pair], self.lows[pair], self.closes[pair])
+                    if atr_now <= 0: atr_now = close * 0.002
+                    sl_d = max(atr_now, close * HFT_SL_PCT / 100)
+                    tp_d = max(atr_now * 2, sl_d * HFT_MIN_RR)
+                    indicators_ctx = {
+                        'rsi':      self._rsi(self.closes[pair]) if len(self.closes[pair]) >= 9 else 50,
+                        'ema21':    self._ema(list(self.closes[pair])[-21:], 21) if len(self.closes[pair]) >= 21 else close,
+                        'ema50':    self._ema(list(self.closes[pair])[-50:], 50) if len(self.closes[pair]) >= 50 else close,
+                        'atr_pct':  atr_now / close * 100,
+                        'vol_ratio': list(self.volumes[pair])[-1] / (sum(list(self.volumes[pair])[-6:-1])/5) if len(self.volumes[pair]) >= 6 else 1.0,
+                        'bb_pct_b': (self._bollinger(self.closes[pair]) or (0,0,0,0.5,0))[3],
+                        'macd_hist': self._macd_fast(self.closes[pair])[2],
+                        'regime':   self._detect_regime(pair),
+                        'adx':      self._adx(self.highs[pair], self.lows[pair], self.closes[pair]),
+                    }
+                    signal_ctx = {
+                        'score': sig['score'], 'count': sig.get('count', 0),
+                        'strategies': sig.get('strategies', []), 'reason': sig['reason'],
+                        'confidence': entry_conf,
+                        'tp_pct': tp_d/close*100, 'sl_pct': sl_d/close*100,
+                    }
+                    ai_result = self.ai_advisor.validate(
+                        pair, sig['side'], close,
+                        indicators_ctx, signal_ctx,
+                        self.pair_stats.get(pair, {}),
+                        self.learner.get_summary()
+                    )
+
+                    if ai_result and ai_result.get('source') not in ('fallback', 'disabled'):
+                        ai_dec  = ai_result.get('decision', 'ENTER')
+                        ai_conf = ai_result.get('confidence', 0.5)
+                        ai_why  = ai_result.get('reason', '')
+                        tp_mult = ai_result.get('tp_mult', 1.0)
+                        sl_mult = ai_result.get('sl_mult', 1.0)
+                        model   = ai_result.get('model_used', '?')
+
+                        if ai_dec == 'SKIP':
+                            self._ai_skipped += 1
+                            self.notify(
+                                f'🚫 IA bloqueou {sig["side"]} {pair.replace("USDT","")}\n'
+                                f'Modelo: {model} | Conf IA: {ai_conf:.0%}\n'
+                                f'Motivo: {ai_why}'
+                            )
+                            log.info(f'  🚫 IA BLOQUEOU {pair} {sig["side"]} | {ai_why}')
+                            return  # sai sem entrar
+                        elif ai_dec == 'REDUCE':
+                            entry_conf = min(entry_conf, 0.4)
+                            entry_reason = f'[IA:REDUCE {ai_conf:.0%}] {sig["reason"]}'
+                            log.info(f'  ⚠️ IA REDUCE {pair} — {ai_why} | entrando com size reduzido')
+                        else:
+                            entry_reason = f'[IA:{ai_conf:.0%}] {sig["reason"]}'
+                            log.info(f'  ✅ IA APROVOU {pair} {sig["side"]} conf={ai_conf:.0%} | {ai_why}')
+
                 entered = self._open_position(
                     pair, sig['side'], close,
-                    f'[DIRECT] {sig["reason"]}',
+                    entry_reason,
                     sig.get('strategies', []),
-                    sig.get('confidence', 0.5)
+                    entry_conf,
+                    tp_mult=tp_mult, sl_mult=sl_mult
                 )
                 if not entered:
                     info = self._sym_info.get(pair, {})
