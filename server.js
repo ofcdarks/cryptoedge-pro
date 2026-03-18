@@ -398,19 +398,19 @@ app.get('/api/dashboard/summary', requireAuth, async (req, res) => {
 
     // Bot trades (HFT/pattern) — hoje
     const botToday = db.all(
-      `SELECT pnl, result FROM bot_trades WHERE username=? AND status='closed' AND closed_at >= ?`,
+      `SELECT pnl, CASE WHEN pnl > 0 THEN 'win' ELSE 'loss' END as result FROM bot_trades WHERE username=? AND status='closed' AND closed_at >= ?`,
       [req.user, today + ' 00:00:00']
     );
     // Trades manuais (journal) — hoje
     const manualToday = db.all(
-      `SELECT pnl, result FROM trades WHERE username=? AND created_at >= ?`,
+      `SELECT pnl, CASE WHEN pnl > 0 THEN 'win' ELSE 'loss' END as result FROM trades WHERE username=? AND created_at >= ?`,
       [req.user, today + ' 00:00:00']
     );
 
     // Bot trades — total
     const botAll = db.all(`SELECT pnl FROM bot_trades WHERE username=? AND status='closed'`, [req.user]);
     // Trades manuais — total
-    const manualAll = db.all(`SELECT pnl, result FROM trades WHERE username=?`, [req.user]);
+    const manualAll = db.all(`SELECT pnl, CASE WHEN pnl > 0 THEN 'win' ELSE 'loss' END as result FROM trades WHERE username=?`, [req.user]);
 
     const sumPnl = arr => arr.reduce((s, t) => s + (parseFloat(t.pnl) || 0), 0);
 
