@@ -119,7 +119,7 @@ HFT_SESSION_FILTER = os.environ.get('HFT_SESSION_FILTER', 'false').lower() == 't
 HFT_TZ_OFFSET    = int(os.environ.get('HFT_TZ_OFFSET',    '-3'))   # UTC-3 BRT
 
 # Confirmação: máximo de desvio de preço permitido para confirmar sinal (%)
-HFT_CONFIRM_MAX_DRIFT = float(os.environ.get('HFT_CONFIRM_MAX_DRIFT', '0.25'))  # era 0.15
+HFT_CONFIRM_MAX_DRIFT = float(os.environ.get('HFT_CONFIRM_MAX_DRIFT', '0.80'))  # era 0.15 → 0.80% para 1m candles
 # Pula confirmação de vela (entra direto no sinal) — útil em tendências fortes
 HFT_SKIP_CONFIRM = os.environ.get('HFT_SKIP_CONFIRM', 'false').lower() == 'true'
 
