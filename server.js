@@ -1041,6 +1041,13 @@ app.post('/api/bot/start', requireAuth, async (req, res) => {
       'HFT_TRAIL_L1','HFT_TRAIL_L2','HFT_TRAIL_L3','HFT_TRAIL_L4',
       'HFT_AI_ENABLED','HFT_AI_MIN_CONF','HFT_AI_MODEL_FAST','HFT_AI_MODEL_DEEP',
       'BOT_SCAN_ENABLED','BOT_SCAN_PAIRS','BOT_SCAN_INTERVAL','BOT_SCAN_MIN_CONF',
+      'HFT_HEARTBEAT_SEC','HFT_NOTIFY_SIGNAL','HFT_UPDATE_INTERVAL',
+      'HFT_TRAIL_ENABLED','HFT_TRAIL_BE_BUF','HFT_MIN_RR','HFT_ADX_MIN',
+      'HFT_RSI_BUY','HFT_RSI_SELL','HFT_MIN_SCORE','HFT_SKIP_CONFIRM',
+      'HFT_CONFIRM_MAX_DRIFT','HFT_ONLY_BUY','HFT_COMPOUND',
+      'HFT_MIN_ATR_PCT','HFT_MIN_NET_PROFIT','HFT_FEE_RATE','HFT_LEVERAGE',
+      'HFT_TIME_EXIT','BOT_MARKET','LAOZHANG_API_KEY','LAOZHANG_BASE_URL',
+      'TELEGRAM_TOKEN','TELEGRAM_CHAT_ID',
     ];
     botEnvKeys.forEach(k => { if (env[k] !== undefined) cfgToSave.push(`${k}=${env[k]}`); });
     try { require('fs').writeFileSync(BOT_ENV_PATH, cfgToSave.join('\n') + '\n'); } catch {}
