@@ -90,8 +90,8 @@ def _hft_save_close(tid, exit_p, pnl, reason):
 log = logging.getLogger('CryptoEdge.HFT')
 
 # ── Config global (env) ───────────────────────────────────────────────────────
-HFT_TP_PCT       = float(os.environ.get('HFT_TP_PCT',      '0.55'))  # era 0.40%
-HFT_SL_PCT       = float(os.environ.get('HFT_SL_PCT',      '0.38'))  # era 0.20%
+HFT_TP_PCT       = float(os.environ.get('HFT_TP_PCT',      '1.00'))  # 1% TP — cobre fees + lucro real
+HFT_SL_PCT       = float(os.environ.get('HFT_SL_PCT',      '0.50'))  # 0.5% SL — sai rapido se errar
 # Trail Stop Progressivo: 4 niveis de travamento de lucro
 # L1: lucro >= X% -> SL vai para break-even + buffer (nunca mais fecha no negativo)
 # L2: lucro >= X% -> SL trava 40% do lucro
@@ -121,7 +121,7 @@ HFT_TZ_OFFSET    = int(os.environ.get('HFT_TZ_OFFSET',    '-3'))   # UTC-3 BRT
 # Confirmação: máximo de desvio de preço permitido para confirmar sinal (%)
 HFT_CONFIRM_MAX_DRIFT = float(os.environ.get('HFT_CONFIRM_MAX_DRIFT', '0.80'))  # era 0.15 → 0.80% para 1m candles
 # Pula confirmação de vela (entra direto no sinal) — útil em tendências fortes
-HFT_SKIP_CONFIRM = os.environ.get('HFT_SKIP_CONFIRM', 'true').lower() == 'true'  # padrão: entra direto
+HFT_SKIP_CONFIRM = os.environ.get('HFT_SKIP_CONFIRM', 'false').lower() == 'true'  # confirmação de vela ativa
 # Spot: só opera BUY (não tem ativo para vender short)
 HFT_ONLY_BUY     = os.environ.get('HFT_ONLY_BUY', 'false').lower() == 'true'
 # Tipo de mercado: 'spot' ou 'futures' — define qual API de ordens usar
@@ -560,11 +560,17 @@ class HFTEngine:
         if regime == 'choppy':
             return {'side': None, 'score': 0, 'reason': 'choppy', 'strategies': []}
 
+        # ADX mínimo: só opera em mercado com direção clara
+        adx_min = float(os.environ.get('HFT_ADX_MIN', '18'))
+        adx_cur = self._adx(highs, lows, closes)
+        if adx_cur < adx_min:
+            return {'side': None, 'score': 0, 'reason': f'ADX {adx_cur:.0f} < {adx_min:.0f} (mercado sem direção)', 'strategies': []}
+
         # Parâmetros calibrados para este par
-        rsi_buy  = self._get_pair_param(pair, 'rsi_buy',  28.0)
-        rsi_sell = self._get_pair_param(pair, 'rsi_sell', 72.0)
+        rsi_buy  = self._get_pair_param(pair, 'rsi_buy',  float(os.environ.get('HFT_RSI_BUY', '22.0')))
+        rsi_sell = self._get_pair_param(pair, 'rsi_sell', float(os.environ.get('HFT_RSI_SELL', '78.0')))
         vol_mult = self._get_pair_param(pair, 'vol_mult',  1.5)
-        min_sc   = self._get_pair_param(pair, 'min_score', float(os.environ.get('HFT_MIN_SCORE', '2.5')))
+        min_sc   = self._get_pair_param(pair, 'min_score', float(os.environ.get('HFT_MIN_SCORE', '3.5')))
         min_sg   = self._get_pair_param(pair, 'min_signals', int(os.environ.get('HFT_MIN_SIGNALS', '3')))
 
         # Filtro macro EMA 50
@@ -678,7 +684,11 @@ class HFTEngine:
             # Bloqueia BUY em tendência de baixa (evita operar contra o mercado)
             if regime == 'trending_down':
                 return {'side': None, 'score': 0, 'strategies': [],
-                        'reason': f'BUY bloqueado em trending_down (opera só na tendência)'}
+                        'reason': f'BUY bloqueado em trending_down'}
+            # Em ranging só opera se RSI muito extremo (<18) para maior precisão
+            if regime == 'ranging' and rsi_v > 18:
+                return {'side': None, 'score': 0, 'strategies': [],
+                        'reason': f'BUY em ranging só com RSI<18 (atual {rsi_v:.0f})'}
             return {'side': 'BUY', 'score': buy_score, 'count': buy_count,
                     'reason': ' + '.join(buy_reasons[:3]),
                     'strategies': list(set(buy_strats)),
@@ -692,7 +702,11 @@ class HFTEngine:
             # Bloqueia SELL em tendência de alta (evita operar contra o mercado)
             if regime == 'trending_up':
                 return {'side': None, 'score': 0, 'strategies': [],
-                        'reason': f'SELL bloqueado em trending_up (opera só na tendência)'}
+                        'reason': f'SELL bloqueado em trending_up'}
+            # Em ranging só opera se RSI muito extremo (>82) para maior precisão
+            if regime == 'ranging' and rsi_v < 82:
+                return {'side': None, 'score': 0, 'strategies': [],
+                        'reason': f'SELL em ranging só com RSI>82 (atual {rsi_v:.0f})'}
             return {'side': 'SELL', 'score': sell_score, 'count': sell_count,
                     'reason': ' + '.join(sell_reasons[:3]),
                     'strategies': list(set(sell_strats)),
@@ -1021,7 +1035,13 @@ class HFTEngine:
                 else:
                     self.client.create_order(symbol=pair, side=cs, type=ORDER_TYPE_MARKET, quantity=qty)
         except Exception as e:
-            log.error(f'  HFT close {pair} erro: {e}')
+            err_str = str(e)
+            log.error(f'  HFT close {pair} erro: {err_str}')
+            self.notify(
+                f'❌ ERRO ao fechar {side} {pair.replace("USDT","")}\n'
+                f'Erro Binance: {err_str[:200]}\n'
+                f'⚠️ Feche manualmente na Binance!'
+            )
 
         pnl      = (price - pos['entry']) * qty if side == 'BUY' else (pos['entry'] - price) * qty
         self.daily_pnl += pnl
