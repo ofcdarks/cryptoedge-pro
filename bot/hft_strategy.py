@@ -852,16 +852,47 @@ class HFTEngine:
     def _get_sym_info(self, pair):
         if pair not in self._sym_info:
             try:
-                info = self.client.get_symbol_info(pair)
-                lot  = next(f for f in info['filters'] if f['filterType'] == 'LOT_SIZE')
-                self._sym_info[pair] = {
-                    'min_qty': float(lot['minQty']),
-                    'step':    float(lot['stepSize']),
-                    'min_notional': 10.0,
-                }
+                if HFT_MARKET == 'futures':
+                    # Futuros USD-M: usa futures_exchange_info
+                    info = self.client.futures_exchange_info()
+                    sym  = next((s for s in info['symbols'] if s['symbol'] == pair), None)
+                    if sym:
+                        lot = next(f for f in sym['filters'] if f['filterType'] == 'LOT_SIZE')
+                        mnt = next((f for f in sym['filters'] if f['filterType'] == 'MIN_NOTIONAL'), {})
+                        self._sym_info[pair] = {
+                            'min_qty':      float(lot['minQty']),
+                            'step':         float(lot['stepSize']),
+                            'min_notional': float(mnt.get('notional', 5.0)),
+                        }
+                        log.info(f'  📐 {pair} futures: step={lot["stepSize"]} min_qty={lot["minQty"]}')
+                    else:
+                        raise ValueError(f'{pair} não encontrado em futures_exchange_info')
+                else:
+                    # Spot
+                    info = self.client.get_symbol_info(pair)
+                    lot  = next(f for f in info['filters'] if f['filterType'] == 'LOT_SIZE')
+                    self._sym_info[pair] = {
+                        'min_qty': float(lot['minQty']),
+                        'step':    float(lot['stepSize']),
+                        'min_notional': 10.0,
+                    }
             except Exception as e:
-                log.warning(f'  sym_info {pair}: {e}')
-                self._sym_info[pair] = {'min_qty': 0.001, 'step': 0.001, 'min_notional': 10.0}
+                log.warning(f'  sym_info {pair}: {e} — usando fallback')
+                # Fallbacks realistas por tipo de mercado
+                fallbacks = {
+                    'BTCUSDT':  (0.001, 0.001, 10.0),
+                    'ETHUSDT':  (0.001, 0.001, 10.0),
+                    'BNBUSDT':  (0.01,  0.01,  5.0),
+                    'SOLUSDT':  (0.1,   0.1,   5.0),
+                    'XRPUSDT':  (1.0,   1.0,   5.0),
+                    'DOGEUSDT': (1.0,   1.0,   5.0),
+                    'ADAUSDT':  (1.0,   1.0,   5.0),
+                    'AVAXUSDT': (0.1,   0.1,   5.0),
+                    'DOTUSDT':  (0.1,   0.1,   5.0),
+                    'MATICUSDT':(1.0,   1.0,   5.0),
+                }
+                fb = fallbacks.get(pair, (1.0, 1.0, 5.0))
+                self._sym_info[pair] = {'min_qty': fb[0], 'step': fb[1], 'min_notional': fb[2]}
         return self._sym_info[pair]
 
     def _round_step(self, v, step):
@@ -1283,11 +1314,15 @@ class HFTEngine:
                     sig.get('confidence', 0.5)
                 )
                 if not entered:
+                    info = self._sym_info.get(pair, {})
+                    budget = self.capital * HFT_RISK_PCT / 100
+                    qty_est = budget / close if close > 0 else 0
                     self.notify(
-                        f'⚠️ Sinal gerado mas NÃO entrou\n'
-                        f'{sig["side"]} {pair.replace("USDT","")} @ ${close:,.4f}\n'
-                        f'Score: {sig["score"]:.1f} | Conf: {sig.get("confidence",0):.0%}\n'
-                        f'Motivo bloqueio: verificar R:R ou qty mínima'
+                        f'⚠️ {sig["side"]} {pair.replace("USDT","")} gerado mas NÃO entrou\n'
+                        f'Preço: ${close:,.4f} | Budget: ${budget:.2f}\n'
+                        f'Qty estimada: {qty_est:.4f} | Min qty: {info.get("min_qty","?")}\n'
+                        f'Step: {info.get("step","?")} | Min notional: ${info.get("min_notional","?")}\n'
+                        f'Score: {sig["score"]:.1f} | Conf: {sig.get("confidence",0):.0%}'
                     )
             else:
                 self._pending[pair] = sig
