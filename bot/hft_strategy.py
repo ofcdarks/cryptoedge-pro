@@ -90,8 +90,8 @@ def _hft_save_close(tid, exit_p, pnl, reason):
 log = logging.getLogger('CryptoEdge.HFT')
 
 # ── Config global (env) ───────────────────────────────────────────────────────
-HFT_TP_PCT       = float(os.environ.get('HFT_TP_PCT',      '1.00'))  # 1% TP — cobre fees + lucro real
-HFT_SL_PCT       = float(os.environ.get('HFT_SL_PCT',      '0.50'))  # 0.5% SL — sai rapido se errar
+HFT_TP_PCT       = float(os.environ.get('HFT_TP_PCT',      '2.00'))  # 2% TP — cobre fees com margem
+HFT_SL_PCT       = float(os.environ.get('HFT_SL_PCT',      '0.80'))  # 0.8% SL — R:R 2.5:1
 # Trail Stop Progressivo: 4 niveis de travamento de lucro
 # L1: lucro >= X% -> SL vai para break-even + buffer (nunca mais fecha no negativo)
 # L2: lucro >= X% -> SL trava 40% do lucro
@@ -102,7 +102,7 @@ HFT_TRAIL_L2 = float(os.environ.get('HFT_TRAIL_L2', '0.08'))  # % lucro p/ trava
 HFT_TRAIL_L3 = float(os.environ.get('HFT_TRAIL_L3', '0.15'))  # % lucro p/ travar 60%
 HFT_TRAIL_L4 = float(os.environ.get('HFT_TRAIL_L4', '0.25'))  # % lucro p/ travar 75%
 HFT_TRAIL_BE_BUF = float(os.environ.get('HFT_TRAIL_BE_BUF', '0.01'))  # buffer BE %
-HFT_RISK_PCT     = float(os.environ.get('HFT_RISK_PCT',    '5.0'))  # era 1.5% → 5% para lucro real
+HFT_RISK_PCT     = float(os.environ.get('HFT_RISK_PCT',    '15.0')) # 15% — budget suficiente para cobrir taxas
 HFT_MAX_TRADES   = int(os.environ.get('HFT_MAX_TRADES',    '5'))   # era 3 → mais oportunidades
 HFT_DAILY_LOSS   = float(os.environ.get('HFT_DAILY_LOSS',  '3.0'))
 HFT_COOLDOWN     = int(os.environ.get('HFT_COOLDOWN',      '45'))
