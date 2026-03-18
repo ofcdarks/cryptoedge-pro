@@ -562,8 +562,8 @@ class HFTEngine:
         rsi_buy  = self._get_pair_param(pair, 'rsi_buy',  28.0)
         rsi_sell = self._get_pair_param(pair, 'rsi_sell', 72.0)
         vol_mult = self._get_pair_param(pair, 'vol_mult',  1.5)
-        min_sc   = self._get_pair_param(pair, 'min_score', 3.0)
-        min_sg   = self._get_pair_param(pair, 'min_signals', HFT_MIN_SIGNALS)
+        min_sc   = self._get_pair_param(pair, 'min_score', float(os.environ.get('HFT_MIN_SCORE', '2.5')))
+        min_sg   = self._get_pair_param(pair, 'min_signals', int(os.environ.get('HFT_MIN_SIGNALS', '3')))
 
         # Filtro macro EMA 50
         ema50      = self._ema(list(closes)[-50:], 50) if len(closes) >= 50 else None
@@ -1258,9 +1258,16 @@ class HFTEngine:
 
         cooldown = HFT_COOLDOWN
         if self.consec_wins >= 3: cooldown = int(HFT_COOLDOWN * 0.7)
-        if now - self.last_trade_ts.get(pair, 0) < cooldown: return
-        if sum(1 for k in self.positions if k.startswith(pair)) >= 1: return
-        if len(self.positions) >= HFT_MAX_TRADES: return
+        secs_since = now - self.last_trade_ts.get(pair, 0)
+        if secs_since < cooldown:
+            log.debug(f'  ⏳ {pair} cooldown {int(cooldown-secs_since)}s restantes')
+            return
+        if sum(1 for k in self.positions if k.startswith(pair)) >= 1:
+            log.debug(f'  ⛔ {pair} já tem posição aberta')
+            return
+        if len(self.positions) >= HFT_MAX_TRADES:
+            self.notify(f'⛔ MAX_TRADES={HFT_MAX_TRADES} atingido — aguardando fechar posição')
+            return
 
         # ── FASE 2: Gerar novo sinal (se nenhum pendente) ─────────────────
         with self._lock:
@@ -1268,27 +1275,22 @@ class HFTEngine:
 
         if sig['side']:
             if HFT_SKIP_CONFIRM:
-                # SKIP_CONFIRM: entra direto na mesma vela sem esperar confirmação
-                log.info(
-                    f'  ⚡ HFT SKIP_CONFIRM {sig["side"]} {pair} '
-                    f'score={sig["score"]:.1f} conf={sig.get("confidence",0):.0%} | {sig["reason"]}'
-                )
-                self._open_position(
+                log.info(f'  ⚡ HFT DIRETO {sig["side"]} {pair} score={sig["score"]:.1f} conf={sig.get("confidence",0):.0%}')
+                entered = self._open_position(
                     pair, sig['side'], close,
                     f'[DIRECT] {sig["reason"]}',
                     sig.get('strategies', []),
                     sig.get('confidence', 0.5)
                 )
+                if not entered:
+                    self.notify(
+                        f'⚠️ Sinal gerado mas NÃO entrou\n'
+                        f'{sig["side"]} {pair.replace("USDT","")} @ ${close:,.4f}\n'
+                        f'Score: {sig["score"]:.1f} | Conf: {sig.get("confidence",0):.0%}\n'
+                        f'Motivo bloqueio: verificar R:R ou qty mínima'
+                    )
             else:
-                # Armazena como PENDENTE — espera confirmação na próxima vela
                 self._pending[pair] = sig
-                log.info(
-                    f'  📡 HFT SINAL PENDENTE {sig["side"]} {pair} '
-                    f'score={sig["score"]:.1f} ({sig.get("count",0)} sinais) '
-                    f'conf={sig.get("confidence",0):.0%} | {sig["reason"]} '
-                    f'[{sig.get("regime","?")}] → aguarda confirmação'
-                )
-                # Telegram: avisa usuário que sinal foi encontrado
                 self.send_signal_alert(
                     pair, sig['side'], sig['score'], sig.get('count', 0),
                     sig['reason'], sig.get('regime', '?'), sig.get('rsi', 50),
@@ -1296,10 +1298,18 @@ class HFTEngine:
                 )
         else:
             n = self._candle_count.get(pair, 0)
-            if n > 0 and n % 20 == 0:
+            log.info(f'  📊 HFT {pair} RSI={self._rsi(self.closes[pair]):.0f} | {sig["reason"]}')
+            # A cada 10 velas sem sinal, manda resumo no Telegram com motivo
+            if n > 0 and n % 10 == 0:
                 rsi_v  = self._rsi(self.closes[pair]) if len(self.closes[pair]) >= 9 else 50
                 regime = self._detect_regime(pair) if len(self.closes[pair]) >= 50 else '?'
-                log.info(f'  📊 HFT {pair} | velas={n} RSI={rsi_v:.0f} regime={regime} | {sig["reason"]} | pos={len(self.positions)}')
+                regime_icons = {'trending_up':'↗','trending_down':'↘','ranging':'↔','choppy':'〰'}
+                r_icon = regime_icons.get(regime, '?')
+                self.notify(
+                    f'🔍 {pair.replace("USDT","")} sem sinal ({n} velas)\n'
+                    f'RSI: {rsi_v:.0f} | {r_icon} {regime}\n'
+                    f'Motivo: {sig["reason"]}'
+                )
 
     # ── Stats e relatórios ────────────────────────────────────────────────────
 
