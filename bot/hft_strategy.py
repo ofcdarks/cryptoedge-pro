@@ -717,6 +717,7 @@ class HFTEngine:
         # Se o preço fugiu muito do sinal original, descarta (entrada atrasada)
         if drift > HFT_CONFIRM_MAX_DRIFT:
             log.info(f'  ⚠ HFT {pair} confirmação DESCARTADA: drift {drift:.2f}% > {HFT_CONFIRM_MAX_DRIFT}% | Evita entrada atrasada')
+            self.notify(f'⚠️ {side} {pair.replace("USDT","")} descartado\nDrift {drift:.2f}% > limite {HFT_CONFIRM_MAX_DRIFT}% (preço fugiu entre velas)')
             del self._pending[pair]
             return False
 
@@ -740,9 +741,11 @@ class HFTEngine:
                     return False
                 elif confidence >= 0.75 and attempts > 1:
                     log.info(f'  ➡️ HFT {pair} {side} 2ª tentativa conf {confidence:.0%} — entrando sem confirmação de vela')
+                    self.notify(f'➡️ {side} {pair.replace("USDT","")} — 2ª tentativa\nConf {confidence:.0%} ≥ 75% → entrando agora')
                     # Continua para entrada
                 else:
                     log.info(f'  ✗ HFT {pair} {side} NÃO confirmado conf={confidence:.0%} → descartado')
+                    self.notify(f'❌ {side} {pair.replace("USDT","")} descartado\nVela contrária | conf={confidence:.0%} (abaixo de 75%)')
                     del self._pending[pair]
                     return False
 
