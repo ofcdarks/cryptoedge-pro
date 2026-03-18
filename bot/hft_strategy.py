@@ -97,7 +97,10 @@ HFT_SL_PCT       = float(os.environ.get('HFT_SL_PCT',      '0.80'))  # 0.8% SL �
 # L2: lucro >= X% -> SL trava 40% do lucro
 # L3: lucro >= X% -> SL trava 60% do lucro
 # L4: lucro >= X% -> SL trava 75% do lucro
-HFT_TRAIL_L1 = float(os.environ.get('HFT_TRAIL_L1', '0.04'))  # % lucro p/ BE
+# Trail Stop: desativado por padrão (TP/SL fixos são mais simples e eficazes com 5x)
+# Para ativar: HFT_TRAIL_ENABLED=true + ajustar níveis acima do custo de taxa (>0.30%)
+HFT_TRAIL_ENABLED = os.environ.get('HFT_TRAIL_ENABLED', 'false').lower() == 'true'
+HFT_TRAIL_L1 = float(os.environ.get('HFT_TRAIL_L1', '0.40'))  # % lucro p/ BE — acima do custo de taxa
 HFT_TRAIL_L2 = float(os.environ.get('HFT_TRAIL_L2', '0.08'))  # % lucro p/ travar 40%
 HFT_TRAIL_L3 = float(os.environ.get('HFT_TRAIL_L3', '0.15'))  # % lucro p/ travar 60%
 HFT_TRAIL_L4 = float(os.environ.get('HFT_TRAIL_L4', '0.25'))  # % lucro p/ travar 75%
@@ -1285,11 +1288,14 @@ class HFTEngine:
                             f'pnl=+{pnl_pct:.3f}% SL travado={locked_pct:+.3f}% (${new_tsl:,.5f})'
                         )
 
-            # SL ativo = melhor entre original e trail
-            if side == 'BUY':
-                active_sl = max(sl_orig, self.positions.get(key, {}).get('trail_sl') or sl_orig)
+            # SL ativo = trail (se habilitado) ou fixo
+            if HFT_TRAIL_ENABLED:
+                if side == 'BUY':
+                    active_sl = max(sl_orig, self.positions.get(key, {}).get('trail_sl') or sl_orig)
+                else:
+                    active_sl = min(sl_orig, self.positions.get(key, {}).get('trail_sl') or sl_orig)
             else:
-                active_sl = min(sl_orig, self.positions.get(key, {}).get('trail_sl') or sl_orig)
+                active_sl = sl_orig  # SL fixo — sem trail
 
             tlv    = self.positions.get(key, {}).get('trail_level', 0)
             sl_lbl = f'Trail-L{tlv}' if tlv > 0 else 'SL'
