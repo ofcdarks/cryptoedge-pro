@@ -114,7 +114,7 @@ def _poll_loop():
                 time.sleep(5); continue
             r = requests.get(
                 f'https://api.telegram.org/bot{token}/getUpdates',
-                params={'offset': offset, 'timeout': 20, 'allowed_updates': ['callback_query']},
+                params={'offset': offset, 'timeout': 20, 'allowed_updates': ['message', 'callback_query']},
                 timeout=25
             )
             if r.status_code != 200:
@@ -126,16 +126,57 @@ def _poll_loop():
                 msg_upd = upd.get('message', {})
                 if msg_upd:
                     txt = msg_upd.get('text', '').strip().lower()
+                    stop_chat = str(msg_upd.get('chat', {}).get('id', ''))
+
                     if txt in ('/stop', '/parar', '/pause', '/pausar'):
-                        # Signal bot to stop via file flag
                         try:
                             import os as _os
                             _os.makedirs('/tmp', exist_ok=True)
                             with open('/tmp/hft_stop_flag', 'w') as _f: _f.write('stop')
-                            stop_chat = msg_upd.get('chat', {}).get('id')
-                            if stop_chat:
-                                _send('🛑 <b>Comando recebido — parando o bot...</b>', chat_id_override=str(stop_chat))
+                            _send('🛑 <b>Bot parado via Telegram</b>', chat_id_override=stop_chat)
                         except: pass
+
+                    elif txt in ('/start', '/iniciar', '/play'):
+                        try:
+                            import os as _os
+                            with open('/tmp/hft_start_flag', 'w') as _f: _f.write('start')
+                            _send('▶️ <b>Iniciando bot...</b>\nAguarde a confirmação de início.', chat_id_override=stop_chat)
+                        except: pass
+
+                    elif txt in ('/status', '/info', '/saldo'):
+                        try:
+                            from hft_strategy import get_hft_engine
+                            eng = get_hft_engine()
+                            if eng:
+                                s = eng.get_stats()
+                                pnl = s.get('daily_pnl', 0)
+                                wins = s.get('daily_wins', 0)
+                                losses = s.get('daily_losses', 0)
+                                cap = eng.capital
+                                budget = round(cap * float(_os.environ.get('HFT_RISK_PCT','10')) / 100, 2)
+                                icon = '🟢' if pnl >= 0 else '🔴'
+                                _send(
+                                    f'📊 <b>Status HFT</b>\n'
+                                    f'💰 Capital: <code>${cap:.2f}</code> | Budget/trade: <code>${budget:.2f}</code>\n'
+                                    f'{icon} P&L hoje: <code>{"+" if pnl>=0 else ""}${pnl:.4f}</code>\n'
+                                    f'📈 {wins}W / {losses}L | WR: {wins/(wins+losses)*100:.0f}%' if (wins+losses)>0 else
+                                    f'📊 Nenhum trade hoje ainda',
+                                    chat_id_override=stop_chat
+                                )
+                            else:
+                                _send('⚠️ Bot não está ativo no momento.', chat_id_override=stop_chat)
+                        except Exception as _e:
+                            _send(f'⚠️ Erro ao obter status: {_e}', chat_id_override=stop_chat)
+
+                    elif txt in ('/ajuda', '/help', '/comandos'):
+                        _send(
+                            '📋 <b>Comandos disponíveis:</b>\n'
+                            '/status — saldo e P&L atual\n'
+                            '/stop — parar o bot\n'
+                            '/start — iniciar o bot\n'
+                            '/ajuda — esta mensagem',
+                            chat_id_override=stop_chat
+                        )
 
                 cq = upd.get('callback_query')
                 if not cq: continue

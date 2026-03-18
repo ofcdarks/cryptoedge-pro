@@ -741,7 +741,12 @@ class HFTEngine:
         # Se o preço fugiu muito do sinal original, descarta (entrada atrasada)
         if drift > HFT_CONFIRM_MAX_DRIFT:
             log.info(f'  ⚠ HFT {pair} confirmação DESCARTADA: drift {drift:.2f}% > {HFT_CONFIRM_MAX_DRIFT}% | Evita entrada atrasada')
-            self.notify(f'⚠️ {side} {pair.replace("USDT","")} descartado\nDrift {drift:.2f}% > limite {HFT_CONFIRM_MAX_DRIFT}% (preço fugiu entre velas)')
+            self.notify(
+                f'⚠️ {side} {pair.replace("USDT","")} descartado — preço fugiu\n'
+                f'Sinal: ${origin_price:,.4f} | Atual: ${close:,.4f}\n'
+                f'Drift: {drift:.2f}% > limite {HFT_CONFIRM_MAX_DRIFT}%\n'
+                f'💡 O mercado se moveu demais antes da confirmação'
+            )
             del self._pending[pair]
             return False
 
@@ -762,14 +767,28 @@ class HFTEngine:
                 if confidence >= 0.75 and attempts <= 1:
                     self._pending[pair]['attempts'] = attempts
                     log.info(f'  ⏳ HFT {pair} {side} vela não confirmou — conf {confidence:.0%} ≥ 75%, aguarda +1 vela')
+                    self.notify(
+                        f'⏳ {side} {pair.replace("USDT","")} — aguardando +1 vela\n'
+                        f'Preço: ${close:,.4f} | Conf: {confidence:.0%}\n'
+                        f'💡 Vela não confirmou ainda — tentativa {attempts}/2'
+                    )
                     return False
                 elif confidence >= 0.75 and attempts > 1:
                     log.info(f'  ➡️ HFT {pair} {side} 2ª tentativa conf {confidence:.0%} — entrando sem confirmação de vela')
-                    self.notify(f'➡️ {side} {pair.replace("USDT","")} — 2ª tentativa\nConf {confidence:.0%} ≥ 75% → entrando agora')
+                    self.notify(
+                        f'➡️ {side} {pair.replace("USDT","")} — entrando na 2ª tentativa\n'
+                        f'Preço: ${close:,.4f} | Conf: {confidence:.0%} ≥ 75%\n'
+                        f'💡 Vela neutra aceita em alta confiança'
+                    )
                     # Continua para entrada
                 else:
                     log.info(f'  ✗ HFT {pair} {side} NÃO confirmado conf={confidence:.0%} → descartado')
-                    self.notify(f'❌ {side} {pair.replace("USDT","")} descartado\nVela contrária | conf={confidence:.0%} (abaixo de 75%)')
+                    direction = 'caiu' if side == 'BUY' else 'subiu'
+                    self.notify(
+                        f'❌ {side} {pair.replace("USDT","")} descartado — vela contrária\n'
+                        f'Preço: ${close:,.4f} | Conf: {confidence:.0%}\n'
+                        f'💡 Vela {direction} após o sinal — mercado rejeitou a direção'
+                    )
                     del self._pending[pair]
                     return False
 
@@ -1551,6 +1570,20 @@ class HFTEngine:
         open_pos = len(self.positions)
         pending_count = len(self._pending)
 
+        # Busca saldo real da Binance para mostrar no heartbeat
+        real_balance = self.capital
+        try:
+            if HFT_MARKET == 'futures':
+                bals = self.client.futures_account_balance()
+                usdt = next((float(b['balance']) for b in bals if b['asset']=='USDT'), None)
+                if usdt: real_balance = usdt
+            else:
+                acc = self.client.get_account()
+                for a in acc.get('balances',[]):
+                    if a['asset']=='USDT':
+                        real_balance = float(a['free']); break
+        except: pass
+
         # Coleta regime e RSI dos pares ativos
         pair_lines = []
         for pair in list(HFT_PAIRS)[:6]:
@@ -1578,11 +1611,14 @@ class HFTEngine:
         pending_str = f'\n⏳ {pending_count} sinal(is) aguardando confirmação' if pending_count > 0 else ''
         budget = self.capital * HFT_RISK_PCT / 100
 
+        bal_diff = real_balance - self.capital
+        bal_str  = f'${real_balance:.2f}'
+        if abs(bal_diff) > 0.01: bal_str += f' ({bal_diff:+.2f} vs base)'
         self.notify(
             f'💓 <b>HFT Heartbeat — Bot ativo</b>\n'
             f'─────────────────────────\n'
             f'⚡ Monitorando <b>{len(HFT_PAIRS)}</b> pares em {HFT_TIMEFRAME}\n'
-            f'💰 Capital: <code>${self.capital:.2f}</code> | Budget/trade: <code>${budget:.2f}</code>\n'
+            f'💰 Saldo real: <code>{bal_str}</code> | Budget/trade: <code>${budget:.2f}</code>\n'
             f'{icon} Hoje: <code>{"+$" if pnl>=0 else "-$"}{abs(pnl):.4f}</code> | {total}T WR:{(self.daily_wins/max(self.daily_wins+self.daily_losses,1)*100):.0f}%\n'
             f'─────────────────────────\n'
             f'<b>Status dos pares:</b>\n' + '\n'.join(pair_lines) +
@@ -1742,6 +1778,23 @@ class HFTEngine:
         self.running = True
         # Recarrega calibração (pode ter sido atualizada overnight)
         self._load_calibration()
+        # Mostra resumo do aprendizado da IA no reset diário
+        try:
+            ls = self.learner.get_summary()
+            top = sorted([(s,d) for s,d in ls.items() if isinstance(d,dict) and d.get('n',0)>=5],
+                         key=lambda x: float(x[1].get('wr',0)) if x[1].get('wr')!='N/A' else 0, reverse=True)[:3]
+            bot3 = sorted([(s,d) for s,d in ls.items() if isinstance(d,dict) and d.get('n',0)>=5],
+                          key=lambda x: float(x[1].get('wr',0)) if x[1].get('wr')!='N/A' else 0)[:2]
+            if top:
+                top_str = ' | '.join(f'{s}:{d["wr"]}%' for s,d in top)
+                bot_str = ' | '.join(f'{s}:{d["wr"]}%' for s,d in bot3)
+                self.notify(
+                    f'🧠 <b>Aprendizado IA — resumo do dia</b>\n'
+                    f'✅ Melhores estratégias: {top_str}\n'
+                    f'❌ Piores: {bot_str}\n'
+                    f'💡 Pesos ajustados para amanhã automaticamente'
+                )
+        except: pass
         log.info('  ✅ HFT v3.1 novo dia iniciado')
 
 

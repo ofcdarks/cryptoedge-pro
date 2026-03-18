@@ -1039,6 +1039,25 @@ def main():
         threading.Thread(target=_hft_daily_reset, daemon=True).start()
 
         # Periodic status update every 4 hours
+        def _hft_check_telegram_flags():
+            import os as _tos
+            stop_f  = '/tmp/hft_stop_flag'
+            start_f = '/tmp/hft_start_flag'
+            if _tos.path.exists(stop_f):
+                try: _tos.remove(stop_f)
+                except: pass
+                eng = get_hft_engine()
+                if eng and eng.running:
+                    eng.running = False
+                    log.info('  Bot parado via /stop Telegram')
+            if _tos.path.exists(start_f):
+                try: _tos.remove(start_f)
+                except: pass
+                eng = get_hft_engine()
+                if eng and not eng.running:
+                    eng.running = True
+                    log.info('  Bot reativado via /start Telegram')
+
         def _hft_visibility_loop():
             """Thread de visibilidade: heartbeat + update periódico."""
             import datetime as _dt
@@ -1054,6 +1073,7 @@ def main():
                 if not eng or not state['running']: continue
                 now = time.time()
 
+                _hft_check_telegram_flags()
                 # ── Heartbeat (padrão: 5 min) ─────────────────────────────
                 hb_sec = HFT_HEARTBEAT_SEC
                 if hb_sec > 0 and now - _last_heartbeat >= hb_sec:
