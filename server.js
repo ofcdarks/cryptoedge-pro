@@ -982,7 +982,10 @@ app.post('/api/bot/start', requireAuth, async (req, res) => {
     const body = req.body || {};
     // Estratégia e modo de trade
     if (body.strategy)   env['BOT_STRATEGY']   = body.strategy;
-    if (body.timeframe)  env['BOT_TIMEFRAME']  = body.timeframe;
+    if (body.timeframe) {
+      env['BOT_TIMEFRAME']  = body.timeframe;
+      env['HFT_TIMEFRAME']  = body.timeframe;  // HFT engine reads HFT_TIMEFRAME
+    }
     env['BOT_TRADE_MODE'] = body.trade_mode || process.env.BOT_TRADE_MODE || 'manual';
     if (body.testnet !== undefined) env['BOT_TESTNET'] = String(body.testnet);
     if (body.capital)    env['BOT_CAPITAL']    = String(body.capital);

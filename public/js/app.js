@@ -7354,11 +7354,15 @@ function updateHFTProfitPreview() {
   const tp       = parseFloat(document.getElementById('hft-tp-pct')?.value    || '0.70');
   const sl       = parseFloat(document.getElementById('hft-sl-pct')?.value    || '0.40');
   const compound = document.getElementById('hft-compound')?.checked ?? true;
+  const tf       = document.getElementById('hft-tf')?.value || '1m';
   const budget   = cap * risk / 100;
   const perWin   = budget * tp / 100;
   const perLoss  = budget * sl / 100;
-  // Estimativa: 20 wins, 6 losses/dia (WR ~77%, 26T/dia)
-  const wins = 20, losses = 6;
+  // Estimativa de trades/dia por timeframe (WR ~70%)
+  const tfTrades = {'1m':20,'3m':8,'5m':5,'15m':3,'1h':2};
+  const totalDay = tfTrades[tf] || 8;
+  const wins = Math.round(totalDay * 0.70);
+  const losses = totalDay - wins;
   const perDay = wins * perWin - losses * perLoss;
   const fmtVal = v => Math.abs(v) < 0.01 ? '$' + v.toFixed(4) : Math.abs(v) < 1 ? '$' + v.toFixed(3) : '$' + v.toFixed(2);
   const e = id => document.getElementById(id);
