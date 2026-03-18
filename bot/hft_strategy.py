@@ -1267,20 +1267,33 @@ class HFTEngine:
             sig = self._generate_signal(pair)
 
         if sig['side']:
-            # Armazena como PENDENTE (não entra ainda — espera confirmação)
-            self._pending[pair] = sig
-            log.info(
-                f'  📡 HFT SINAL PENDENTE {sig["side"]} {pair} '
-                f'score={sig["score"]:.1f} ({sig.get("count",0)} sinais) '
-                f'conf={sig.get("confidence",0):.0%} | {sig["reason"]} '
-                f'[{sig.get("regime","?")}] → aguarda confirmação'
-            )
-            # Telegram: avisa usuário que sinal foi encontrado
-            self.send_signal_alert(
-                pair, sig['side'], sig['score'], sig.get('count', 0),
-                sig['reason'], sig.get('regime', '?'), sig.get('rsi', 50),
-                sig.get('confidence', 0.5), sig.get('price', close)
-            )
+            if HFT_SKIP_CONFIRM:
+                # SKIP_CONFIRM: entra direto na mesma vela sem esperar confirmação
+                log.info(
+                    f'  ⚡ HFT SKIP_CONFIRM {sig["side"]} {pair} '
+                    f'score={sig["score"]:.1f} conf={sig.get("confidence",0):.0%} | {sig["reason"]}'
+                )
+                self._open_position(
+                    pair, sig['side'], close,
+                    f'[DIRECT] {sig["reason"]}',
+                    sig.get('strategies', []),
+                    sig.get('confidence', 0.5)
+                )
+            else:
+                # Armazena como PENDENTE — espera confirmação na próxima vela
+                self._pending[pair] = sig
+                log.info(
+                    f'  📡 HFT SINAL PENDENTE {sig["side"]} {pair} '
+                    f'score={sig["score"]:.1f} ({sig.get("count",0)} sinais) '
+                    f'conf={sig.get("confidence",0):.0%} | {sig["reason"]} '
+                    f'[{sig.get("regime","?")}] → aguarda confirmação'
+                )
+                # Telegram: avisa usuário que sinal foi encontrado
+                self.send_signal_alert(
+                    pair, sig['side'], sig['score'], sig.get('count', 0),
+                    sig['reason'], sig.get('regime', '?'), sig.get('rsi', 50),
+                    sig.get('confidence', 0.5), sig.get('price', close)
+                )
         else:
             n = self._candle_count.get(pair, 0)
             if n > 0 and n % 20 == 0:
