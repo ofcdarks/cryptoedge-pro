@@ -260,8 +260,7 @@ def notify_start(symbol: str, strategy: str, capital: float, testnet: bool):
         f'<i>Monitorando o mercado...</i>\n'
         f'🕐 <i>{_ts()}</i>'
     )
-    if trade_mode == 'manual':
-        _start_poller()
+    _start_poller()  # sempre ativo — recebe /status /stop /start /ajuda
 
 def notify_stop(symbol: str, pnl: float, wins: int, losses: int):
     _stop_poller()
