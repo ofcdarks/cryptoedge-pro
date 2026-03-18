@@ -245,7 +245,8 @@ def notify_start(symbol: str, strategy: str, capital: float, testnet: bool):
             f'<i>⚡ Monitorando {len(pairs_list)} pares em AUTO...</i>\n'
             f'🕐 <i>{_ts()}</i>'
         )
-        # HFT é sempre AUTO — não precisa do poller de confirmação manual
+        # HFT usa poller para receber /status /stop /start /ajuda
+        _start_poller()
         return
 
     _send(

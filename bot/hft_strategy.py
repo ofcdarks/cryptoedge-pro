@@ -1905,63 +1905,71 @@ class HFTEngine:
 
 # ── Singleton ─────────────────────────────────────────────────────────────────
 _hft_engine = None
+_visibility_active = False   # flag independente de engine.running
+
 
 def get_hft_engine(): return _hft_engine
+
 
 def _start_visibility_thread(engine):
     """
     Thread de visibilidade autônoma — heartbeat + update periódico.
-    Iniciada automaticamente pelo init_hft() para garantir que o heartbeat
-    funcione independente do ponto de entrada (gridbot, server, etc.).
+    Usa _visibility_active (flag própria) em vez de engine.running,
+    para continuar funcionando mesmo quando o engine pausa por daily-loss.
     """
-    import time as _time
+    global _visibility_active
+    if _visibility_active:
+        log.debug('  Visibility thread já ativa — ignorando chamada duplicada')
+        return
+    _visibility_active = True
 
-    UPDATE_INTERVAL = int(os.environ.get('HFT_UPDATE_INTERVAL', '1800'))  # 30 min padrão
-    _sleep_step     = 30      # acorda a cada 30 s para checar
-    _last_heartbeat = 0.0
-    _last_update    = _time.time()
-    _first_hb_sent  = False
+    UPDATE_INTERVAL = int(os.environ.get('HFT_UPDATE_INTERVAL', '1800'))
 
     def _loop():
-        nonlocal _last_heartbeat, _last_update, _first_hb_sent
-        while engine.running:
-            _time.sleep(_sleep_step)
-            if not engine.running:
-                break
-            now = _time.time()
+        global _visibility_active
+        _last_heartbeat = 0.0
+        _last_update    = time.time()
+        _first_hb_sent  = False
+        try:
+            while _visibility_active:
+                time.sleep(30)
+                if not _visibility_active:
+                    break
+                now = time.time()
 
-            # ── Heartbeat ────────────────────────────────────────────────
-            hb_sec = HFT_HEARTBEAT_SEC
-            if hb_sec > 0:
-                first_delay = 30   # 1ª vez: 30 s após init (não espera 5 min)
-                due = _last_heartbeat + (first_delay if not _first_hb_sent else hb_sec)
-                if now >= due:
+                # ── Heartbeat ────────────────────────────────────────────
+                hb_sec = HFT_HEARTBEAT_SEC
+                if hb_sec > 0:
+                    delay = 30 if not _first_hb_sent else hb_sec
+                    if now >= _last_heartbeat + delay:
+                        try:
+                            engine.send_heartbeat()
+                            _last_heartbeat = now
+                            _first_hb_sent  = True
+                        except Exception as _e:
+                            log.debug(f'  Heartbeat erro: {_e}')
+
+                # ── Update periódico — só se houver trades ───────────────
+                total = engine.daily_wins + engine.daily_losses + getattr(engine, 'daily_breakevens', 0)
+                if total > 0 and now - _last_update >= UPDATE_INTERVAL:
                     try:
-                        engine.send_heartbeat()
-                        _last_heartbeat = now
-                        _first_hb_sent  = True
-                    except Exception as _e:
-                        log.debug(f'  Heartbeat erro: {_e}')
-
-            # ── Update periódico (padrão: 30 min) — só se houver trades ──
-            total = engine.daily_wins + engine.daily_losses + getattr(engine, 'daily_breakevens', 0)
-            if total > 0 and now - _last_update >= UPDATE_INTERVAL:
-                try:
-                    mins  = UPDATE_INTERVAL // 60
-                    label = f'{mins}min' if mins < 60 else f'{mins // 60}h'
-                    engine.send_periodic_update(label)
-                    _last_update = now
-                except Exception as _pe:
-                    log.debug(f'  Periodic update erro: {_pe}')
+                        mins  = UPDATE_INTERVAL // 60
+                        label = f'{mins}min' if mins < 60 else f'{mins // 60}h'
+                        engine.send_periodic_update(label)
+                        _last_update = now
+                    except Exception as _pe:
+                        log.debug(f'  Periodic update erro: {_pe}')
+        finally:
+            _visibility_active = False
 
     t = threading.Thread(target=_loop, daemon=True, name='HFT-Visibility')
     t.start()
-    log.info('  💓 HFT Visibility thread iniciada (heartbeat + updates)')
+    log.info('  💓 HFT Visibility thread iniciada (heartbeat a cada %ds)', HFT_HEARTBEAT_SEC)
 
 
 def init_hft(capital, client, notify_fn=None):
     global _hft_engine
     _hft_engine = HFTEngine(capital, client, notify_fn)
     _hft_engine.running = True
-    _start_visibility_thread(_hft_engine)   # ← heartbeat agora sempre ativo
+    _start_visibility_thread(_hft_engine)
     return _hft_engine
