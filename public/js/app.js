@@ -7071,8 +7071,9 @@ async function loadPairBreakdown(days=30) {
 }
 
 // ─── HFT BOT ──────────────────────────────────────────────────────────────────
-const HFT_PAIRS_DEFAULT = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT',
-  'DOGEUSDT','ADAUSDT','AVAXUSDT','MATICUSDT','DOTUSDT'];
+const HFT_PAIRS_DEFAULT = ['SOLUSDT','BNBUSDT','XRPUSDT','DOGEUSDT','ADAUSDT',
+  'AVAXUSDT','DOTUSDT','MATICUSDT','SUIUSDT','NEARUSDT','PEPEUSDT','WIFUSDT',
+  'FETUSDT','LINKUSDT'];
 let _hftRefreshTimer = null;
 
 function initHFTPanel() {
@@ -7116,7 +7117,7 @@ function initHFTPanel() {
   if (sel && sel.children.length === 0) {
     HFT_PAIRS_DEFAULT.forEach(pair => {
       const btn = document.createElement('div');
-      const active = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT'].includes(pair);
+      const active = HFT_PAIRS_DEFAULT.includes(pair);
       btn.className = 'hft-pair-btn';
       btn.dataset.pair = pair;
       btn.textContent = pair.replace('USDT','');
@@ -7439,7 +7440,7 @@ async function hftStart() {
   const pairs = [...document.querySelectorAll('.hft-pair-btn[data-active="1"]')].map(b => b.dataset.pair);
   if (pairs.length === 0) {
     // Fallback: usa pares padrão se seletor não inicializou
-    const defaultPairs = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT'];
+    const defaultPairs = ['SOLUSDT','BNBUSDT','XRPUSDT','DOGEUSDT','ADAUSDT','AVAXUSDT','DOTUSDT','MATICUSDT','SUIUSDT','NEARUSDT','PEPEUSDT','WIFUSDT','FETUSDT','LINKUSDT'];
     showToast('⚠️ Usando pares padrão — abra o painel HFT primeiro para personalizar', false);
     pairs.push(...defaultPairs);
   }
