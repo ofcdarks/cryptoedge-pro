@@ -148,6 +148,11 @@ HFT_CONFIRM_MAX_DRIFT = float(os.environ.get('HFT_CONFIRM_MAX_DRIFT', '0.80'))  
 HFT_MIN_ATR_PCT    = float(os.environ.get('HFT_MIN_ATR_PCT',    '0.10'))  # ATR mínimo por vela (%)
 HFT_MIN_NET_PROFIT = float(os.environ.get('HFT_MIN_NET_PROFIT', '0.08'))  # lucro líquido mínimo ($)
 HFT_FEE_RATE       = float(os.environ.get('HFT_FEE_RATE',       '0.0005'))# taxa taker 0.05% (Binance futures)
+# ── Slippage Buffer — protege contra diferença entre preço visto e executado ──
+# Slippage estimado em % do preço. Com posições pequenas (~$50-170), slippage é ~0.10-0.20%
+# O bot só permite fechar trade se: lucro bruto > taxa + slippage estimado
+HFT_SLIPPAGE_PCT   = float(os.environ.get('HFT_SLIPPAGE_PCT',   '0.15'))  # 0.15% slippage estimado
+HFT_SLIPPAGE_LEARN = os.environ.get('HFT_SLIPPAGE_LEARN', 'true').lower() == 'true'  # aprende com trades reais
 HFT_LEVERAGE       = int(os.environ.get('HFT_LEVERAGE',          '5'))     # alavancagem Binance
 # Pula confirmação de vela (entra direto no sinal) — útil em tendências fortes
 HFT_SKIP_CONFIRM = os.environ.get('HFT_SKIP_CONFIRM', 'false').lower() == 'true'  # confirmação de vela ativa
@@ -314,6 +319,9 @@ class HFTEngine:
         # ── MELHORIA 8: Volatilidade BTC ──────────────────────────────
         self._btc_prices = deque(maxlen=20)  # últimos preços BTC p/ detectar crash
         self._volatility_paused_until = 0
+        # ── Slippage tracker (aprende com trades reais) ───────────────
+        self._slippage_history = deque(maxlen=100)  # últimos 100 slippages em %
+        self._slippage_by_pair = {}  # par → deque de slippages
         self.last_trade_ts   = {}
         self.closes          = {p: deque(maxlen=250) for p in HFT_PAIRS}
         self.highs           = {p: deque(maxlen=250) for p in HFT_PAIRS}
@@ -1187,12 +1195,31 @@ class HFTEngine:
 
         from binance.enums import SIDE_BUY, SIDE_SELL, ORDER_TYPE_MARKET
         cs = SIDE_SELL if side == 'BUY' else SIDE_BUY
+        actual_price = price  # fallback
         try:
             if not HFT_TESTNET:
                 if HFT_MARKET == 'futures':
-                    self.client.futures_create_order(symbol=pair, side=cs, type='MARKET', quantity=qty)
+                    order = self.client.futures_create_order(symbol=pair, side=cs, type='MARKET', quantity=qty)
+                    # Captura preço REAL de execução
+                    avg_p = float(order.get('avgPrice') or 0)
+                    if avg_p > 0:
+                        actual_price = avg_p
                 else:
-                    self.client.create_order(symbol=pair, side=cs, type=ORDER_TYPE_MARKET, quantity=qty)
+                    order = self.client.create_order(symbol=pair, side=cs, type=ORDER_TYPE_MARKET, quantity=qty)
+                    fills = order.get('fills', [])
+                    if fills:
+                        actual_price = sum(float(f['price'])*float(f['qty']) for f in fills) / \
+                                       sum(float(f['qty']) for f in fills)
+
+                # ── Registra slippage real ────────────────────────────────
+                if HFT_SLIPPAGE_LEARN and actual_price != price:
+                    slip_pct = abs(actual_price - price) / price * 100
+                    self._slippage_history.append(slip_pct)
+                    if pair not in self._slippage_by_pair:
+                        self._slippage_by_pair[pair] = deque(maxlen=30)
+                    self._slippage_by_pair[pair].append(slip_pct)
+                    if slip_pct > 0.05:
+                        log.info(f'  📉 SLIPPAGE {pair}: esperado ${price:.4f} → real ${actual_price:.4f} ({slip_pct:.3f}%)')
         except Exception as e:
             err_str = str(e)
             log.error(f'  HFT close {pair} erro: {err_str}')
@@ -1202,7 +1229,8 @@ class HFTEngine:
                 f'⚠️ Feche manualmente na Binance!'
             )
 
-        pnl      = (price - pos['entry']) * qty if side == 'BUY' else (pos['entry'] - price) * qty
+        # Usa preço REAL de execução para PnL
+        pnl      = (actual_price - pos['entry']) * qty if side == 'BUY' else (pos['entry'] - actual_price) * qty
         self.daily_pnl += pnl
         self._update_daily_profit_protection()
         duration = time.time() - pos['opened_at']
@@ -1738,12 +1766,14 @@ class HFTEngine:
                 elif side == 'SELL' and (trail_sl is None or cand < trail_sl):
                     new_tsl = cand; new_level = 2
 
-            # ── Fase L1: Break-Even (cobre taxa REAL + buffer) ────────────
+            # ── Fase L1: Break-Even (cobre taxa + slippage + buffer) ────────
             elif pnl_pct >= HFT_TRAIL_L1 and cur_level < 1:
-                # BE baseado na taxa real da posição, não só percentual genérico
                 est_pos_val = pos['qty'] * price
                 est_fee_pct = (est_pos_val * HFT_FEE_RATE * 2) / est_pos_val * 100 if est_pos_val > 0 else fee_pct_rt
-                be_offset = max(est_fee_pct, fee_pct_rt) + HFT_TRAIL_BE_BUF
+                # Inclui slippage estimado no cálculo de BE
+                pair_slips = self._slippage_by_pair.get(pair)
+                slip_pct = sum(pair_slips) / len(pair_slips) if pair_slips and len(pair_slips) >= 3 else HFT_SLIPPAGE_PCT
+                be_offset = max(est_fee_pct, fee_pct_rt) + slip_pct + HFT_TRAIL_BE_BUF
                 cand = entry * (1 + be_offset / 100) if side == 'BUY' else entry * (1 - be_offset / 100)
                 if side == 'BUY' and (trail_sl is None or cand > trail_sl):
                     new_tsl = cand; new_level = 1
@@ -1796,20 +1826,28 @@ class HFTEngine:
             tlv    = self.positions.get(key, {}).get('trail_level', 0)
             sl_lbl = f'Trail-L{tlv}' if tlv > 0 else 'SL'
 
-            # ── FEE GATE: calcula lucro LÍQUIDO real (após taxas) ────────
+            # ── FEE+SLIPPAGE GATE: lucro deve cobrir taxa E slippage ────
             position_val = pos['qty'] * price
-            fee_rt_real  = position_val * HFT_FEE_RATE * 2  # taxa real round-trip
+            fee_rt_real  = position_val * HFT_FEE_RATE * 2  # taxa round-trip
+            # Slippage estimado: usa histórico real se disponível, senão config
+            pair_slips = self._slippage_by_pair.get(pair)
+            if pair_slips and len(pair_slips) >= 3:
+                avg_slip_pct = sum(pair_slips) / len(pair_slips)
+            else:
+                avg_slip_pct = HFT_SLIPPAGE_PCT
+            slippage_est = position_val * avg_slip_pct / 100
+            total_cost   = fee_rt_real + slippage_est  # custo total para fechar
             pnl_gross    = (price - entry) * pos['qty'] if side == 'BUY' else (entry - price) * pos['qty']
-            pnl_net      = pnl_gross - fee_rt_real
+            pnl_net      = pnl_gross - total_cost
 
             # ── Decisões de saída — SEM TP FIXO ──────────────────────────
             if side == 'BUY':
                 if not HFT_NO_TP_CEILING and price >= tp:
                     self._close_position(key, price, f'TP +{(price/entry-1)*100:.2f}%')
                 elif price <= active_sl:
-                    # FEE GATE: se trail diz "fechar" mas lucro líquido < 0, ignora trail e usa SL original
+                    # FEE+SLIP GATE: trail diz fechar mas lucro não cobre custos reais
                     if tlv > 0 and pnl_net < 0 and price > sl_orig:
-                        log.info(f'  🛡 FEE GATE {pair}: trail diz fechar mas PnL líq ${pnl_net:.4f} < 0 — aguardando')
+                        log.info(f'  🛡 SLIP GATE {pair}: lucro ${pnl_gross:.4f} < custo ${total_cost:.4f} (fee ${fee_rt_real:.4f} + slip ${slippage_est:.4f}) — aguardando')
                     else:
                         locked = (active_sl - entry) / entry * 100
                         self._close_position(key, price, f'{sl_lbl} {locked:+.3f}% net:${pnl_net:+.4f}')
@@ -1820,7 +1858,7 @@ class HFTEngine:
                     self._close_position(key, price, f'TP +{(entry/price-1)*100:.2f}%')
                 elif price >= active_sl:
                     if tlv > 0 and pnl_net < 0 and price < sl_orig:
-                        log.info(f'  🛡 FEE GATE {pair}: trail diz fechar mas PnL líq ${pnl_net:.4f} < 0 — aguardando')
+                        log.info(f'  🛡 SLIP GATE {pair}: lucro ${pnl_gross:.4f} < custo ${total_cost:.4f} (fee ${fee_rt_real:.4f} + slip ${slippage_est:.4f}) — aguardando')
                     else:
                         locked = (entry - active_sl) / entry * 100
                         self._close_position(key, price, f'{sl_lbl} {locked:+.3f}% net:${pnl_net:+.4f}')
