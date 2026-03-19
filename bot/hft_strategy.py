@@ -179,7 +179,7 @@ HFT_MAX_SAME_DIRECTION = int(os.environ.get('HFT_MAX_SAME_DIRECTION', '2'))
 
 # ── MELHORIA 2: Multi-Timeframe (confirma 3m com 15m) ───────────────────────
 HFT_MTF_ENABLED   = os.environ.get('HFT_MTF_ENABLED', 'true').lower() == 'true'
-HFT_MTF_TIMEFRAME = os.environ.get('HFT_MTF_TIMEFRAME', '15m')
+HFT_MTF_TIMEFRAME = os.environ.get('HFT_MTF_TIMEFRAME', '5m')
 HFT_MTF_KLINES    = int(os.environ.get('HFT_MTF_KLINES', '50'))
 
 # ── MELHORIA 3: Funding Rate Filter ─────────────────────────────────────────
@@ -1404,17 +1404,28 @@ class HFTEngine:
             return 'neutral'
 
     def _mtf_agrees(self, pair, side):
-        """Verifica se timeframe maior concorda com a direção."""
+        """Verifica se timeframe maior concorda com a direção.
+        Permite pullbacks: SELL em uptrend se RSI > 75 (sobrecomprado)."""
         if not HFT_MTF_ENABLED:
             return True
         trend = self._get_mtf_trend(pair)
         if trend == 'neutral':
-            return True  # neutro não bloqueia
+            return True
+        # Verifica RSI atual para permitir pullbacks
+        rsi_now = self._rsi(self.closes[pair]) if len(self.closes.get(pair, [])) >= 9 else 50
         if side == 'BUY' and trend == 'down':
-            log.info(f'  📊 MTF {pair}: 15m bearish → BUY bloqueado')
+            # Permite BUY contra tendência se RSI muito oversold (pullback)
+            if rsi_now < 25:
+                log.info(f'  📊 MTF {pair}: 5m bearish mas RSI {rsi_now:.0f} oversold → BUY pullback permitido')
+                return True
+            log.info(f'  📊 MTF {pair}: 5m bearish → BUY bloqueado (RSI {rsi_now:.0f})')
             return False
         if side == 'SELL' and trend == 'up':
-            log.info(f'  📊 MTF {pair}: 15m bullish → SELL bloqueado')
+            # Permite SELL contra tendência se RSI muito overbought (pullback)
+            if rsi_now > 75:
+                log.info(f'  📊 MTF {pair}: 5m bullish mas RSI {rsi_now:.0f} overbought → SELL pullback permitido')
+                return True
+            log.info(f'  📊 MTF {pair}: 5m bullish → SELL bloqueado (RSI {rsi_now:.0f})')
             return False
         return True
 
@@ -2010,8 +2021,8 @@ class HFTEngine:
             # ── MELHORIA 2: Multi-timeframe ─────────────────────────────────
             if not self._mtf_agrees(pair, sig['side']):
                 self.notify(
-                    f'📊 {sig["side"]} {pair.replace("USDT","")} bloqueado — 15m contra\n'
-                    f'3m diz {sig["side"]} mas 15m está {"bearish" if sig["side"]=="BUY" else "bullish"}'
+                    f'📊 {sig["side"]} {pair.replace("USDT","")} bloqueado — 5m contra\n'
+                    f'3m diz {sig["side"]} mas 5m está {"bearish" if sig["side"]=="BUY" else "bullish"}'
                 )
                 return
 
