@@ -115,6 +115,19 @@ HFT_NO_TP_CEILING = os.environ.get('HFT_NO_TP_CEILING', 'true').lower() == 'true
 HFT_RISK_PCT     = float(os.environ.get('HFT_RISK_PCT',    '15.0')) # 15% — budget suficiente para cobrir taxas
 HFT_MAX_TRADES   = int(os.environ.get('HFT_MAX_TRADES',    '5'))   # era 3 → mais oportunidades
 HFT_DAILY_LOSS   = float(os.environ.get('HFT_DAILY_LOSS',  '3.0'))
+# ── Daily Loss DINÂMICO: loss máximo = lucro do dia anterior ─────────────────
+# Nunca perde mais do que ganhou. Se ontem fez +$1.29, hoje pode perder max $1.29
+# Fallback: se não tem dado anterior, usa HFT_DAILY_LOSS_FALLBACK_PCT do capital
+HFT_DYNAMIC_DAILY_LOSS     = os.environ.get('HFT_DYNAMIC_DAILY_LOSS', 'true').lower() == 'true'
+HFT_DAILY_LOSS_FALLBACK_PCT = float(os.environ.get('HFT_DAILY_LOSS_FALLBACK_PCT', '2.0'))  # % se não tem dado
+HFT_DAILY_LOSS_MIN         = float(os.environ.get('HFT_DAILY_LOSS_MIN', '0.20'))  # mínimo $ p/ não travar o bot
+# ── Daily Profit Protector — preserva lucro do dia ───────────────────────────
+# Sem meta de gain (roda o dia inteiro), mas protege o lucro acumulado.
+# Quando PnL do dia atinge threshold → ativa trailing diário.
+# Se PnL cair do pico e perder X% do lucro → para no dia com lucro garantido.
+HFT_DAILY_PROTECT_THRESHOLD = float(os.environ.get('HFT_DAILY_PROTECT_THRESHOLD', '0.50'))  # $ mínimo p/ ativar proteção
+HFT_DAILY_PROTECT_PCT       = float(os.environ.get('HFT_DAILY_PROTECT_PCT',       '60'))    # % do pico a proteger
+HFT_DAILY_PROTECT_ENABLED   = os.environ.get('HFT_DAILY_PROTECT_ENABLED', 'true').lower() == 'true'
 HFT_COOLDOWN     = int(os.environ.get('HFT_COOLDOWN',      '45'))
 HFT_TIME_EXIT    = int(os.environ.get('HFT_TIME_EXIT',     '1800'))  # 30min — tempo para TP 1.5% em 3m
 HFT_MIN_SIGNALS  = int(os.environ.get('HFT_MIN_SIGNALS',   '3'))
@@ -154,6 +167,28 @@ HFT_HEARTBEAT_SEC  = int(os.environ.get('HFT_HEARTBEAT_SEC',  '300'))   # 5 min
 # Notificar via Telegram quando sinal pendente for gerado
 HFT_NOTIFY_SIGNAL  = os.environ.get('HFT_NOTIFY_SIGNAL', 'true').lower() == 'true'
 HFT_CAPITAL_FILE  = os.environ.get('HFT_CAPITAL_FILE', '/data/hft_capital.json')
+
+# ── MELHORIA 1: Filtro de Correlação ─────────────────────────────────────────
+# Max posições na mesma direção (BUY ou SELL) — evita risco triplicado
+HFT_MAX_SAME_DIRECTION = int(os.environ.get('HFT_MAX_SAME_DIRECTION', '2'))
+
+# ── MELHORIA 2: Multi-Timeframe (confirma 3m com 15m) ───────────────────────
+HFT_MTF_ENABLED   = os.environ.get('HFT_MTF_ENABLED', 'true').lower() == 'true'
+HFT_MTF_TIMEFRAME = os.environ.get('HFT_MTF_TIMEFRAME', '15m')
+HFT_MTF_KLINES    = int(os.environ.get('HFT_MTF_KLINES', '50'))
+
+# ── MELHORIA 3: Funding Rate Filter ─────────────────────────────────────────
+HFT_FUNDING_ENABLED = os.environ.get('HFT_FUNDING_ENABLED', 'true').lower() == 'true'
+HFT_FUNDING_WEIGHT  = float(os.environ.get('HFT_FUNDING_WEIGHT', '0.5'))  # peso extra no score
+
+# ── MELHORIA 6: Blacklist Dinâmica Agressiva ─────────────────────────────────
+HFT_BLACKLIST_CONSEC_LOSSES = int(os.environ.get('HFT_BLACKLIST_CONSEC', '3'))
+HFT_BLACKLIST_PAUSE_SEC     = int(os.environ.get('HFT_BLACKLIST_PAUSE', '7200'))  # 2h
+HFT_BLACKLIST_MIN_WR        = float(os.environ.get('HFT_BLACKLIST_MIN_WR', '35'))  # WR% mínimo
+
+# ── MELHORIA 8: Alerta de Volatilidade Extrema ──────────────────────────────
+HFT_VOLATILITY_PAUSE_PCT  = float(os.environ.get('HFT_VOL_PAUSE_PCT', '3.0'))  # BTC cai X% em 1h
+HFT_VOLATILITY_PAUSE_SEC  = int(os.environ.get('HFT_VOL_PAUSE_SEC', '1800'))   # pausa 30min
 
 STRATEGY_NAMES = [
     'ema_micro', 'rsi_reversion', 'bollinger', 'vwap_dev',
@@ -257,6 +292,28 @@ class HFTEngine:
         self.daily_pnl       = 0.0
         self.daily_wins      = 0
         self.daily_losses    = 0
+        # ── Daily Profit Protector ────────────────────────────────────
+        self.peak_daily_pnl      = 0.0    # pico de PnL do dia
+        self.daily_protect_active = False  # proteção ativada?
+        self.daily_protect_floor  = 0.0   # piso mínimo de PnL (trail diário)
+        self.daily_protect_stopped = False # parou por proteção de lucro?
+        # ── Dynamic Daily Loss: loss max = lucro anterior ─────────────
+        self.prev_day_profit     = self._load_prev_day_profit()
+        self.dynamic_loss_limit  = self._calc_dynamic_loss_limit()
+        # ── MELHORIA 1: Correlação ────────────────────────────────────
+        # (usa self.positions para contar direção — já existe)
+        # ── MELHORIA 2: Multi-Timeframe cache ─────────────────────────
+        self._mtf_cache = {}  # par → {'trend': 'up'|'down'|'neutral', 'ts': timestamp}
+        self._mtf_cache_ttl = 180  # refresh a cada 3min
+        # ── MELHORIA 3: Funding Rate cache ────────────────────────────
+        self._funding_cache = {}  # par → {'rate': float, 'ts': timestamp}
+        self._funding_cache_ttl = 300  # refresh a cada 5min
+        # ── MELHORIA 6: Blacklist dinâmica ────────────────────────────
+        self._pair_consec_losses = {p: 0 for p in HFT_PAIRS}
+        self._pair_blacklist = {}  # par → timestamp até quando está pausado
+        # ── MELHORIA 8: Volatilidade BTC ──────────────────────────────
+        self._btc_prices = deque(maxlen=20)  # últimos preços BTC p/ detectar crash
+        self._volatility_paused_until = 0
         self.last_trade_ts   = {}
         self.closes          = {p: deque(maxlen=250) for p in HFT_PAIRS}
         self.highs           = {p: deque(maxlen=250) for p in HFT_PAIRS}
@@ -736,8 +793,11 @@ class HFTEngine:
             if regime == 'ranging' and rsi_v > ranging_rsi_buy:
                 return {'side': None, 'score': 0, 'strategies': [],
                         'reason': f'BUY ranging RSI {rsi_v:.0f} > {ranging_rsi_buy:.0f}'}
+            # Funding rate bonus/penalidade
+            funding_adj = self._funding_score_adjustment(pair, 'BUY')
+            buy_score += funding_adj
             return {'side': 'BUY', 'score': buy_score, 'count': buy_count,
-                    'reason': ' + '.join(buy_reasons[:3]),
+                    'reason': ' + '.join(buy_reasons[:3]) + (f' +funding' if funding_adj > 0 else ''),
                     'strategies': list(set(buy_strats)),
                     'regime': regime, 'rsi': rsi_v, 'price': close,
                     'confidence': min(buy_score / 6.0, 1.0)}
@@ -755,8 +815,11 @@ class HFTEngine:
             if regime == 'ranging' and rsi_v < ranging_rsi_sell:
                 return {'side': None, 'score': 0, 'strategies': [],
                         'reason': f'SELL ranging RSI {rsi_v:.0f} < {ranging_rsi_sell:.0f}'}
+            # Funding rate bonus/penalidade
+            funding_adj = self._funding_score_adjustment(pair, 'SELL')
+            sell_score += funding_adj
             return {'side': 'SELL', 'score': sell_score, 'count': sell_count,
-                    'reason': ' + '.join(sell_reasons[:3]),
+                    'reason': ' + '.join(sell_reasons[:3]) + (f' +funding' if funding_adj > 0 else ''),
                     'strategies': list(set(sell_strats)),
                     'regime': regime, 'rsi': rsi_v, 'price': close,
                     'confidence': min(sell_score / 6.0, 1.0)}
@@ -1006,10 +1069,23 @@ class HFTEngine:
         return float(round(qd, max(0, -sd.as_tuple().exponent)))
 
     def _calc_qty(self, pair, price, confidence=0.5):
+        """MELHORIA 4: Position sizing proporcional ao score/confiança."""
         if price <= 0: return 0
-        info      = self._get_sym_info(pair)
-        risk_mult = min(0.8 + confidence * 1.0, 1.5)  # era max 1.2x → agora 1.5x em alta confiança
-        if self.consec_losses >= 2: risk_mult *= 0.7    # reduz mais agressivamente após losses
+        info = self._get_sym_info(pair)
+        # Escala mais agressiva: conf 0.3→0.6x, conf 0.5→1.0x, conf 0.8→1.4x, conf 1.0→1.7x
+        risk_mult = 0.4 + confidence * 1.3
+        risk_mult = min(risk_mult, 1.7)  # teto 1.7x para sinais excepcionais
+        # Reduz após losses consecutivos
+        if self.consec_losses >= 3: risk_mult *= 0.5
+        elif self.consec_losses >= 2: risk_mult *= 0.7
+        # Bônus: par com WR alto no analytics
+        if self.analytics:
+            try:
+                ps = self.analytics.get_pair_status(pair)
+                if ps.get('trades', 0) >= 8 and ps.get('win_rate', 50) > 65:
+                    risk_mult *= 1.15  # +15% para pares comprovados
+            except Exception:
+                pass
         budget = self.capital * (HFT_RISK_PCT / 100) * risk_mult
         qty    = self._round_step(budget / price, info['step'])
         if qty < info['min_qty']:
@@ -1128,6 +1204,7 @@ class HFTEngine:
 
         pnl      = (price - pos['entry']) * qty if side == 'BUY' else (pos['entry'] - price) * qty
         self.daily_pnl += pnl
+        self._update_daily_profit_protection()
         duration = time.time() - pos['opened_at']
         # Break-even: PnL dentro do threshold não é win nem loss
         be_thresh = getattr(self, '_be_threshold', 0.0002)
@@ -1161,6 +1238,9 @@ class HFTEngine:
         # *** APRENDIZADO ***
         if strats:
             self.learner.record(pair, strats, win)
+
+        # MELHORIA 6: Blacklist dinâmica
+        self._record_pair_result(pair, win or is_be)
 
         self.trades_today.append({
             'pair': pair, 'side': side, 'entry': pos['entry'], 'exit': price,
@@ -1248,6 +1328,321 @@ class HFTEngine:
                         log.info(f'  🔧 Sync {pair}: entry=${real_entry:.4f} PnL=${real_pnl:+.4f}')
         except Exception as e:
             log.debug(f'  Sync Binance erro: {e}')
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # MELHORIAS 1-8: Filtros avançados de proteção e otimização
+    # ══════════════════════════════════════════════════════════════════════════
+
+    # ── MELHORIA 1: Filtro de Correlação ─────────────────────────────────────
+    def _check_correlation_limit(self, side):
+        """Retorna True se pode abrir posição nesta direção (max N na mesma dir)."""
+        same_dir = sum(1 for p in self.positions.values() if p['side'] == side)
+        if same_dir >= HFT_MAX_SAME_DIRECTION:
+            log.info(f'  🔗 CORRELAÇÃO: {same_dir} posições {side} abertas ≥ {HFT_MAX_SAME_DIRECTION} → bloqueado')
+            return False
+        return True
+
+    # ── MELHORIA 2: Multi-Timeframe ─────────────────────────────────────────
+    def _get_mtf_trend(self, pair):
+        """Busca tendência no timeframe maior (15m) via API Binance."""
+        if not HFT_MTF_ENABLED:
+            return 'neutral'
+        now = time.time()
+        cached = self._mtf_cache.get(pair)
+        if cached and now - cached['ts'] < self._mtf_cache_ttl:
+            return cached['trend']
+        try:
+            if HFT_MARKET == 'futures':
+                klines = self.client.futures_klines(symbol=pair, interval=HFT_MTF_TIMEFRAME, limit=HFT_MTF_KLINES)
+            else:
+                klines = self.client.get_klines(symbol=pair, interval=HFT_MTF_TIMEFRAME, limit=HFT_MTF_KLINES)
+            if not klines or len(klines) < 20:
+                return 'neutral'
+            closes = [float(k[4]) for k in klines]
+            ema8  = self._ema(closes[-8:], 8)
+            ema21 = self._ema(closes[-21:], 21)
+            rsi   = self._rsi(closes)
+            close = closes[-1]
+            if ema8 > ema21 * 1.001 and close > ema21 and rsi > 45:
+                trend = 'up'
+            elif ema8 < ema21 * 0.999 and close < ema21 and rsi < 55:
+                trend = 'down'
+            else:
+                trend = 'neutral'
+            self._mtf_cache[pair] = {'trend': trend, 'ts': now}
+            return trend
+        except Exception as e:
+            log.debug(f'  MTF {pair}: {e}')
+            return 'neutral'
+
+    def _mtf_agrees(self, pair, side):
+        """Verifica se timeframe maior concorda com a direção."""
+        if not HFT_MTF_ENABLED:
+            return True
+        trend = self._get_mtf_trend(pair)
+        if trend == 'neutral':
+            return True  # neutro não bloqueia
+        if side == 'BUY' and trend == 'down':
+            log.info(f'  📊 MTF {pair}: 15m bearish → BUY bloqueado')
+            return False
+        if side == 'SELL' and trend == 'up':
+            log.info(f'  📊 MTF {pair}: 15m bullish → SELL bloqueado')
+            return False
+        return True
+
+    # ── MELHORIA 3: Funding Rate Filter ─────────────────────────────────────
+    def _get_funding_rate(self, pair):
+        """Busca funding rate atual do par."""
+        if not HFT_FUNDING_ENABLED or HFT_MARKET != 'futures':
+            return 0.0
+        now = time.time()
+        cached = self._funding_cache.get(pair)
+        if cached and now - cached['ts'] < self._funding_cache_ttl:
+            return cached['rate']
+        try:
+            data = self.client.futures_funding_rate(symbol=pair, limit=1)
+            if data:
+                rate = float(data[-1].get('fundingRate', 0))
+                self._funding_cache[pair] = {'rate': rate, 'ts': now}
+                return rate
+        except Exception:
+            pass
+        return 0.0
+
+    def _funding_score_adjustment(self, pair, side):
+        """Retorna ajuste de score baseado no funding rate."""
+        if not HFT_FUNDING_ENABLED or HFT_MARKET != 'futures':
+            return 0.0
+        rate = self._get_funding_rate(pair)
+        # Funding positivo = longs pagam shorts → favorece SELL
+        # Funding negativo = shorts pagam longs → favorece BUY
+        if side == 'BUY' and rate < -0.0001:
+            return HFT_FUNDING_WEIGHT  # bônus: shorts estão pagando
+        elif side == 'SELL' and rate > 0.0001:
+            return HFT_FUNDING_WEIGHT  # bônus: longs estão pagando
+        elif side == 'BUY' and rate > 0.0003:
+            return -HFT_FUNDING_WEIGHT * 0.5  # penalidade: longs pagam muito
+        elif side == 'SELL' and rate < -0.0003:
+            return -HFT_FUNDING_WEIGHT * 0.5  # penalidade: shorts pagam muito
+        return 0.0
+
+    # ── MELHORIA 4: Position Sizing por Score (integrado em _calc_qty) ──────
+    # Já existe parcialmente — _calc_qty usa confidence.
+    # Melhoria: mapear score diretamente para risk_mult
+
+    # ── MELHORIA 6: Blacklist Dinâmica Agressiva ────────────────────────────
+    def _record_pair_result(self, pair, win):
+        """Registra resultado e aplica blacklist se necessário."""
+        if win:
+            self._pair_consec_losses[pair] = 0
+            # Remove da blacklist se ganhou
+            self._pair_blacklist.pop(pair, None)
+        else:
+            self._pair_consec_losses[pair] = self._pair_consec_losses.get(pair, 0) + 1
+            if self._pair_consec_losses[pair] >= HFT_BLACKLIST_CONSEC_LOSSES:
+                until = time.time() + HFT_BLACKLIST_PAUSE_SEC
+                self._pair_blacklist[pair] = until
+                mins = HFT_BLACKLIST_PAUSE_SEC // 60
+                log.warning(f'  ⛔ BLACKLIST {pair}: {self._pair_consec_losses[pair]} losses seguidos → pausado {mins}min')
+                self.notify(
+                    f'⛔ {pair.replace("USDT","")} pausado por {mins}min\n'
+                    f'{self._pair_consec_losses[pair]} losses seguidos\n'
+                    f'💡 Volta automaticamente em {mins}min'
+                )
+
+    def _is_pair_blacklisted(self, pair):
+        """Retorna True se par está na blacklist."""
+        until = self._pair_blacklist.get(pair, 0)
+        if until > 0:
+            if time.time() < until:
+                return True
+            else:
+                self._pair_blacklist.pop(pair, None)
+                self._pair_consec_losses[pair] = 0
+                log.info(f'  ✅ {pair} saiu da blacklist')
+        # WR check: se analytics disponível e WR muito baixo
+        if self.analytics:
+            try:
+                ps = self.analytics.get_pair_status(pair)
+                if ps.get('trades', 0) >= 10 and ps.get('win_rate', 50) < HFT_BLACKLIST_MIN_WR:
+                    return True
+            except Exception:
+                pass
+        return False
+
+    # ── MELHORIA 8: Alerta de Volatilidade Extrema ──────────────────────────
+    def _check_btc_volatility(self):
+        """Monitora BTC para flash crashes. Pausa bot se queda > X% em 1h."""
+        if self._volatility_paused_until > time.time():
+            return True  # ainda pausado
+        try:
+            btc_closes = self.closes.get('BTCUSDT', deque())
+            if len(btc_closes) < 20:
+                return False
+            # Compara preço atual com preço de 20 velas atrás (~1h em 3m)
+            current = btc_closes[-1]
+            past = btc_closes[-20]
+            change_pct = (current - past) / past * 100
+            if abs(change_pct) >= HFT_VOLATILITY_PAUSE_PCT:
+                self._volatility_paused_until = time.time() + HFT_VOLATILITY_PAUSE_SEC
+                direction = 'QUEDA' if change_pct < 0 else 'ALTA'
+                mins = HFT_VOLATILITY_PAUSE_SEC // 60
+                log.warning(f'  🚨 VOLATILIDADE: BTC {direction} {change_pct:+.1f}% em 1h → pausa {mins}min')
+                self.notify(
+                    f'🚨 <b>Volatilidade extrema — BTC {direction} {change_pct:+.1f}%</b>\n'
+                    f'Bot pausado {mins}min para proteger capital\n'
+                    f'💡 Volta automaticamente às {datetime.datetime.now().strftime("%H:%M")}'
+                )
+                return True
+        except Exception:
+            pass
+        return False
+
+    # ── MELHORIA 7: Resumo Semanal (chamado pela visibility thread) ─────────
+    def send_weekly_summary(self):
+        """Resumo semanal com estatísticas detalhadas."""
+        try:
+            summary = self.get_pnl_summary()
+            m = summary.get('monthly', {})
+            stats = self.get_stats()
+            learning = stats.get('learning', {})
+
+            # Top/bottom pares
+            pair_data = []
+            for period_data in self._pnl_data.get('daily', {}).values():
+                pass  # dados já estão no monthly
+
+            # Top estratégias
+            tops = sorted([(s,d) for s,d in learning.items() if isinstance(d, dict) and d.get('n',0)>=5],
+                          key=lambda x: float(x[1].get('wr',0)) if x[1].get('wr')!='N/A' else 0, reverse=True)
+            top_str = '\n'.join(f'  ✅ {s}: {d["wr"]}% ({d["n"]} trades)' for s,d in tops[:4]) or '  Sem dados'
+            bot_str = '\n'.join(f'  ❌ {s}: {d["wr"]}% ({d["n"]} trades)' for s,d in tops[-2:]) or '  Sem dados'
+
+            roi_m = m.get('pnl', 0) / self.capital * 100 if self.capital > 0 else 0
+            self.notify(
+                f'📊 <b>Resumo Semanal HFT</b>\n'
+                f'═══════════════════════\n'
+                f'💰 Capital: <code>${self.capital:.2f}</code>\n'
+                f'📈 PnL mês: <code>{"+$" if m.get("pnl",0)>=0 else "-$"}{abs(m.get("pnl",0)):.4f}</code> ({roi_m:+.1f}%)\n'
+                f'🎯 WR: {m.get("win_rate",0):.1f}% | {m.get("wins",0)}W/{m.get("losses",0)}L\n'
+                f'═══════════════════════\n'
+                f'<b>Melhores estratégias:</b>\n{top_str}\n'
+                f'<b>Piores:</b>\n{bot_str}\n'
+                f'═══════════════════════\n'
+                f'🛡 Loss dinâmico: ${self.dynamic_loss_limit:.2f}\n'
+                f'💹 Compound: {"ATIVO" if HFT_COMPOUND else "OFF"}\n'
+                f'🕐 <i>{datetime.datetime.now().strftime("%d/%m/%Y %H:%M")}</i>'
+            )
+        except Exception as e:
+            log.debug(f'Weekly summary error: {e}')
+
+    # ── Dynamic Daily Loss ──────────────────────────────────────────────────────
+
+    def _load_prev_day_profit(self) -> float:
+        """Carrega lucro do dia anterior (persistido no reset)."""
+        try:
+            f = os.environ.get('HFT_PREV_PROFIT_FILE', '/data/hft_prev_day_profit.json')
+            if os.path.exists(f):
+                with open(f) as fh:
+                    data = _json.load(fh)
+                    return float(data.get('profit', 0))
+        except Exception:
+            pass
+        return 0.0
+
+    def _save_prev_day_profit(self, profit: float):
+        """Salva lucro do dia para ser usado como loss limit amanhã."""
+        try:
+            f = os.environ.get('HFT_PREV_PROFIT_FILE', '/data/hft_prev_day_profit.json')
+            os.makedirs(os.path.dirname(f), exist_ok=True)
+            with open(f, 'w') as fh:
+                _json.dump({
+                    'profit': round(profit, 4),
+                    'date': datetime.datetime.now().strftime('%Y-%m-%d'),
+                    'capital': round(self.capital, 2),
+                }, fh)
+        except Exception:
+            pass
+
+    def _calc_dynamic_loss_limit(self) -> float:
+        """Calcula loss limit dinâmico: min(lucro anterior, % fixo do capital)."""
+        if not HFT_DYNAMIC_DAILY_LOSS:
+            return self.capital * HFT_DAILY_LOSS / 100
+
+        prev = self.prev_day_profit
+        fallback = self.capital * HFT_DAILY_LOSS_FALLBACK_PCT / 100
+
+        if prev > 0:
+            # Loss max = lucro do dia anterior (nunca perde mais que ganhou)
+            limit = max(prev, HFT_DAILY_LOSS_MIN)
+            log.info(f'  📊 Daily Loss dinâmico: ${limit:.4f} (lucro anterior: ${prev:.4f})')
+        else:
+            # Sem lucro anterior → usa fallback conservador
+            limit = max(fallback, HFT_DAILY_LOSS_MIN)
+            log.info(f'  📊 Daily Loss fallback: ${limit:.4f} ({HFT_DAILY_LOSS_FALLBACK_PCT}% de ${self.capital:.2f})')
+
+        return limit
+
+    # ── Daily Profit Protector ─────────────────────────────────────────────────
+    def _update_daily_profit_protection(self):
+        """Atualiza trailing diário — protege lucro acumulado sem limitar ganho."""
+        if not HFT_DAILY_PROTECT_ENABLED:
+            return
+
+        pnl = self.daily_pnl
+
+        # Atualiza pico do dia
+        if pnl > self.peak_daily_pnl:
+            self.peak_daily_pnl = pnl
+
+        # Ativa proteção quando lucro atinge threshold
+        if not self.daily_protect_active and pnl >= HFT_DAILY_PROTECT_THRESHOLD:
+            self.daily_protect_active = True
+            self.daily_protect_floor = pnl * HFT_DAILY_PROTECT_PCT / 100
+            log.info(f'  🛡 DAILY PROTECT ativado: PnL ${pnl:.4f} ≥ ${HFT_DAILY_PROTECT_THRESHOLD} | piso=${self.daily_protect_floor:.4f}')
+            self.notify(
+                f'🛡 Proteção diária ATIVADA\n'
+                f'Lucro atual: ${pnl:.4f}\n'
+                f'Piso protegido: ${self.daily_protect_floor:.4f} ({HFT_DAILY_PROTECT_PCT:.0f}%)\n'
+                f'💡 Bot continua operando — se lucro cair até o piso, para no dia'
+            )
+
+        # Atualiza piso conforme pico sobe (trailing)
+        if self.daily_protect_active:
+            new_floor = self.peak_daily_pnl * HFT_DAILY_PROTECT_PCT / 100
+            if new_floor > self.daily_protect_floor:
+                old_floor = self.daily_protect_floor
+                self.daily_protect_floor = new_floor
+                # Notifica a cada $0.30+ de subida no piso
+                if new_floor - old_floor >= 0.30:
+                    log.info(f'  🛡 DAILY PROTECT trail: pico=${self.peak_daily_pnl:.4f} → piso=${new_floor:.4f}')
+                    self.notify(
+                        f'📈 Proteção diária atualizada\n'
+                        f'Pico do dia: ${self.peak_daily_pnl:.4f}\n'
+                        f'Novo piso: ${new_floor:.4f} ({HFT_DAILY_PROTECT_PCT:.0f}%)\n'
+                        f'💡 Lucro mínimo garantido subiu'
+                    )
+
+            # Verifica se PnL caiu abaixo do piso
+            if pnl <= self.daily_protect_floor and pnl < self.peak_daily_pnl:
+                if not self.daily_protect_stopped:
+                    self.daily_protect_stopped = True
+                    self.running = False
+                    log.warning(
+                        f'  🛡 DAILY PROTECT STOP: PnL ${pnl:.4f} ≤ piso ${self.daily_protect_floor:.4f} '
+                        f'(pico foi ${self.peak_daily_pnl:.4f})'
+                    )
+                    self.notify(
+                        f'🛡 Proteção diária — PAROU\n'
+                        f'Pico do dia: ${self.peak_daily_pnl:.4f}\n'
+                        f'Lucro preservado: ${pnl:.4f}\n'
+                        f'Piso: ${self.daily_protect_floor:.4f}\n'
+                        f'💰 Lucro do dia protegido! Bot volta amanhã.'
+                    )
+
+    def _is_daily_profit_protected(self):
+        """Retorna True se o bot deve parar de abrir novas posições."""
+        return self.daily_protect_stopped
 
     def _check_exit(self, pair, price):
         for key, pos in list(self.positions.items()):
@@ -1498,11 +1893,23 @@ class HFTEngine:
         if not self.running: return
         if self.paused_until > now: return
 
-        daily_loss_pct = abs(self.daily_pnl) / self.capital * 100 if self.daily_pnl < 0 else 0
-        if daily_loss_pct >= HFT_DAILY_LOSS:
-            if self.running:
-                self.running = False
-                self.notify(f'🛑 HFT Daily Loss {HFT_DAILY_LOSS}% atingido | PnL: ${self.daily_pnl:.4f}\nPausado até amanhã.')
+        # ── Daily Loss DINÂMICO: loss max = lucro do dia anterior ────────
+        if self.daily_pnl < 0:
+            loss_abs = abs(self.daily_pnl)
+            if loss_abs >= self.dynamic_loss_limit:
+                if self.running:
+                    self.running = False
+                    reason = f'lucro anterior ${self.prev_day_profit:.2f}' if self.prev_day_profit > 0 else f'fallback {HFT_DAILY_LOSS_FALLBACK_PCT}%'
+                    self.notify(
+                        f'🛑 Daily Loss atingido\n'
+                        f'Perda: -${loss_abs:.4f} ≥ limite ${self.dynamic_loss_limit:.4f}\n'
+                        f'Regra: {reason}\n'
+                        f'💡 Nunca perde mais do que ganhou. Bot volta amanhã.'
+                    )
+                return
+
+        # ── Daily Profit Protector: não abre novos trades se lucro protegido ──
+        if self._is_daily_profit_protected():
             return
 
         if not self._in_active_session():
@@ -1541,11 +1948,35 @@ class HFTEngine:
             self.notify(f'⛔ MAX_TRADES={HFT_MAX_TRADES} atingido — aguardando fechar posição')
             return
 
+        # ── MELHORIA 6: Blacklist check ──────────────────────────────────────
+        if self._is_pair_blacklisted(pair):
+            return
+
+        # ── MELHORIA 8: Volatilidade extrema ─────────────────────────────────
+        if self._check_btc_volatility():
+            return
+
         # ── FASE 2: Gerar novo sinal (se nenhum pendente) ─────────────────
         with self._lock:
             sig = self._generate_signal(pair)
 
         if sig['side']:
+            # ── MELHORIA 1: Filtro de correlação ────────────────────────────
+            if not self._check_correlation_limit(sig['side']):
+                self.notify(
+                    f'🔗 {sig["side"]} {pair.replace("USDT","")} bloqueado — correlação\n'
+                    f'Já tem {HFT_MAX_SAME_DIRECTION} posições {sig["side"]} abertas'
+                )
+                return
+
+            # ── MELHORIA 2: Multi-timeframe ─────────────────────────────────
+            if not self._mtf_agrees(pair, sig['side']):
+                self.notify(
+                    f'📊 {sig["side"]} {pair.replace("USDT","")} bloqueado — 15m contra\n'
+                    f'3m diz {sig["side"]} mas 15m está {"bearish" if sig["side"]=="BUY" else "bullish"}'
+                )
+                return
+
             if HFT_SKIP_CONFIRM:
                 log.info(f'  ⚡ HFT DIRETO {sig["side"]} {pair} score={sig["score"]:.1f} conf={sig.get("confidence",0):.0%}')
 
@@ -1689,6 +2120,22 @@ class HFTEngine:
             'ai_approved':     self._ai_approved,
             'daily_breakevens': getattr(self, 'daily_breakevens', 0),
             'pnl_summary':     self.get_pnl_summary(),
+            'daily_protect': {
+                'enabled':  HFT_DAILY_PROTECT_ENABLED,
+                'active':   self.daily_protect_active,
+                'stopped':  self.daily_protect_stopped,
+                'peak_pnl': round(self.peak_daily_pnl, 4),
+                'floor':    round(self.daily_protect_floor, 4),
+                'threshold': HFT_DAILY_PROTECT_THRESHOLD,
+                'protect_pct': HFT_DAILY_PROTECT_PCT,
+            },
+            'dynamic_loss': {
+                'enabled':      HFT_DYNAMIC_DAILY_LOSS,
+                'limit':        round(self.dynamic_loss_limit, 4),
+                'prev_profit':  round(self.prev_day_profit, 4),
+                'current_pnl':  round(self.daily_pnl, 4),
+                'remaining':    round(self.dynamic_loss_limit - abs(min(self.daily_pnl, 0)), 4),
+            },
         }
 
     def send_heartbeat(self):
@@ -1750,6 +2197,18 @@ class HFTEngine:
         pending_str = f'\n⏳ {pending_count} sinal(is) aguardando confirmação' if pending_count > 0 else ''
         budget = self.capital * HFT_RISK_PCT / 100
 
+        # Daily Profit Protector status
+        protect_str = ''
+        if HFT_DAILY_PROTECT_ENABLED:
+            if self.daily_protect_stopped:
+                protect_str = f'\n🛡 <b>Lucro protegido — parado no dia</b> (piso: ${self.daily_protect_floor:.4f})'
+            elif self.daily_protect_active:
+                protect_str = f'\n🛡 Proteção ativa: pico ${self.peak_daily_pnl:.4f} | piso ${self.daily_protect_floor:.4f}'
+        # Dynamic daily loss info
+        if HFT_DYNAMIC_DAILY_LOSS:
+            src = f'lucro anterior' if self.prev_day_profit > 0 else f'fallback {HFT_DAILY_LOSS_FALLBACK_PCT}%'
+            protect_str += f'\n📊 Loss máx hoje: ${self.dynamic_loss_limit:.2f} ({src})'
+
         bal_diff = real_balance - self.capital
         bal_str  = f'${real_balance:.2f}'
         if abs(bal_diff) > 0.01: bal_str += f' ({bal_diff:+.2f} vs base)'
@@ -1761,7 +2220,7 @@ class HFTEngine:
             f'{icon} Hoje: <code>{"+$" if pnl>=0 else "-$"}{abs(pnl):.4f}</code> | {total}T WR:{(self.daily_wins/max(self.daily_wins+self.daily_losses,1)*100):.0f}%\n'
             f'─────────────────────────\n'
             f'<b>Status dos pares:</b>\n' + '\n'.join(pair_lines) +
-            f'\n{status_str}{pending_str}\n'
+            f'\n{status_str}{pending_str}{protect_str}\n'
             f'🕐 <i>{datetime.datetime.now().strftime("%d/%m %H:%M")}</i>'
         )
 
@@ -1899,6 +2358,18 @@ class HFTEngine:
             try: self.send_daily_summary()
             except: pass
 
+        # ── Salva lucro do dia como loss limit de amanhã ──────────────────
+        if self.daily_pnl > 0:
+            self._save_prev_day_profit(self.daily_pnl)
+            self.prev_day_profit = self.daily_pnl
+            log.info(f'  📊 Lucro do dia ${self.daily_pnl:.4f} salvo → loss limit amanhã')
+        else:
+            # Dia de loss: mantém o limit anterior (não piora)
+            log.info(f'  📊 Dia sem lucro (${self.daily_pnl:.4f}) — mantém loss limit anterior ${self.prev_day_profit:.4f}')
+
+        # Recalcula loss limit para amanhã
+        self.dynamic_loss_limit = self._calc_dynamic_loss_limit()
+
         # ── Juros compostos: incorpora PnL do dia ao capital base ─────────
         if HFT_COMPOUND and self.daily_pnl != 0:
             capital_antes = self.capital
@@ -1918,6 +2389,9 @@ class HFTEngine:
         self.daily_pnl    = 0.0; self.daily_wins = 0; self.daily_losses = 0
         self.trades_today = []; self.consec_losses = 0; self.consec_wins = 0
         self.paused_until = 0; self._pending = {}
+        # Reset Daily Profit Protector
+        self.peak_daily_pnl = 0.0; self.daily_protect_active = False
+        self.daily_protect_floor = 0.0; self.daily_protect_stopped = False
         self.pair_stats   = {p: {'wins': 0, 'losses': 0, 'pnl': 0.0} for p in HFT_PAIRS}
         self._ai_skipped  = 0
         self._ai_approved = 0
@@ -1972,6 +2446,7 @@ def _start_visibility_thread(engine):
         global _visibility_active
         _last_heartbeat = 0.0
         _last_update    = time.time()
+        _last_weekly    = time.time()
         _first_hb_sent  = False
         try:
             while _visibility_active:
@@ -2002,6 +2477,16 @@ def _start_visibility_thread(engine):
                         _last_update = now
                     except Exception as _pe:
                         log.debug(f'  Periodic update erro: {_pe}')
+
+                # ── MELHORIA 7: Resumo semanal (domingo 23:50 local) ─────
+                try:
+                    h_local = (datetime.datetime.utcnow().hour + HFT_TZ_OFFSET) % 24
+                    weekday = datetime.datetime.utcnow().weekday()  # 6 = domingo
+                    if weekday == 6 and h_local == 23 and now - _last_weekly > 82800:  # ~23h gap
+                        engine.send_weekly_summary()
+                        _last_weekly = now
+                except Exception:
+                    pass
         finally:
             _visibility_active = False
 
