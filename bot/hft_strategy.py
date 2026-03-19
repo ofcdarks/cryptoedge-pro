@@ -98,21 +98,20 @@ def _hft_save_close(tid, exit_p, pnl, reason):
 log = logging.getLogger('CryptoEdge.HFT')
 
 # ── Config global (env) ───────────────────────────────────────────────────────
-HFT_TP_PCT       = float(os.environ.get('HFT_TP_PCT',      '0.80'))  # 0.80% TP — realista p/ 3m, cobre taxa+lucro
-HFT_SL_PCT       = float(os.environ.get('HFT_SL_PCT',      '0.35'))  # 0.35% SL — R:R líq ~1.55:1 após taxas
-# Trail Stop Progressivo: 4 niveis de travamento de lucro
-# L1: lucro >= X% -> SL vai para break-even + buffer (nunca mais fecha no negativo)
-# L2: lucro >= X% -> SL trava 40% do lucro
-# L3: lucro >= X% -> SL trava 60% do lucro
-# L4: lucro >= X% -> SL trava 75% do lucro
-# Trail Stop: desativado por padrão (TP/SL fixos são mais simples e eficazes com 5x)
-# Para ativar: HFT_TRAIL_ENABLED=true + ajustar níveis acima do custo de taxa (>0.30%)
-HFT_TRAIL_ENABLED = os.environ.get('HFT_TRAIL_ENABLED', 'false').lower() == 'true'
-HFT_TRAIL_L1 = float(os.environ.get('HFT_TRAIL_L1', '0.40'))  # % lucro p/ BE — acima do custo de taxa
-HFT_TRAIL_L2 = float(os.environ.get('HFT_TRAIL_L2', '0.08'))  # % lucro p/ travar 40%
-HFT_TRAIL_L3 = float(os.environ.get('HFT_TRAIL_L3', '0.15'))  # % lucro p/ travar 60%
-HFT_TRAIL_L4 = float(os.environ.get('HFT_TRAIL_L4', '0.25'))  # % lucro p/ travar 75%
-HFT_TRAIL_BE_BUF = float(os.environ.get('HFT_TRAIL_BE_BUF', '0.01'))  # buffer BE %
+HFT_TP_PCT       = float(os.environ.get('HFT_TP_PCT',      '0.80'))  # Referência para cálculo de viabilidade (NÃO é teto)
+HFT_SL_PCT       = float(os.environ.get('HFT_SL_PCT',      '0.35'))  # 0.35% SL inicial fixo
+# ── Trail Stop SEMPRE ATIVO — SEM TP FIXO, LUCRO ILIMITADO ───────────────────
+# 7 FASES: L0=SL fixo → L1=BE → L2=Lock30% → L3=Lock50% → L4=Lock65% → L5=Lock75% → L6=Lock80%
+# Preço sobe → trail sobe travando lucro. Preço recua → fecha no trail (lucro garantido).
+HFT_TRAIL_ENABLED = True  # sempre ativo — motor principal de saída
+HFT_TRAIL_L1 = float(os.environ.get('HFT_TRAIL_L1', '0.20'))  # break-even (cobre taxa)
+HFT_TRAIL_L2 = float(os.environ.get('HFT_TRAIL_L2', '0.40'))  # lock 30%
+HFT_TRAIL_L3 = float(os.environ.get('HFT_TRAIL_L3', '0.60'))  # lock 50%
+HFT_TRAIL_L4 = float(os.environ.get('HFT_TRAIL_L4', '1.00'))  # lock 65%
+HFT_TRAIL_L5 = float(os.environ.get('HFT_TRAIL_L5', '1.50'))  # lock 75%
+HFT_TRAIL_L6 = float(os.environ.get('HFT_TRAIL_L6', '2.50'))  # lock 80% (trailing dinâmico)
+HFT_TRAIL_BE_BUF = float(os.environ.get('HFT_TRAIL_BE_BUF', '0.02'))  # buffer acima da taxa p/ BE
+HFT_NO_TP_CEILING = os.environ.get('HFT_NO_TP_CEILING', 'true').lower() == 'true'
 HFT_RISK_PCT     = float(os.environ.get('HFT_RISK_PCT',    '15.0')) # 15% — budget suficiente para cobrir taxas
 HFT_MAX_TRADES   = int(os.environ.get('HFT_MAX_TRADES',    '5'))   # era 3 → mais oportunidades
 HFT_DAILY_LOSS   = float(os.environ.get('HFT_DAILY_LOSS',  '3.0'))
@@ -972,8 +971,8 @@ class HFTEngine:
                 log.warning(f'  sym_info {pair}: {e} — usando fallback')
                 # Fallbacks realistas por tipo de mercado
                 fallbacks = {
-                    'BTCUSDT':  (0.001, 0.001, 10.0),
-                    'ETHUSDT':  (0.001, 0.001, 10.0),
+                    'BTCUSDT':  (0.001, 0.001, 100.0),
+                    'ETHUSDT':  (0.01,  0.01,  20.0),
                     'BNBUSDT':  (0.01,  0.01,  5.0),
                     'SOLUSDT':  (0.1,   0.1,   5.0),
                     'XRPUSDT':  (1.0,   1.0,   5.0),
@@ -982,6 +981,19 @@ class HFTEngine:
                     'AVAXUSDT': (0.1,   0.1,   5.0),
                     'DOTUSDT':  (0.1,   0.1,   5.0),
                     'MATICUSDT':(1.0,   1.0,   5.0),
+                    # ── Novos pares adicionados ──
+                    'SUIUSDT':  (0.1,   0.1,   5.0),
+                    'NEARUSDT': (0.1,   0.1,   5.0),
+                    'PEPEUSDT': (1.0,   1.0,   5.0),
+                    'WIFUSDT':  (0.1,   0.1,   5.0),
+                    'SHIBUSDT': (1.0,   1.0,   5.0),
+                    'FETUSDT':  (0.1,   0.1,   5.0),
+                    'LINKUSDT': (0.01,  0.01,  5.0),
+                    'TRXUSDT':  (1.0,   1.0,   5.0),
+                    'APTUSDT':  (0.1,   0.1,   5.0),
+                    'ARBUSDT':  (0.1,   0.1,   5.0),
+                    'FILUSDT':  (0.1,   0.1,   5.0),
+                    'RENDERUSDT':(0.1,  0.1,   5.0),
                 }
                 fb = fallbacks.get(pair, (1.0, 1.0, 5.0))
                 self._sym_info[pair] = {'min_qty': fb[0], 'step': fb[1], 'min_notional': fb[2]}
@@ -1071,12 +1083,14 @@ class HFTEngine:
                 'peak_pnl_pct': 0.0,
             }
             self.last_trade_ts[pair] = time.time()
-            log.info(f'  ⚡ HFT {side} {pair} @ ${price:,.4f} | TP +{tp_pct:.2f}% | SL -{sl_pct:.2f}% | R:R 1:{rr:.1f} | conf={confidence:.0%} | {reason}')
+            tp_label = f'Trail (ref +{tp_pct:.2f}%)' if HFT_NO_TP_CEILING else f'TP +{tp_pct:.2f}%'
+            log.info(f'  ⚡ HFT {side} {pair} @ ${price:,.4f} | {tp_label} | SL -{sl_pct:.2f}% | conf={confidence:.0%} | {reason}')
             self.positions[key]['db_id'] = _hft_save_open(pair, side, price, qty, sl, tp)
             self.notify(
                 f'⚡ HFT {side} — {pair}\n'
-                f'Entrada: ${price:,.4f}  TP: ${tp:,.4f} (+{tp_pct:.2f}%)  SL: ${sl:,.4f} (-{sl_pct:.2f}%)\n'
-                f'Qtd: {qty} | R:R 1:{rr:.1f} | confiança {confidence:.0%} | {reason}'
+                f'Entrada: ${price:,.4f}  SL: ${sl:,.4f} (-{sl_pct:.2f}%)\n'
+                f'{"🚀 Sem teto de lucro — trailing ativo" if HFT_NO_TP_CEILING else f"TP: ${tp:,.4f} (+{tp_pct:.2f}%)"}\n'
+                f'Qtd: {qty} | confiança {confidence:.0%} | {reason}'
             )
             return True
         except Exception as e:
@@ -1264,7 +1278,7 @@ class HFTEngine:
                 entry = price
                 log.info(f'  ✅ {pair} entry corrigido: ${price:,.4f} TP:${new_tp:,.4f} SL:${new_sl:,.4f}')
 
-            tp    = pos['tp']
+            tp    = pos['tp']  # referência, NÃO é teto de saída
             sl_orig = pos['sl']
 
             # Lucro atual em %
@@ -1272,130 +1286,135 @@ class HFTEngine:
             if pnl_pct > pos.get('peak_pnl_pct', 0.0):
                 self.positions[key]['peak_pnl_pct'] = pnl_pct
 
-            if HFT_TRAIL_ENABLED:
-                # --- TRAILING STOP PROGRESSIVO (4 niveis) --------------------
-                # Conforme o lucro cresce, o SL sobe travando parte do ganho.
-                # Isso garante que apos atingir L1 (BE) a posicao nunca fecha no negativo.
-                cur_level = pos.get('trail_level', 0)
-                trail_sl  = pos.get('trail_sl')
-                new_level = cur_level
-                new_tsl   = trail_sl
+            # ── TRAILING STOP PROGRESSIVO (7 fases) — SEM TP FIXO ──────────
+            # Fases: L0=SL fixo → L1=BE → L2=30% → L3=50% → L4=65% → L5=75% → L6=80%
+            # O lucro NUNCA é limitado: trail sobe junto com o preço.
+            cur_level = pos.get('trail_level', 0)
+            trail_sl  = pos.get('trail_sl')
+            new_level = cur_level
+            new_tsl   = trail_sl
 
-                # Nivel 4: trava 75% do pnl_pct atual (trailing dinamico)
-                if pnl_pct >= HFT_TRAIL_L4:
-                    lock = pnl_pct * 0.75
-                    if side == 'BUY':
-                        cand = entry * (1 + lock / 100)
-                        if trail_sl is None or cand > trail_sl:
-                            new_tsl = cand; new_level = 4
-                    else:
-                        cand = entry * (1 - lock / 100)
-                        if trail_sl is None or cand < trail_sl:
-                            new_tsl = cand; new_level = 4
+            # Custo de taxa em % para cálculo de break-even real
+            fee_pct_rt = HFT_FEE_RATE * 2 * 100  # ex: 0.05% × 2 = 0.10%
 
-                # Nivel 3: trava 60% do pnl_pct atual
-                elif pnl_pct >= HFT_TRAIL_L3 and cur_level < 3:
-                    lock = pnl_pct * 0.60
-                    if side == 'BUY':
-                        cand = entry * (1 + lock / 100)
-                        if trail_sl is None or cand > trail_sl:
-                            new_tsl = cand; new_level = 3
-                    else:
-                        cand = entry * (1 - lock / 100)
-                        if trail_sl is None or cand < trail_sl:
-                            new_tsl = cand; new_level = 3
+            # ── Fase L6: Lock 80% (trailing dinâmico contínuo) ───────────
+            if pnl_pct >= HFT_TRAIL_L6:
+                lock = pnl_pct * 0.80
+                cand = entry * (1 + lock / 100) if side == 'BUY' else entry * (1 - lock / 100)
+                if side == 'BUY' and (trail_sl is None or cand > trail_sl):
+                    new_tsl = cand; new_level = max(new_level, 6)
+                elif side == 'SELL' and (trail_sl is None or cand < trail_sl):
+                    new_tsl = cand; new_level = max(new_level, 6)
 
-                # Nivel 2: trava 40% do pnl_pct
-                elif pnl_pct >= HFT_TRAIL_L2 and cur_level < 2:
-                    lock = pnl_pct * 0.40
-                    if side == 'BUY':
-                        cand = entry * (1 + lock / 100)
-                        if trail_sl is None or cand > trail_sl:
-                            new_tsl = cand; new_level = 2
-                    else:
-                        cand = entry * (1 - lock / 100)
-                        if trail_sl is None or cand < trail_sl:
-                            new_tsl = cand; new_level = 2
+            # ── Fase L5: Lock 75% ────────────────────────────────────────
+            elif pnl_pct >= HFT_TRAIL_L5:
+                lock = pnl_pct * 0.75
+                cand = entry * (1 + lock / 100) if side == 'BUY' else entry * (1 - lock / 100)
+                if side == 'BUY' and (trail_sl is None or cand > trail_sl):
+                    new_tsl = cand; new_level = max(new_level, 5)
+                elif side == 'SELL' and (trail_sl is None or cand < trail_sl):
+                    new_tsl = cand; new_level = max(new_level, 5)
 
-                # Nivel 1 (Break-Even): SL = entry + buffer minimo
-                elif pnl_pct >= HFT_TRAIL_L1 and cur_level < 1:
-                    buf = HFT_TRAIL_BE_BUF / 100
-                    if side == 'BUY':
-                        cand = entry * (1 + buf)
-                        if trail_sl is None or cand > trail_sl:
-                            new_tsl = cand; new_level = 1
-                    else:
-                        cand = entry * (1 - buf)
-                        if trail_sl is None or cand < trail_sl:
-                            new_tsl = cand; new_level = 1
+            # ── Fase L4: Lock 65% ────────────────────────────────────────
+            elif pnl_pct >= HFT_TRAIL_L4:
+                lock = pnl_pct * 0.65
+                cand = entry * (1 + lock / 100) if side == 'BUY' else entry * (1 - lock / 100)
+                if side == 'BUY' and (trail_sl is None or cand > trail_sl):
+                    new_tsl = cand; new_level = max(new_level, 4)
+                elif side == 'SELL' and (trail_sl is None or cand < trail_sl):
+                    new_tsl = cand; new_level = max(new_level, 4)
 
-                # Nos niveis L3/L4, trail segue o preco dinamicamente (sobe com o preco)
-                if cur_level >= 3 and pnl_pct >= HFT_TRAIL_L3:
-                    lock_pct = 0.75 if cur_level >= 4 else 0.60
-                    lock = pnl_pct * lock_pct
-                    if side == 'BUY':
-                        dyn = entry * (1 + lock / 100)
-                        if trail_sl is None or dyn > trail_sl:
-                            new_tsl = dyn
-                    else:
-                        dyn = entry * (1 - lock / 100)
-                        if trail_sl is None or dyn < trail_sl:
-                            new_tsl = dyn
+            # ── Fase L3: Lock 50% ────────────────────────────────────────
+            elif pnl_pct >= HFT_TRAIL_L3:
+                lock = pnl_pct * 0.50
+                cand = entry * (1 + lock / 100) if side == 'BUY' else entry * (1 - lock / 100)
+                if side == 'BUY' and (trail_sl is None or cand > trail_sl):
+                    new_tsl = cand; new_level = max(new_level, 3)
+                elif side == 'SELL' and (trail_sl is None or cand < trail_sl):
+                    new_tsl = cand; new_level = max(new_level, 3)
 
-                # Aplica novo nivel/SL se mudou
-                if new_level > cur_level or (new_tsl is not None and new_tsl != trail_sl):
-                    if new_tsl is not None:
-                        # Garantia: apos L1, SL nunca fica abaixo do entry
-                        buf = HFT_TRAIL_BE_BUF / 100
-                        if new_level >= 1 and side == 'BUY'  and new_tsl < entry * (1 + buf):
-                            new_tsl = entry * (1 + buf)
-                        if new_level >= 1 and side == 'SELL' and new_tsl > entry * (1 - buf):
-                            new_tsl = entry * (1 - buf)
-                        self.positions[key]['trail_sl']     = new_tsl
-                        self.positions[key]['trail_level']  = new_level
-                        self.positions[key]['be_activated'] = new_level >= 1
-                        if new_level > cur_level:
-                            lnames = {1: 'BE', 2: 'Lock-40%', 3: 'Lock-60%', 4: 'Lock-75%'}
-                            locked_pct = (new_tsl - entry) / entry * 100 if side == 'BUY' else (entry - new_tsl) / entry * 100
-                            log.info(
-                                f'  TRAIL L{new_level} ({lnames[new_level]}) {pair} {side} '
-                                f'pnl=+{pnl_pct:.3f}% SL travado={locked_pct:+.3f}% (${new_tsl:,.5f})'
-                            )
+            # ── Fase L2: Lock 30% ────────────────────────────────────────
+            elif pnl_pct >= HFT_TRAIL_L2 and cur_level < 2:
+                lock = pnl_pct * 0.30
+                cand = entry * (1 + lock / 100) if side == 'BUY' else entry * (1 - lock / 100)
+                if side == 'BUY' and (trail_sl is None or cand > trail_sl):
+                    new_tsl = cand; new_level = 2
+                elif side == 'SELL' and (trail_sl is None or cand < trail_sl):
+                    new_tsl = cand; new_level = 2
 
+            # ── Fase L1: Break-Even (cobre taxa + buffer) ────────────────
+            elif pnl_pct >= HFT_TRAIL_L1 and cur_level < 1:
+                be_offset = fee_pct_rt + HFT_TRAIL_BE_BUF
+                cand = entry * (1 + be_offset / 100) if side == 'BUY' else entry * (1 - be_offset / 100)
+                if side == 'BUY' and (trail_sl is None or cand > trail_sl):
+                    new_tsl = cand; new_level = 1
+                elif side == 'SELL' and (trail_sl is None or cand < trail_sl):
+                    new_tsl = cand; new_level = 1
 
-            # SL ativo = trail (se habilitado) ou fixo
-            if HFT_TRAIL_ENABLED:
-                if side == 'BUY':
-                    active_sl = max(sl_orig, self.positions.get(key, {}).get('trail_sl') or sl_orig)
-                else:
-                    active_sl = min(sl_orig, self.positions.get(key, {}).get('trail_sl') or sl_orig)
+            # Trail dinâmico contínuo para L4+ (acompanha o preço em tempo real)
+            if cur_level >= 4 and pnl_pct > 0:
+                lock_pcts = {4: 0.65, 5: 0.75, 6: 0.80}
+                lock_pct = lock_pcts.get(cur_level, 0.65)
+                lock = pnl_pct * lock_pct
+                dyn = entry * (1 + lock / 100) if side == 'BUY' else entry * (1 - lock / 100)
+                if side == 'BUY' and (trail_sl is None or dyn > trail_sl):
+                    new_tsl = dyn
+                elif side == 'SELL' and (trail_sl is None or dyn < trail_sl):
+                    new_tsl = dyn
+
+            # Aplica novo nível/SL se mudou
+            if new_tsl is not None and (new_level > cur_level or new_tsl != trail_sl):
+                # Garantia: após L1, SL nunca fica abaixo do break-even
+                be_offset = fee_pct_rt + HFT_TRAIL_BE_BUF
+                if new_level >= 1 and side == 'BUY' and new_tsl < entry * (1 + be_offset / 100):
+                    new_tsl = entry * (1 + be_offset / 100)
+                if new_level >= 1 and side == 'SELL' and new_tsl > entry * (1 - be_offset / 100):
+                    new_tsl = entry * (1 - be_offset / 100)
+                self.positions[key]['trail_sl']     = new_tsl
+                self.positions[key]['trail_level']  = new_level
+                self.positions[key]['be_activated'] = new_level >= 1
+                if new_level > cur_level:
+                    lnames = {1:'BE', 2:'Lock-30%', 3:'Lock-50%', 4:'Lock-65%', 5:'Lock-75%', 6:'Lock-80%'}
+                    locked_pct = (new_tsl - entry) / entry * 100 if side == 'BUY' else (entry - new_tsl) / entry * 100
+                    log.info(
+                        f'  🔒 TRAIL L{new_level} ({lnames.get(new_level,"?")}) {pair} {side} '
+                        f'pnl=+{pnl_pct:.3f}% trail={locked_pct:+.3f}% (${new_tsl:,.5f})'
+                    )
+                    if new_level >= 2:
+                        self.notify(
+                            f'🔒 Trail L{new_level} — {pair.replace("USDT","")}\n'
+                            f'Lucro atual: +{pnl_pct:.2f}% | Travado: {locked_pct:+.2f}%\n'
+                            f'Trail SL: ${new_tsl:,.4f} | Entrada: ${entry:,.4f}\n'
+                            f'💡 Lucro protegido — sem teto, continua subindo'
+                        )
+
+            # ── SL ativo = melhor entre trail e SL original ──────────────
+            if side == 'BUY':
+                active_sl = max(sl_orig, self.positions.get(key, {}).get('trail_sl') or sl_orig)
             else:
-                active_sl = sl_orig  # SL fixo — sem trail
+                active_sl = min(sl_orig, self.positions.get(key, {}).get('trail_sl') or sl_orig)
 
             tlv    = self.positions.get(key, {}).get('trail_level', 0)
             sl_lbl = f'Trail-L{tlv}' if tlv > 0 else 'SL'
 
-            # Decisoes de saida
+            # ── Decisões de saída — SEM TP FIXO ──────────────────────────
             if side == 'BUY':
-                if price >= tp:
+                # Sem TP ceiling: NÃO fecha por atingir TP (lucro ilimitado)
+                if not HFT_NO_TP_CEILING and price >= tp:
                     self._close_position(key, price, f'TP +{(price/entry-1)*100:.2f}%')
                 elif price <= active_sl:
                     locked = (active_sl - entry) / entry * 100
-                    self._close_position(key, price, f'{sl_lbl} {locked:+.3f}% travado')
-                elif age > HFT_TIME_EXIT and pnl_pct > 0:
-                    self._close_position(key, price, f'Time-exit +{pnl_pct:.3f}%')
-                elif age > HFT_TIME_EXIT * 2:
-                    self._close_position(key, price, f'Time-exit max {pnl_pct:+.3f}%')
+                    self._close_position(key, price, f'{sl_lbl} {locked:+.3f}%')
+                elif age > HFT_TIME_EXIT * 3 and pnl_pct <= 0:
+                    self._close_position(key, price, f'Time-exit max (loss) {pnl_pct:+.3f}%')
             else:
-                if price <= tp:
+                if not HFT_NO_TP_CEILING and price <= tp:
                     self._close_position(key, price, f'TP +{(entry/price-1)*100:.2f}%')
                 elif price >= active_sl:
                     locked = (entry - active_sl) / entry * 100
-                    self._close_position(key, price, f'{sl_lbl} {locked:+.3f}% travado')
-                elif age > HFT_TIME_EXIT and pnl_pct > 0:
-                    self._close_position(key, price, f'Time-exit +{pnl_pct:.3f}%')
-                elif age > HFT_TIME_EXIT * 2:
-                    self._close_position(key, price, f'Time-exit max {pnl_pct:+.3f}%')
+                    self._close_position(key, price, f'{sl_lbl} {locked:+.3f}%')
+                elif age > HFT_TIME_EXIT * 3 and pnl_pct <= 0:
+                    self._close_position(key, price, f'Time-exit max (loss) {pnl_pct:+.3f}%')
 
     def _poll_close_flags(self, pair, close):
         import glob as _glob
