@@ -98,8 +98,8 @@ def _hft_save_close(tid, exit_p, pnl, reason):
 log = logging.getLogger('CryptoEdge.HFT')
 
 # ── Config global (env) ───────────────────────────────────────────────────────
-HFT_TP_PCT       = float(os.environ.get('HFT_TP_PCT',      '0.80'))  # 0.80% TP — realista p/ 3m, cobre taxa+lucro
-HFT_SL_PCT       = float(os.environ.get('HFT_SL_PCT',      '0.35'))  # 0.35% SL — R:R líq ~1.55:1 após taxas
+HFT_TP_PCT       = float(os.environ.get('HFT_TP_PCT',      '2.00'))  # 2% TP — cobre fees com margem
+HFT_SL_PCT       = float(os.environ.get('HFT_SL_PCT',      '0.80'))  # 0.8% SL — R:R 2.5:1
 # Trail Stop Progressivo: 4 niveis de travamento de lucro
 # L1: lucro >= X% -> SL vai para break-even + buffer (nunca mais fecha no negativo)
 # L2: lucro >= X% -> SL trava 40% do lucro
@@ -133,9 +133,9 @@ HFT_TZ_OFFSET    = int(os.environ.get('HFT_TZ_OFFSET',    '-3'))   # UTC-3 BRT
 HFT_CONFIRM_MAX_DRIFT = float(os.environ.get('HFT_CONFIRM_MAX_DRIFT', '0.80'))  # era 0.15 → 0.80% para 1m candles
 
 # ── Filtro de Amplitude e Lucro Mínimo ───────────────────────────────────────
-HFT_MIN_ATR_PCT    = float(os.environ.get('HFT_MIN_ATR_PCT',    '0.10'))  # ATR mínimo por vela (%)
-HFT_MIN_NET_PROFIT = float(os.environ.get('HFT_MIN_NET_PROFIT', '0.08'))  # lucro líquido mínimo ($)
-HFT_FEE_RATE       = float(os.environ.get('HFT_FEE_RATE',       '0.0005'))# taxa taker 0.05% (Binance futures)
+HFT_MIN_ATR_PCT    = float(os.environ.get('HFT_MIN_ATR_PCT',    '0.20'))  # ATR mínimo por vela (%)
+HFT_MIN_NET_PROFIT = float(os.environ.get('HFT_MIN_NET_PROFIT', '0.12'))  # lucro líquido mínimo ($)
+HFT_FEE_RATE       = float(os.environ.get('HFT_FEE_RATE',       '0.0004'))# taxa taker 0.04%
 HFT_LEVERAGE       = int(os.environ.get('HFT_LEVERAGE',          '5'))     # alavancagem Binance
 # Pula confirmação de vela (entra direto no sinal) — útil em tendências fortes
 HFT_SKIP_CONFIRM = os.environ.get('HFT_SKIP_CONFIRM', 'false').lower() == 'true'  # confirmação de vela ativa
@@ -600,15 +600,15 @@ class HFTEngine:
         # Bloqueia se ATR atual é menor que o mínimo para atingir o TP
         atr_check     = self._atr(highs, lows, closes)
         atr_pct_check = atr_check / close * 100 if close > 0 else 0
-        # ATR mínimo = pelo menos 15% do TP (apenas garante que mercado não está morto)
-        atr_min_for_tp = HFT_TP_PCT * 0.15
+        # ATR mínimo = pelo menos 30% do TP (movimento precisa existir)
+        atr_min_for_tp = HFT_TP_PCT * 0.30
         if atr_pct_check < max(HFT_MIN_ATR_PCT, atr_min_for_tp):
             return {'side': None, 'score': 0,
                     'reason': f'{pair.replace("USDT","")} sem amplitude ATR={atr_pct_check:.3f}% — não cobre taxa ${fee_rt_usdt:.3f}',
                     'strategies': []}
 
-        # ADX mínimo: só opera em mercado com alguma direção
-        adx_min = float(os.environ.get('HFT_ADX_MIN', '12'))
+        # ADX mínimo: só opera em mercado com direção clara
+        adx_min = float(os.environ.get('HFT_ADX_MIN', '18'))
         adx_cur = self._adx(highs, lows, closes)
         if adx_cur < adx_min:
             return {'side': None, 'score': 0, 'reason': f'ADX {adx_cur:.0f} < {adx_min:.0f} (mercado sem direção)', 'strategies': []}
@@ -649,7 +649,7 @@ class HFTEngine:
         bb = self._bollinger(closes)
         if bb:
             _, _, _, pct_b, bw_v = bb
-            if bw_v > 0.06:  # relaxado para 3m (era 0.12)
+            if bw_v > 0.12:
                 if   pct_b < 0.06: signals.append(('BUY',  'bollinger', f'BB low {pct_b:.2f}', 1.4))
                 elif pct_b < 0.18: signals.append(('BUY',  'bollinger', 'BB near low',          0.8))
                 elif pct_b > 0.94: signals.append(('SELL', 'bollinger', f'BB high {pct_b:.2f}', 1.4))
@@ -728,15 +728,14 @@ class HFTEngine:
             return {'side': None, 'score': 0, 'reason': f'divergencia [{regime}]', 'strategies': []}
 
         if buy_count >= min_sg and buy_score >= min_sc and buy_score > sell_score * 1.4:
-            # Counter-trend: BUY em tendência de baixa → precisa score 30% maior
-            if regime == 'trending_down' and buy_score < min_sc * 1.3:
+            # Bloqueia BUY em tendência de baixa (evita operar contra o mercado)
+            if regime == 'trending_down':
                 return {'side': None, 'score': 0, 'strategies': [],
-                        'reason': f'BUY contra-tendência precisa score>{min_sc*1.3:.1f} (tem {buy_score:.1f})'}
-            # Ranging: usa RSI configurável (env HFT_RANGING_RSI_BUY, default=rsi_buy)
-            ranging_rsi_buy = float(os.environ.get('HFT_RANGING_RSI_BUY', str(rsi_buy)))
-            if regime == 'ranging' and rsi_v > ranging_rsi_buy:
+                        'reason': f'BUY bloqueado em trending_down'}
+            # Em ranging só opera se RSI muito extremo (<18) para maior precisão
+            if regime == 'ranging' and rsi_v > 18:
                 return {'side': None, 'score': 0, 'strategies': [],
-                        'reason': f'BUY ranging RSI {rsi_v:.0f} > {ranging_rsi_buy:.0f}'}
+                        'reason': f'BUY em ranging só com RSI<18 (atual {rsi_v:.0f})'}
             return {'side': 'BUY', 'score': buy_score, 'count': buy_count,
                     'reason': ' + '.join(buy_reasons[:3]),
                     'strategies': list(set(buy_strats)),
@@ -747,15 +746,14 @@ class HFTEngine:
             if HFT_ONLY_BUY:
                 return {'side': None, 'score': 0, 'strategies': [],
                         'reason': f'SELL ignorado (HFT_ONLY_BUY=true) [{regime}]'}
-            # Counter-trend: SELL em tendência de alta → precisa score 30% maior
-            if regime == 'trending_up' and sell_score < min_sc * 1.3:
+            # Bloqueia SELL em tendência de alta (evita operar contra o mercado)
+            if regime == 'trending_up':
                 return {'side': None, 'score': 0, 'strategies': [],
-                        'reason': f'SELL contra-tendência precisa score>{min_sc*1.3:.1f} (tem {sell_score:.1f})'}
-            # Ranging: usa RSI configurável (env HFT_RANGING_RSI_SELL, default=rsi_sell)
-            ranging_rsi_sell = float(os.environ.get('HFT_RANGING_RSI_SELL', str(rsi_sell)))
-            if regime == 'ranging' and rsi_v < ranging_rsi_sell:
+                        'reason': f'SELL bloqueado em trending_up'}
+            # Em ranging só opera se RSI muito extremo (>82) para maior precisão
+            if regime == 'ranging' and rsi_v < 82:
                 return {'side': None, 'score': 0, 'strategies': [],
-                        'reason': f'SELL ranging RSI {rsi_v:.0f} < {ranging_rsi_sell:.0f}'}
+                        'reason': f'SELL em ranging só com RSI>82 (atual {rsi_v:.0f})'}
             return {'side': 'SELL', 'score': sell_score, 'count': sell_count,
                     'reason': ' + '.join(sell_reasons[:3]),
                     'strategies': list(set(sell_strats)),
@@ -1163,7 +1161,7 @@ class HFTEngine:
         # ── Analytics: registra trade completa ───────────────────────────
         if self.analytics:
             try:
-                fee_est = abs(pos.get('qty', 0) * price * HFT_FEE_RATE * 2)  # taxa real round-trip
+                fee_est = abs(pos.get('qty', 0) * price * 0.0004 * 2)  # 0.04% cada lado × 5x
                 rsi_rec = self._rsi(self.closes.get(pair, [])) if len(self.closes.get(pair, [])) >= 9 else 50
                 adx_rec = self._adx(self.highs.get(pair, []), self.lows.get(pair, []), self.closes.get(pair, []))
                 vol_recs = list(self.volumes.get(pair, []))
