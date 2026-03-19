@@ -2896,22 +2896,80 @@ app.post('/api/hft/close', requireAuth, async (req, res) => {
     const { trade_id, pair } = req.body;
     if (!trade_id && !pair) return res.status(400).json({ ok: false, error: 'trade_id or pair required' });
 
-    // Look up the trade to get pair + side
+    // Look up the trade to get pair + side + qty
     let sym = pair;
-    if (trade_id && !pair) {
-      const t = db.get('SELECT symbol, side FROM bot_trades WHERE id=? AND username=?', [trade_id, req.user]);
-      sym = t?.symbol || pair;
+    let side = null;
+    let qty = null;
+    if (trade_id) {
+      const t = db.get('SELECT symbol, side, qty FROM bot_trades WHERE id=? AND username=?', [trade_id, req.user]);
+      if (t) { sym = t.symbol || pair; side = t.side; qty = parseFloat(t.qty || 0); }
+    }
+    if (!side && sym) {
+      const t = db.get("SELECT symbol, side, qty FROM bot_trades WHERE symbol=? AND status='open' AND username=? ORDER BY id DESC LIMIT 1", [sym, req.user]);
+      if (t) { side = t.side; qty = parseFloat(t.qty || 0); }
     }
 
-    // Write a close signal file: /tmp/hft_close_{trade_id}
+    let binanceClosed = false;
+
+    // ── DIRECT BINANCE CLOSE (instant) ─────────────────────────────
+    if (sym && side && qty > 0) {
+      try {
+        const user = db.get('SELECT binance_key, binance_secret_enc FROM users WHERE username=?', [req.user]);
+        if (user?.binance_key && user?.binance_secret_enc) {
+          const apiKey = user.binance_key;
+          const secret = decryptSecret(user.binance_secret_enc);
+          const market = db.get("SELECT value FROM user_settings WHERE username=? AND key='BOT_MARKET'", [req.user])?.value
+                      || db.get("SELECT value FROM platform_settings WHERE key='BOT_MARKET'")?.value
+                      || process.env.BOT_MARKET
+                      || 'futures';
+
+          const closeSide = side === 'BUY' ? 'SELL' : 'BUY';
+          const ts = Date.now();
+          const crypto = require('crypto');
+
+          if (market === 'futures') {
+            const params = `symbol=${sym}&side=${closeSide}&type=MARKET&quantity=${qty}&timestamp=${ts}`;
+            const sig = crypto.createHmac('sha256', secret).update(params).digest('hex');
+            const fd = (await axios.post(`https://fapi.binance.com/fapi/v1/order?${params}&signature=${sig}`, null, {
+              headers: { 'X-MBX-APIKEY': apiKey }, timeout: 5000
+            })).data;
+            if (fd.orderId) {
+              binanceClosed = true;
+              // Mark trade as closed in DB
+              const exitPrice = parseFloat(fd.avgPrice || fd.price || 0);
+              const entry = parseFloat(db.get('SELECT entry FROM bot_trades WHERE id=?', [trade_id])?.entry || 0);
+              const pnl = side === 'BUY' ? (exitPrice - entry) * qty : (entry - exitPrice) * qty;
+              db.run("UPDATE bot_trades SET status='closed', exit_price=?, pnl=?, closed_at=datetime('now'), close_reason='Manual close via painel' WHERE id=?",
+                [exitPrice, pnl, trade_id]);
+            }
+          } else {
+            const params = `symbol=${sym}&side=${closeSide}&type=MARKET&quantity=${qty}&timestamp=${ts}`;
+            const sig = crypto.createHmac('sha256', secret).update(params).digest('hex');
+            const fd = (await axios.post(`https://api.binance.com/api/v3/order?${params}&signature=${sig}`, null, {
+              headers: { 'X-MBX-APIKEY': apiKey }, timeout: 5000
+            })).data;
+            if (fd.orderId) {
+              binanceClosed = true;
+              db.run("UPDATE bot_trades SET status='closed', closed_at=datetime('now'), close_reason='Manual close via painel' WHERE id=?", [trade_id]);
+            }
+          }
+        }
+      } catch(e2) {
+        console.log('[HFT Close] Binance direct close error:', e2.message);
+      }
+    }
+
+    // ── FLAG FILE FALLBACK (for bot to pick up) ───────────────────
     const fs = require('fs');
     const flagFile = `/tmp/hft_close_${trade_id || sym}`;
     fs.writeFileSync(flagFile, JSON.stringify({ trade_id: trade_id || '', pair: sym || '', ts: Date.now() }));
-
-    // Also write a pair-based flag as fallback
     if (sym) fs.writeFileSync(`/tmp/hft_close_pair_${sym}`, '1');
 
-    res.json({ ok: true, message: `Sinal de fechamento enviado para ${sym || trade_id}` });
+    if (binanceClosed) {
+      res.json({ ok: true, message: `✅ ${sym} fechado na Binance com sucesso` });
+    } else {
+      res.json({ ok: true, message: `Sinal de fechamento enviado para ${sym || trade_id} (será processado na próxima vela)` });
+    }
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 

@@ -104,7 +104,7 @@ HFT_SL_PCT       = float(os.environ.get('HFT_SL_PCT',      '0.35'))  # 0.35% SL 
 # 7 FASES: L0=SL fixo → L1=BE → L2=Lock30% → L3=Lock50% → L4=Lock65% → L5=Lock75% → L6=Lock80%
 # Preço sobe → trail sobe travando lucro. Preço recua → fecha no trail (lucro garantido).
 HFT_TRAIL_ENABLED = True  # sempre ativo — motor principal de saída
-HFT_TRAIL_L1 = float(os.environ.get('HFT_TRAIL_L1', '0.20'))  # break-even (cobre taxa)
+HFT_TRAIL_L1 = float(os.environ.get('HFT_TRAIL_L1', '0.25'))  # break-even (cobre taxa + margem)
 HFT_TRAIL_L2 = float(os.environ.get('HFT_TRAIL_L2', '0.40'))  # lock 30%
 HFT_TRAIL_L3 = float(os.environ.get('HFT_TRAIL_L3', '0.60'))  # lock 50%
 HFT_TRAIL_L4 = float(os.environ.get('HFT_TRAIL_L4', '1.00'))  # lock 65%
@@ -985,6 +985,7 @@ class HFTEngine:
                     'SUIUSDT':  (0.1,   0.1,   5.0),
                     'NEARUSDT': (0.1,   0.1,   5.0),
                     'PEPEUSDT': (1.0,   1.0,   5.0),
+                    '1000PEPEUSDT':(1.0, 1.0,  5.0),
                     'WIFUSDT':  (0.1,   0.1,   5.0),
                     'SHIBUSDT': (1.0,   1.0,   5.0),
                     'FETUSDT':  (0.1,   0.1,   5.0),
@@ -1342,9 +1343,12 @@ class HFTEngine:
                 elif side == 'SELL' and (trail_sl is None or cand < trail_sl):
                     new_tsl = cand; new_level = 2
 
-            # ── Fase L1: Break-Even (cobre taxa + buffer) ────────────────
+            # ── Fase L1: Break-Even (cobre taxa REAL + buffer) ────────────
             elif pnl_pct >= HFT_TRAIL_L1 and cur_level < 1:
-                be_offset = fee_pct_rt + HFT_TRAIL_BE_BUF
+                # BE baseado na taxa real da posição, não só percentual genérico
+                est_pos_val = pos['qty'] * price
+                est_fee_pct = (est_pos_val * HFT_FEE_RATE * 2) / est_pos_val * 100 if est_pos_val > 0 else fee_pct_rt
+                be_offset = max(est_fee_pct, fee_pct_rt) + HFT_TRAIL_BE_BUF
                 cand = entry * (1 + be_offset / 100) if side == 'BUY' else entry * (1 - be_offset / 100)
                 if side == 'BUY' and (trail_sl is None or cand > trail_sl):
                     new_tsl = cand; new_level = 1
@@ -1397,22 +1401,34 @@ class HFTEngine:
             tlv    = self.positions.get(key, {}).get('trail_level', 0)
             sl_lbl = f'Trail-L{tlv}' if tlv > 0 else 'SL'
 
+            # ── FEE GATE: calcula lucro LÍQUIDO real (após taxas) ────────
+            position_val = pos['qty'] * price
+            fee_rt_real  = position_val * HFT_FEE_RATE * 2  # taxa real round-trip
+            pnl_gross    = (price - entry) * pos['qty'] if side == 'BUY' else (entry - price) * pos['qty']
+            pnl_net      = pnl_gross - fee_rt_real
+
             # ── Decisões de saída — SEM TP FIXO ──────────────────────────
             if side == 'BUY':
-                # Sem TP ceiling: NÃO fecha por atingir TP (lucro ilimitado)
                 if not HFT_NO_TP_CEILING and price >= tp:
                     self._close_position(key, price, f'TP +{(price/entry-1)*100:.2f}%')
                 elif price <= active_sl:
-                    locked = (active_sl - entry) / entry * 100
-                    self._close_position(key, price, f'{sl_lbl} {locked:+.3f}%')
+                    # FEE GATE: se trail diz "fechar" mas lucro líquido < 0, ignora trail e usa SL original
+                    if tlv > 0 and pnl_net < 0 and price > sl_orig:
+                        log.info(f'  🛡 FEE GATE {pair}: trail diz fechar mas PnL líq ${pnl_net:.4f} < 0 — aguardando')
+                    else:
+                        locked = (active_sl - entry) / entry * 100
+                        self._close_position(key, price, f'{sl_lbl} {locked:+.3f}% net:${pnl_net:+.4f}')
                 elif age > HFT_TIME_EXIT * 3 and pnl_pct <= 0:
                     self._close_position(key, price, f'Time-exit max (loss) {pnl_pct:+.3f}%')
             else:
                 if not HFT_NO_TP_CEILING and price <= tp:
                     self._close_position(key, price, f'TP +{(entry/price-1)*100:.2f}%')
                 elif price >= active_sl:
-                    locked = (entry - active_sl) / entry * 100
-                    self._close_position(key, price, f'{sl_lbl} {locked:+.3f}%')
+                    if tlv > 0 and pnl_net < 0 and price < sl_orig:
+                        log.info(f'  🛡 FEE GATE {pair}: trail diz fechar mas PnL líq ${pnl_net:.4f} < 0 — aguardando')
+                    else:
+                        locked = (entry - active_sl) / entry * 100
+                        self._close_position(key, price, f'{sl_lbl} {locked:+.3f}% net:${pnl_net:+.4f}')
                 elif age > HFT_TIME_EXIT * 3 and pnl_pct <= 0:
                     self._close_position(key, price, f'Time-exit max (loss) {pnl_pct:+.3f}%')
 

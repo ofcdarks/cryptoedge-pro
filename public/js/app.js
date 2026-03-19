@@ -361,6 +361,7 @@ const PAIRS = [
   // ── Meme Coins ─────────────────────────────────────────────────────────────
   { sym:'SHIBUSDT',  name:'Shiba Inu',         base:'SHIB'   },
   { sym:'PEPEUSDT',  name:'Pepe',              base:'PEPE'   },
+  { sym:'1000PEPEUSDT', name:'Pepe (1000x)',  base:'1000PEPE' },
   { sym:'WIFUSDT',   name:'dogwifhat',         base:'WIF'    },
   { sym:'FLOKIUSDT', name:'Floki',             base:'FLOKI'  },
   { sym:'BONKUSDT',  name:'Bonk',              base:'BONK'   },
@@ -7072,7 +7073,7 @@ async function loadPairBreakdown(days=30) {
 
 // ─── HFT BOT ──────────────────────────────────────────────────────────────────
 const HFT_PAIRS_DEFAULT = ['SOLUSDT','BNBUSDT','XRPUSDT','DOGEUSDT','ADAUSDT',
-  'AVAXUSDT','DOTUSDT','MATICUSDT','SUIUSDT','NEARUSDT','PEPEUSDT','WIFUSDT',
+  'AVAXUSDT','DOTUSDT','MATICUSDT','SUIUSDT','NEARUSDT','1000PEPEUSDT','WIFUSDT',
   'FETUSDT','LINKUSDT'];
 let _hftRefreshTimer = null;
 
@@ -7440,7 +7441,7 @@ async function hftStart() {
   const pairs = [...document.querySelectorAll('.hft-pair-btn[data-active="1"]')].map(b => b.dataset.pair);
   if (pairs.length === 0) {
     // Fallback: usa pares padrão se seletor não inicializou
-    const defaultPairs = ['SOLUSDT','BNBUSDT','XRPUSDT','DOGEUSDT','ADAUSDT','AVAXUSDT','DOTUSDT','MATICUSDT','SUIUSDT','NEARUSDT','PEPEUSDT','WIFUSDT','FETUSDT','LINKUSDT'];
+    const defaultPairs = ['SOLUSDT','BNBUSDT','XRPUSDT','DOGEUSDT','ADAUSDT','AVAXUSDT','DOTUSDT','MATICUSDT','SUIUSDT','NEARUSDT','1000PEPEUSDT','WIFUSDT','FETUSDT','LINKUSDT'];
     showToast('⚠️ Usando pares padrão — abra o painel HFT primeiro para personalizar', false);
     pairs.push(...defaultPairs);
   }
@@ -7547,13 +7548,19 @@ async function hftClearStale() {
 async function hftManualClose(tradeId, sym) {
   if (!await showConfirm('Fechar ' + sym, `Fechar a posição ${sym} agora ao preço de mercado?`)) return;
   try {
+    showToast('⏳ Fechando ' + sym + ' na Binance...');
     const r = await fetch('/api/hft/close', {
       method: 'POST',
       headers: { ...auth.headers(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ trade_id: tradeId, pair: sym })
     });
     const d = await r.json();
-    if (d.ok) { showToast('✅ Sinal de fechamento enviado para ' + sym); setTimeout(loadHFTStats, 2000); }
+    if (d.ok) {
+      showToast('✅ ' + d.message);
+      // Refresh table after close
+      setTimeout(loadHFTStats, 1500);
+      setTimeout(loadHFTStats, 4000);
+    }
     else showToast('❌ ' + (d.error || 'Erro'), true);
   } catch(e) { showToast('❌ ' + e.message, true); }
 }
