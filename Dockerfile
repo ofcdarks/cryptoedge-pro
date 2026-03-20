@@ -1,54 +1,48 @@
-# ── CryptoEdge Pro v3.0 — Production Dockerfile ──────────────────────────────
-FROM node:20-alpine
+# ============================================================
+# LaCasaStudio V2.3 — TypeScript + PostgreSQL Production Build
+# ============================================================
 
+FROM node:20-slim AS client-build
+WORKDIR /app/client
+COPY client/package*.json client/tsconfig*.json client/tailwind.config.js client/postcss.config.js ./
+RUN npm install
+COPY client/ ./
+RUN npx tsc --noEmit && npx vite build
+
+FROM node:20-slim AS server-build
+RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
+WORKDIR /app/server
+COPY server/package*.json server/tsconfig.json ./
+COPY server/prisma ./prisma/
+RUN npm install && npx prisma generate
+COPY server/src ./src/
+RUN npx tsc
+
+FROM node:20-slim AS server-deps
+WORKDIR /app/server
+COPY server/package*.json ./
+COPY server/prisma ./prisma/
+RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
+RUN npm install --omit=dev && npx prisma generate
+
+FROM node:20-slim AS production
 WORKDIR /app
+RUN apt-get update -y && apt-get install -y openssl wget && rm -rf /var/lib/apt/lists/*
+RUN groupadd -r appgroup && useradd -r -g appgroup -m appuser
 
-# System deps
-RUN apk add --no-cache \
-    curl \
-    python3 \
-    py3-pip \
-    bash \
-    tzdata \
-    && ln -sf python3 /usr/bin/python \
-    && cp /usr/share/zoneinfo/America/Sao_Paulo /etc/localtime \
-    && echo "America/Sao_Paulo" > /etc/timezone
+COPY --from=server-deps /app/server/node_modules ./server/node_modules
+COPY --from=server-build /app/server/dist ./server/dist
+COPY server/prisma ./server/prisma/
+COPY --from=client-build /app/client/dist ./server/public
 
-# Instala PM2
-RUN npm install -g pm2 --no-audit --no-fund && pm2 --version
+RUN mkdir -p /app/server/uploads && chown -R appuser:appgroup /app
 
-# Dependências Python do bot
-COPY bot/requirements.txt ./bot/requirements.txt
-RUN pip3 install --break-system-packages --no-cache-dir \
-    python-binance \
-    python-dotenv \
-    requests \
-    websockets \
-  || pip3 install --no-cache-dir \
-    python-binance \
-    python-dotenv \
-    requests \
-    websockets
-
-# Dependências Node (produção)
-COPY package*.json ./
-RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
-
-# Copia código-fonte
-COPY . .
-
-# Diretórios de dados
-RUN mkdir -p /data /app/logs && chmod 777 /data /app/logs
-
-# Variáveis padrão
-ENV NODE_ENV=production \
-    PORT=3000 \
-    DB_PATH=/data \
-    TZ=America/Sao_Paulo
-
+ENV NODE_ENV=production
+ENV PORT=3000
 EXPOSE 3000
+USER appuser
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
-  CMD curl -sf http://localhost:3000/api/health | grep -q '"status":"ok"' || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
+  CMD wget -qO- http://localhost:3000/api/health || exit 1
 
-CMD ["node", "server.js"]
+CMD ["sh", "-c", "cd server && npx prisma migrate deploy 2>/dev/null || npx prisma db push 2>/dev/null; node dist/db/seed.js 2>/dev/null; node dist/index.js"]

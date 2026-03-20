@@ -1,0 +1,10 @@
+{
+  "name": "LaCasaStudio",
+  "short_name": "LaCasa",
+  "description": "YouTube Production OS",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0B0C14",
+  "theme_color": "#EF4444",
+  "orientation": "any"
+}
