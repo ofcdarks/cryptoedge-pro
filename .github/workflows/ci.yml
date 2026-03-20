@@ -1,0 +1,68 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: lacasastudio_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: testpassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install deps
+        run: npm install && cd server && npm install && cd ../client && npm install
+
+      - name: Generate Prisma
+        run: cd server && npx prisma generate
+
+      - name: Run migrations
+        run: cd server && npx prisma db push
+        env:
+          DATABASE_URL: postgresql://postgres:testpassword@localhost:5432/lacasastudio_test
+
+      - name: Type-check server
+        run: cd server && npx tsc --noEmit
+
+      - name: Type-check client
+        run: cd client && npx tsc --noEmit
+
+      - name: Run tests
+        run: cd server && npm run test:coverage
+        env:
+          DATABASE_URL: postgresql://postgres:testpassword@localhost:5432/lacasastudio_test
+          JWT_SECRET: ci-test-secret-minimum-32-characters-long
+          PORT: 3000
+
+      - name: Build client
+        run: cd client && npx vite build
+
+  docker:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker build -t lacasastudio:latest .

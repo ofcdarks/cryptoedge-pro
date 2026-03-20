@@ -1,0 +1,224 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  name      String
+  password  String
+  avatar    String   @default("")
+  role      String   @default("admin")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  channels      Channel[]
+  videos        Video[]
+  metas         Meta[]
+  assets        Asset[]
+  templates     Template[]
+  budgetItems   BudgetItem[]
+  ideas         Idea[]
+  notifications Notification[]
+}
+
+model Setting {
+  id    Int    @id @default(autoincrement())
+  key   String @unique
+  value String @default("")
+}
+
+model Channel {
+  id         Int          @id @default(autoincrement())
+  name       String
+  color      String       @default("#EF4444")
+  icon       String       @default("📺")
+  subs       String       @default("0")
+  videoCount Int          @default(0)
+  views      String       @default("0")
+  growth     String       @default("0%")
+  userId     Int
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+  videos     Video[]
+  metas      Meta[]
+  assets     Asset[]
+  templates  Template[]
+  members    TeamMember[]
+  ideas      Idea[]
+}
+
+model Video {
+  id         Int          @id @default(autoincrement())
+  title      String
+  status     String       @default("idea")
+  date       String       @default("")
+  priority   String       @default("média")
+  duration   String       @default("")
+  channelId  Int
+  channel    Channel      @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  userId     Int
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scenes     Scene[]
+  checklists Checklist[]
+  scripts    Script[]
+  seoResults SeoResult[]
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+}
+
+model Scene {
+  id       Int    @id @default(autoincrement())
+  type     String @default("content")
+  title    String
+  duration String @default("")
+  notes    String @default("")
+  camera   String @default("")
+  audio    String @default("")
+  color    String @default("#3B82F6")
+  order    Int    @default(0)
+  videoId  Int
+  video    Video  @relation(fields: [videoId], references: [id], onDelete: Cascade)
+}
+
+model Checklist {
+  id      Int     @id @default(autoincrement())
+  label   String
+  done    Boolean @default(false)
+  videoId Int
+  video   Video   @relation(fields: [videoId], references: [id], onDelete: Cascade)
+}
+
+model Meta {
+  id        Int        @id @default(autoincrement())
+  title     String
+  userId    Int
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channelId Int?
+  channel   Channel?   @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  items     MetaItem[]
+  createdAt DateTime   @default(now())
+}
+
+model MetaItem {
+  id      Int    @id @default(autoincrement())
+  label   String
+  current Float  @default(0)
+  target  Float  @default(0)
+  unit    String @default("")
+  metaId  Int
+  meta    Meta   @relation(fields: [metaId], references: [id], onDelete: Cascade)
+}
+
+model TeamMember {
+  id       Int       @id @default(autoincrement())
+  name     String
+  role     String    @default("editor")
+  email    String    @default("")
+  avatar   String    @default("")
+  status   String    @default("offline")
+  tasks    Int       @default(0)
+  channels Channel[]
+}
+
+model Asset {
+  id        Int      @id @default(autoincrement())
+  name      String
+  type      String   @default("thumbnail")
+  format    String   @default("")
+  size      String   @default("")
+  tags      String   @default("")
+  fileUrl   String   @default("")
+  filePath  String   @default("")
+  notes     String   @default("")
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channelId Int?
+  channel   Channel? @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+}
+
+model Template {
+  id        Int      @id @default(autoincrement())
+  name      String
+  desc      String   @default("")
+  episodes  Int      @default(0)
+  structure String   @default("")
+  color     String   @default("#3B82F6")
+  tags      String   @default("")
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channelId Int?
+  channel   Channel? @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+}
+
+model Notification {
+  id        Int      @id @default(autoincrement())
+  type      String   @default("info")
+  message   String
+  read      Boolean  @default(false)
+  link      String   @default("")
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+}
+
+model BudgetItem {
+  id        Int      @id @default(autoincrement())
+  category  String
+  desc      String
+  value     Float    @default(0)
+  type      String   @default("expense")
+  month     String   @default("")
+  recurring Boolean  @default(false)
+  notes     String   @default("")
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+}
+
+model Script {
+  id        Int      @id @default(autoincrement())
+  content   String   @default("")
+  version   Int      @default(1)
+  label     String   @default("")
+  videoId   Int
+  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model SeoResult {
+  id          Int      @id @default(autoincrement())
+  titles      String   @default("")
+  description String   @default("")
+  tags        String   @default("")
+  score       String   @default("")
+  tips        String   @default("")
+  videoId     Int
+  video       Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+}
+
+model Idea {
+  id        Int      @id @default(autoincrement())
+  title     String
+  content   String   @default("")
+  imageUrl  String   @default("")
+  tags      String   @default("")
+  color     String   @default("#3B82F6")
+  pinned    Boolean  @default(false)
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channelId Int?
+  channel   Channel? @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

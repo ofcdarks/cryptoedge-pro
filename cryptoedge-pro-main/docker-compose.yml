@@ -1,0 +1,64 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: lacasastudio-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: lacasastudio
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  app:
+    build: .
+    container_name: lacasastudio
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
+      - DATABASE_URL=postgresql://${DB_USER:-postgres}:${DB_PASSWORD}@postgres:5432/lacasastudio
+      - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:3000}
+      - LOG_LEVEL=info
+    volumes:
+      - app_uploads:/app/server/uploads
+
+  backup:
+    image: postgres:16-alpine
+    container_name: lacasastudio-backup
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: ${DB_USER:-postgres}
+      PGPASSWORD: ${DB_PASSWORD}
+      PGDATABASE: lacasastudio
+    volumes:
+      - backups:/backups
+    entrypoint: >
+      sh -c "while true; do
+        pg_dump -Fc > /backups/lacasastudio-$$(date +%Y%m%d-%H%M).dump;
+        find /backups -name '*.dump' -mtime +7 -delete;
+        sleep 86400;
+      done"
+
+volumes:
+  pg_data:
+  app_uploads:
+  backups:
