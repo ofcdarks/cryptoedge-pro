@@ -1039,9 +1039,10 @@ def main():
 
         # Periodic status update every 4 hours
         def _hft_check_telegram_flags():
-            import os as _tos
-            stop_f  = '/tmp/hft_stop_flag'
-            start_f = '/tmp/hft_start_flag'
+            import os as _tos, tempfile as _tmpmod
+            _tmpd   = _tmpmod.gettempdir()
+            stop_f  = _tos.path.join(_tmpd, 'hft_stop_flag')
+            start_f = _tos.path.join(_tmpd, 'hft_start_flag')
             if _tos.path.exists(stop_f):
                 try: _tos.remove(stop_f)
                 except: pass
@@ -1155,9 +1156,10 @@ def main():
             while state['running']:
                 time.sleep(2)
                 # Check for Telegram /stop command
-                import os as _osc
-                if _osc.path.exists('/tmp/hft_stop_flag'):
-                    try: _osc.remove('/tmp/hft_stop_flag')
+                import os as _osc, tempfile as _tmpmod2
+                _stop_path = _osc.path.join(_tmpmod2.gettempdir(), 'hft_stop_flag')
+                if _osc.path.exists(_stop_path):
+                    try: _osc.remove(_stop_path)
                     except: pass
                     log.info("  🛑 Comando /stop recebido via Telegram — encerrando...")
                     state['running'] = False

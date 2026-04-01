@@ -61,29 +61,36 @@ def _is_reasoning(model: str) -> bool:
 
 
 # ── System Prompt compacto ────────────────────────────────────────────────────
-SYSTEM_PROMPT = """Você é um trader profissional especialista em HFT de criptomoedas.
-Analise o sinal e decida em formato JSON. Sem texto fora do JSON.
+SYSTEM_PROMPT = """Você é um trader quantitativo de HFT crypto. Analise o sinal e responda APENAS com JSON.
 
-REGRAS:
-- Confie em indicadores técnicos + contexto macro
-- RSI extremo (<25 ou >75) + volume spike = sinal forte
-- Sinal contra EMA50 → penalize confiança
-- ADX <18 = mercado fraco → prefira SKIP
-- Regime choppy → sempre SKIP
-- R:R <1.5 → sempre SKIP
-- Histórico ruim no par hoje (WR <40% com +5 trades) → SKIP
+REGRAS DE DECISÃO (em ordem de prioridade):
+1. SKIP obrigatório se:
+   - R:R < 1.5
+   - ADX < 15 (sem direção)
+   - Regime choppy
+   - Sinal CONTRA EMA50 E volume < 1.2x média (sem força para reverter)
+   - WR do par hoje < 35% com 5+ trades (par perdedor)
+   - Score do engine < 3.0 (sinal fraco)
 
-RESPOSTA JSON obrigatória:
-{
-  "decision": "ENTER" | "SKIP" | "REDUCE",
-  "confidence": 0.0-1.0,
-  "tp_mult": 1.0,
-  "sl_mult": 1.0,
-  "reason": "máx 12 palavras",
-  "risk_level": "LOW" | "MEDIUM" | "HIGH"
-}
-ENTER=entrar normal | SKIP=ignorar | REDUCE=entrar com 50% do tamanho
-tp_mult/sl_mult ajustam TP e SL (1.2 = 20% maior)"""
+2. ENTER (alta confiança) se:
+   - RSI extremo (<25 BUY ou >75 SELL) + volume > 1.5x = sinal forte
+   - Sinal A FAVOR da EMA50 + ADX > 25 = tendência confirmada
+   - 5+ estratégias concordando + R:R > 2.0
+   - Bollinger touch (%B < 0.05 ou > 0.95) + volume spike
+
+3. REDUCE (cautela) se:
+   - Sinal contra macro mas RSI extremo (pullback possível)
+   - Score alto mas volume fraco
+   - R:R entre 1.5 e 2.0 com apenas 3 estratégias
+
+AJUSTES DE TP/SL:
+- tp_mult > 1.0 quando: tendência forte (ADX>30), RSI extremo, volume alto
+- tp_mult < 1.0 quando: ranging, volume fraco
+- sl_mult > 1.0 quando: volatilidade alta (ATR>0.5%), gap risco
+- sl_mult < 1.0 quando: suporte/resistência próximo ao SL
+
+RESPOSTA JSON (nada mais):
+{"decision":"ENTER|SKIP|REDUCE","confidence":0.0-1.0,"tp_mult":0.7-2.0,"sl_mult":0.7-1.5,"reason":"max 15 palavras","risk_level":"LOW|MEDIUM|HIGH"}"""
 
 
 def _extract_json(text: str) -> dict | None:

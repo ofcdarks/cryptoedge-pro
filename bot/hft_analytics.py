@@ -29,7 +29,15 @@ import datetime as dt
 
 log = logging.getLogger('CryptoEdge.Analytics')
 
-_ANALYTICS_FILE = os.environ.get('HFT_ANALYTICS_FILE', '/data/hft_analytics.json')
+def _data_dir():
+    d = os.environ.get('BOT_DATA_DIR', '')
+    if d: return d
+    if os.path.isdir('/data'): return '/data'
+    local = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+    os.makedirs(local, exist_ok=True)
+    return local
+
+_ANALYTICS_FILE = os.environ.get('HFT_ANALYTICS_FILE', os.path.join(_data_dir(), 'hft_analytics.json'))
 
 # ── Guardião de limites ───────────────────────────────────────────────────────
 GUARDIAN = {

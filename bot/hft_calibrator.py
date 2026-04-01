@@ -20,7 +20,15 @@ from collections import deque
 
 log = logging.getLogger('CryptoEdge.Calibrator')
 
-_CALIB_FILE  = os.environ.get('HFT_CALIB_FILE', '/data/hft_calibration.json')
+def _data_dir():
+    d = os.environ.get('BOT_DATA_DIR', '')
+    if d: return d
+    if os.path.isdir('/data'): return '/data'
+    local = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+    os.makedirs(local, exist_ok=True)
+    return local
+
+_CALIB_FILE  = os.environ.get('HFT_CALIB_FILE', os.path.join(_data_dir(), 'hft_calibration.json'))
 _CALIB_HOURS = float(os.environ.get('HFT_CALIB_HOURS', '24'))   # re-calibra a cada N horas
 _CALIB_DAYS  = int(os.environ.get('HFT_CALIB_DAYS', '5'))       # dias de histórico para backtest
 
@@ -337,11 +345,11 @@ def _run_backtest(klines, params):
     wins   = [t for t in trades if t['win']]
     losses = [t for t in trades if not t['win']]
     wr     = len(wins) / n * 100
-    gross_p = sum(t['pnl'] for t in wins)
-    gross_l = abs(sum(t['pnl'] for t in losses))
-    pf      = gross_p / gross_l if gross_l > 0 else 99.0
-    roi     = (capital - 1000.0) / 1000.0 * 100
-    avg_dur = sum(t['dur'] for t in trades) / n
+    gross_p = sum(t['pnl'] for t in wins) if wins else 0
+    gross_l = abs(sum(t['pnl'] for t in losses)) if losses else 0
+    pf      = gross_p / gross_l if gross_l > 0 else (99.0 if gross_p > 0 else 0.0)
+    roi     = (capital - 1000.0) / 1000.0 * 100 if capital != 0 else 0
+    avg_dur = sum(t['dur'] for t in trades) / n if n > 0 else 0
 
     # Sharpe simplificado
     if len(pnls) > 1:

@@ -148,16 +148,15 @@ def _poll_loop():
 
                     if txt in ('/stop', '/parar', '/pause', '/pausar'):
                         try:
-                            import os as _os
-                            _os.makedirs('/tmp', exist_ok=True)
-                            with open('/tmp/hft_stop_flag', 'w') as _f: _f.write('stop')
+                            import os as _os, tempfile as _tmpmod
+                            with open(os.path.join(_tmpmod.gettempdir(), 'hft_stop_flag'), 'w') as _f: _f.write('stop')
                             _send('🛑 <b>Bot parado via Telegram</b>', chat_id_override=stop_chat)
                         except: pass
 
                     elif txt in ('/start', '/iniciar', '/play'):
                         try:
-                            import os as _os
-                            with open('/tmp/hft_start_flag', 'w') as _f: _f.write('start')
+                            import os as _os, tempfile as _tmpmod
+                            with open(os.path.join(_tmpmod.gettempdir(), 'hft_start_flag'), 'w') as _f: _f.write('start')
                             _send('▶️ <b>Iniciando bot...</b>\nAguarde a confirmação de início.', chat_id_override=stop_chat)
                         except: pass
 

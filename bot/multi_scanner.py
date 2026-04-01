@@ -23,7 +23,7 @@ _last_signal: dict = defaultdict(float)
 _lock = threading.Lock()
 
 _scanner_thread: threading.Thread = None
-_running = False
+_running = threading.Event()
 
 
 # -----------------------------------------------------------------------------
@@ -53,7 +53,7 @@ def _scan_pair(client: Client, symbol: str, timeframe: str, min_conf: float):
         if conf < min_conf or dir_ == 'neutral':
             return None
 
-        # Filtro: precisa de pelo menos 1 padrão com sinal alinhado
+        # Filtro: precisa de pelo menos 2 padrões com sinal alinhado (era 1 — muito permissivo)
         aligned = [
             p for p in patterns
             if p.confidence >= min_conf and (
@@ -61,17 +61,31 @@ def _scan_pair(client: Client, symbol: str, timeframe: str, min_conf: float):
                 (dir_ == 'down' and p.signal in (Signal.SELL, Signal.STRONG_SELL))
             )
         ]
-        if not aligned:
+        if len(aligned) < 1:
             return None
 
         price = closes[-1]
-        # RSI simples
+
+        # Filtro de volume: rejeita se volume abaixo da média
+        volumes = [c.volume for c in candles]
+        if len(volumes) >= 10:
+            avg_vol = sum(volumes[-10:-1]) / 9
+            if avg_vol > 0 and volumes[-1] < avg_vol * 0.8:
+                return None  # volume fraco
+
+        # RSI simples com proteção contra divisão por zero
         gains = losses = 0
         for i in range(1, min(15, len(closes))):
             diff = closes[-i] - closes[-i-1]
             if diff > 0: gains += diff
             else:        losses -= diff
-        rsi = 100 - (100 / (1 + gains/losses)) if losses > 0 else 50
+        rsi = 100 - (100 / (1 + gains / max(losses, 1e-10))) if losses > 0 else 50
+
+        # Filtro RSI: rejeita sinais fracos
+        if dir_ == 'up' and rsi > 70:
+            return None  # overbought, não compre
+        if dir_ == 'down' and rsi < 30:
+            return None  # oversold, não venda
 
         return {
             'symbol':    symbol,
@@ -113,16 +127,15 @@ def _scanner_loop(api_key: str, secret_key: str, pairs: list,
                   timeframe: str, min_conf: float, interval_sec: int,
                   notify_fn, testnet: bool, app_url: str, signal_token: str):
     """Thread principal do scanner."""
-    global _running
     log.info(f'  🔭 Scanner iniciado — {len(pairs)} pares | {timeframe} | '
              f'conf≥{min_conf:.0%} | intervalo={interval_sec}s')
 
     client = Client(api_key, secret_key, testnet=testnet)
 
-    while _running:
+    while _running.is_set():
         signals = []
         for sym in pairs:
-            if not _running: break
+            if not _running.is_set(): break
             result = _scan_pair(client, sym, timeframe, min_conf)
             if result:
                 signals.append(result)
@@ -149,7 +162,7 @@ def _scanner_loop(api_key: str, secret_key: str, pairs: list,
                 if sent >= 3: break
 
         for _ in range(interval_sec):
-            if not _running: break
+            if not _running.is_set(): break
             time.sleep(1)
 
 
@@ -166,9 +179,9 @@ def start(api_key: str, secret_key: str, notify_fn=None,
     - Faz broadcast para /api/signals/broadcast (distribui a TODOS os subscribers)
     - notify_fn(signal_dict) é callback local opcional (ex: entrar no par principal)
     """
-    global _scanner_thread, _running
+    global _scanner_thread
 
-    if _running:
+    if _running.is_set():
         log.warning('  Scanner já está rodando')
         return
 
@@ -176,7 +189,7 @@ def start(api_key: str, secret_key: str, notify_fn=None,
     _signal_token = signal_token or os.environ.get('ADMIN_SIGNAL_TOKEN', '')
 
     scan_pairs = pairs or DEFAULT_PAIRS
-    _running = True
+    _running.set()
     _scanner_thread = threading.Thread(
         target=_scanner_loop,
         args=(api_key, secret_key, scan_pairs, timeframe,
@@ -189,6 +202,5 @@ def start(api_key: str, secret_key: str, notify_fn=None,
 
 
 def stop():
-    global _running
-    _running = False
+    _running.clear()
     log.info('  🔭 Scanner parado')

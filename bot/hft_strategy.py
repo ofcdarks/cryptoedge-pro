@@ -55,8 +55,23 @@ except ImportError:
 _APP_URL    = os.environ.get('APP_URL', 'http://localhost:' + os.environ.get('PORT', '3000'))
 _BOT_HEADER = {'Content-Type': 'application/json', 'X-Bot-Internal': 'cryptoedge-bot-2024'}
 
+# ── Diretório de dados cross-platform ────────────────────────────────────────
+def _data_dir():
+    """Retorna diretório de dados: /data/ em container, ./data/ localmente."""
+    d = os.environ.get('BOT_DATA_DIR', '')
+    if d:
+        return d
+    if os.path.isdir('/data'):
+        return '/data'
+    # Fallback: ./data relativo ao diretório do bot
+    local = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+    os.makedirs(local, exist_ok=True)
+    return local
+
+_DATA_DIR = _data_dir()
+
 # ── Persistência de aprendizado ───────────────────────────────────────────────
-_LEARN_FILE = os.environ.get('HFT_LEARN_FILE', '/data/hft_learn.json')
+_LEARN_FILE = os.environ.get('HFT_LEARN_FILE', os.path.join(_DATA_DIR, 'hft_learn.json'))
 
 def _load_learning():
     try:
@@ -173,7 +188,7 @@ HFT_COMPOUND      = os.environ.get('HFT_COMPOUND', 'true').lower() == 'true'
 HFT_HEARTBEAT_SEC  = int(os.environ.get('HFT_HEARTBEAT_SEC',  '300'))   # 5 min
 # Notificar via Telegram quando sinal pendente for gerado
 HFT_NOTIFY_SIGNAL  = os.environ.get('HFT_NOTIFY_SIGNAL', 'true').lower() == 'true'
-HFT_CAPITAL_FILE  = os.environ.get('HFT_CAPITAL_FILE', '/data/hft_capital.json')
+HFT_CAPITAL_FILE  = os.environ.get('HFT_CAPITAL_FILE', os.path.join(_DATA_DIR, 'hft_capital.json'))
 
 # ── MELHORIA 1: Filtro de Correlação ─────────────────────────────────────────
 # Max posições na mesma direção (BUY ou SELL) — evita risco triplicado
@@ -324,6 +339,7 @@ class HFTEngine:
         # ── Slippage tracker (aprende com trades reais) ───────────────
         self._slippage_history = deque(maxlen=100)  # últimos 100 slippages em %
         self._slippage_by_pair = {}  # par → deque de slippages
+        self._load_slippage_data()
         self.last_trade_ts   = {}
         self.closes          = {p: deque(maxlen=250) for p in HFT_PAIRS}
         self.highs           = {p: deque(maxlen=250) for p in HFT_PAIRS}
@@ -340,7 +356,7 @@ class HFTEngine:
 
         # PnL acumulado por período (persiste via arquivo para sobreviver reinicializações)
         self.daily_breakevens = 0          # trades que fecharam em 0 (±threshold)
-        self._pnl_file = os.environ.get('HFT_PNL_FILE', '/data/hft_pnl_history.json')
+        self._pnl_file = os.environ.get('HFT_PNL_FILE', os.path.join(_DATA_DIR, 'hft_pnl_history.json'))
         self._pnl_data  = self._load_pnl_history()
         self._be_threshold = float(os.environ.get('HFT_BE_THRESHOLD', '0.0002'))  # $0.0002 = break-even
         self.learner         = AdaptiveLearner()
@@ -372,8 +388,12 @@ class HFTEngine:
             self.capital = self._load_capital()
 
         self._last_pos_sync = 0  # timestamp última sincronização de posições com Binance
+        self._last_calibration = time.time()  # timestamp da última calibração
 
-        log.info('  🚀 HFT Engine v3.1 ADAPTIVE + CONFIRMATION + CALIBRATION + AI iniciado')
+        # Restaura sinais pendentes do disco (sobrevive restart)
+        self._load_pending()
+
+        log.info('  🚀 HFT Engine v3.2 ADAPTIVE + CONFIRMATION + CALIBRATION + AI iniciado')
         if HFT_COMPOUND:
             log.info(f'  💰 Juros compostos: ATIVO | capital atual = ${self.capital:.2f}')
 
@@ -489,22 +509,116 @@ class HFTEngine:
             log.warning(f'  Compound capital save erro: {e}')
 
     def _load_calibration(self):
-        """Carrega parâmetros calibrados por par."""
+        """Carrega parâmetros calibrados por par. Recalibra se expirado."""
         try:
-            from hft_calibrator import load_calibration
+            from hft_calibrator import load_calibration, needs_calibration, run_calibration
             data = load_calibration()
             if data:
                 for pair, info in data.get('pairs', {}).items():
                     self._pair_params[pair] = info.get('params', {})
                 log.info(f'  📐 Calibração carregada para {len(self._pair_params)} pares')
+            elif needs_calibration():
+                self._run_recalibration()
             else:
                 log.info('  📐 Sem calibração disponível — usando parâmetros padrão')
         except Exception as e:
             log.info(f'  📐 Calibrador indisponível ({e}) — usando padrão')
 
+    def _run_recalibration(self):
+        """Recalibra parâmetros ótimos por par via backtest."""
+        try:
+            from hft_calibrator import run_calibration
+            log.info('  🔬 Auto-recalibração iniciada...')
+            data = run_calibration(self.client, HFT_PAIRS, HFT_TIMEFRAME)
+            if data:
+                for pair, info in data.get('pairs', {}).items():
+                    self._pair_params[pair] = info.get('params', {})
+                log.info(f'  🔬 Recalibração OK — {len(self._pair_params)} pares atualizados')
+                self.notify(f'🔬 Auto-recalibração concluída — {len(self._pair_params)} pares otimizados')
+        except Exception as e:
+            log.warning(f'  Recalibração falhou: {e}')
+
+    # ── Persistência de sinais pendentes ─────────────────────────────────────
+    _PENDING_FILE = os.path.join(_DATA_DIR, 'hft_pending.json')
+
+    def _save_pending(self):
+        """Salva sinais pendentes para sobreviver restart."""
+        try:
+            data = {}
+            for pair, sig in self._pending.items():
+                data[pair] = {k: v for k, v in sig.items() if isinstance(v, (str, int, float, bool, list))}
+                data[pair]['saved_at'] = time.time()
+            with open(self._PENDING_FILE, 'w') as f:
+                _json.dump(data, f)
+        except Exception:
+            pass
+
+    def _load_pending(self):
+        """Recupera sinais pendentes após restart (max 2min de idade)."""
+        try:
+            if not os.path.exists(self._PENDING_FILE):
+                return
+            with open(self._PENDING_FILE) as f:
+                data = _json.load(f)
+            now = time.time()
+            restored = 0
+            for pair, sig in data.items():
+                age = now - sig.get('saved_at', 0)
+                if age < 120 and pair in self.closes:  # max 2 min
+                    sig.pop('saved_at', None)
+                    self._pending[pair] = sig
+                    restored += 1
+            if restored:
+                log.info(f'  📋 {restored} sinais pendentes restaurados do disco')
+            os.remove(self._PENDING_FILE)
+        except Exception:
+            pass
+
     def _get_pair_param(self, pair, key, default):
         """Retorna parâmetro calibrado para o par, ou default."""
         return self._pair_params.get(pair, {}).get(key, default)
+
+    # ── Slippage Learning ────────────────────────────────────────────────────
+    _SLIPPAGE_FILE = os.path.join(_DATA_DIR, 'hft_slippage.json')
+
+    def _load_slippage_data(self):
+        """Carrega histórico de slippage real entre sessões."""
+        try:
+            if not os.path.exists(self._SLIPPAGE_FILE):
+                return
+            with open(self._SLIPPAGE_FILE) as f:
+                data = _json.load(f)
+            for pair, slips in data.get('by_pair', {}).items():
+                self._slippage_by_pair[pair] = deque(slips[-30:], maxlen=30)
+            global_slips = data.get('global', [])
+            for s in global_slips[-100:]:
+                self._slippage_history.append(s)
+            log.info(f'  📉 Slippage: {len(self._slippage_history)} registros carregados')
+        except Exception:
+            pass
+
+    def _save_slippage_data(self):
+        """Persiste histórico de slippage."""
+        try:
+            data = {
+                'global': list(self._slippage_history),
+                'by_pair': {p: list(d) for p, d in self._slippage_by_pair.items()},
+                'avg_global': self.get_learned_slippage(),
+            }
+            with open(self._SLIPPAGE_FILE, 'w') as f:
+                _json.dump(data, f)
+        except Exception:
+            pass
+
+    def get_learned_slippage(self, pair=None):
+        """Retorna slippage aprendido (%) — usa dados reais se disponíveis."""
+        if pair and pair in self._slippage_by_pair:
+            slips = self._slippage_by_pair[pair]
+            if len(slips) >= 5:
+                return sum(slips) / len(slips)
+        if len(self._slippage_history) >= 10:
+            return sum(self._slippage_history) / len(self._slippage_history)
+        return HFT_SLIPPAGE_PCT  # fallback para config estática
 
     # ── Indicadores ──────────────────────────────────────────────────────────
 
@@ -788,10 +902,22 @@ class HFTEngine:
                 sell_score += w; sell_count += 1
                 sell_strats.append(strat); sell_reasons.append(reason)
 
-        # Divergência
+        # Divergência — sinal ambíguo = não entrar
         tot = buy_score + sell_score
         if tot > 0 and 0.35 < buy_score / tot < 0.65:
             return {'side': None, 'score': 0, 'reason': f'divergencia [{regime}]', 'strategies': []}
+
+        # Filtro de spread temporal: rejeita se preço se moveu < 0.02% nas últimas 5 velas
+        if len(closes) >= 5:
+            price_range = max(list(closes)[-5:]) - min(list(closes)[-5:])
+            if close > 0 and (price_range / close * 100) < 0.02:
+                return {'side': None, 'score': 0, 'reason': f'mercado parado (range 5v < 0.02%)', 'strategies': []}
+
+        # Filtro anti-reversão: não entra na mesma direção de um loss recente no par (cooldown extra)
+        if pair in self.pair_stats:
+            ps = self.pair_stats[pair]
+            if ps['losses'] >= 2 and ps['wins'] == 0:
+                min_sc *= 1.3  # exige score 30% maior em par com 2+ losses seguidos
 
         if buy_count >= min_sg and buy_score >= min_sc and buy_score > sell_score * 1.4:
             # Counter-trend: BUY em tendência de baixa → precisa score 30% maior
@@ -1223,6 +1349,9 @@ class HFTEngine:
                     self._slippage_by_pair[pair].append(slip_pct)
                     if slip_pct > 0.05:
                         log.info(f'  📉 SLIPPAGE {pair}: esperado ${price:.4f} → real ${actual_price:.4f} ({slip_pct:.3f}%)')
+                    # Persiste a cada 10 trades
+                    if len(self._slippage_history) % 10 == 0:
+                        self._save_slippage_data()
         except Exception as e:
             err_str = str(e)
             log.error(f'  HFT close {pair} erro: {err_str}')
@@ -1583,7 +1712,7 @@ class HFTEngine:
     def _load_prev_day_profit(self) -> float:
         """Carrega lucro do dia anterior (persistido no reset)."""
         try:
-            f = os.environ.get('HFT_PREV_PROFIT_FILE', '/data/hft_prev_day_profit.json')
+            f = os.environ.get('HFT_PREV_PROFIT_FILE', os.path.join(_DATA_DIR, 'hft_prev_day_profit.json'))
             if os.path.exists(f):
                 with open(f) as fh:
                     data = _json.load(fh)
@@ -1595,7 +1724,7 @@ class HFTEngine:
     def _save_prev_day_profit(self, profit: float):
         """Salva lucro do dia para ser usado como loss limit amanhã."""
         try:
-            f = os.environ.get('HFT_PREV_PROFIT_FILE', '/data/hft_prev_day_profit.json')
+            f = os.environ.get('HFT_PREV_PROFIT_FILE', os.path.join(_DATA_DIR, 'hft_prev_day_profit.json'))
             os.makedirs(os.path.dirname(f), exist_ok=True)
             with open(f, 'w') as fh:
                 _json.dump({
@@ -1907,14 +2036,15 @@ class HFTEngine:
                         self.positions[key]['slip_gate_since'] = 0
 
     def _poll_close_flags(self, pair, close):
-        import glob as _glob
-        pf = f'/tmp/hft_close_pair_{pair}'
+        import glob as _glob, tempfile
+        _tmpdir = tempfile.gettempdir()
+        pf = os.path.join(_tmpdir, f'hft_close_pair_{pair}')
         if os.path.exists(pf):
             try: os.remove(pf)
             except: pass
             self.close_position_by_pair(pair, 'Manual close via painel')
             return
-        for fpath in _glob.glob('/tmp/hft_close_*'):
+        for fpath in _glob.glob(os.path.join(_tmpdir, 'hft_close_*')):
             if '_pair_' in fpath: continue
             try:
                 data  = _json.loads(open(fpath).read())
@@ -2152,6 +2282,7 @@ class HFTEngine:
                     )
             else:
                 self._pending[pair] = sig
+                self._save_pending()
                 self.send_signal_alert(
                     pair, sig['side'], sig['score'], sig.get('count', 0),
                     sig['reason'], sig.get('regime', '?'), sig.get('rsi', 50),
@@ -2557,6 +2688,21 @@ def _start_visibility_thread(engine):
                         _last_update = now
                     except Exception as _pe:
                         log.debug(f'  Periodic update erro: {_pe}')
+
+                # ── Auto-recalibração periódica ──────────────────────
+                try:
+                    _calib_hours = float(os.environ.get('HFT_CALIB_HOURS', '24'))
+                    if _calib_hours > 0 and hasattr(engine, '_last_calibration'):
+                        age_h = (now - engine._last_calibration) / 3600
+                        if age_h >= _calib_hours and len(engine.positions) == 0:
+                            log.info(f'  🔬 Calibração expirada ({age_h:.1f}h) — recalibrando...')
+                            threading.Thread(
+                                target=engine._run_recalibration,
+                                daemon=True, name='HFT-Recalib'
+                            ).start()
+                            engine._last_calibration = now
+                except Exception as _ce:
+                    log.debug(f'  Recalib check erro: {_ce}')
 
                 # ── MELHORIA 7: Resumo semanal (domingo 23:50 local) ─────
                 try:
