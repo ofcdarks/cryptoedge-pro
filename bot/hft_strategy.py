@@ -217,15 +217,15 @@ STRATEGY_NAMES = [
 ]
 
 BASE_WEIGHTS = {
-    'ema_micro':     1.0,
-    'rsi_reversion': 1.5,
-    'bollinger':     1.2,
-    'vwap_dev':      1.2,
-    'volume_mom':    1.3,
-    'stochastic':    1.1,
-    'cci':           1.0,
-    'macd_fast':     0.9,
-    'price_action':  1.4,
+    'ema_micro':     1.0,   # OK em tendência
+    'rsi_reversion': 1.6,   # forte em 15m — oversold/overbought confiável
+    'bollinger':     1.3,   # bom em ranging — toque nas bandas
+    'vwap_dev':      1.3,   # bom — desvio do preço médio
+    'volume_mom':    1.5,   # forte — volume confirma direção real
+    'stochastic':    1.1,   # complementar
+    'cci':           0.7,   # fraco em 15m — muito ruído, penalizado
+    'macd_fast':     0.6,   # fraco em 15m — atrasa, penalizado
+    'price_action':  1.6,   # forte — pinbar/engulfing confiáveis
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -901,9 +901,9 @@ class HFTEngine:
                 sell_score += w; sell_count += 1
                 sell_strats.append(strat); sell_reasons.append(reason)
 
-        # Divergência — sinal ambíguo = não entrar
+        # Divergência — sinal ambíguo = não entrar (mais rigoroso: exige 70%+ dominância)
         tot = buy_score + sell_score
-        if tot > 0 and 0.35 < buy_score / tot < 0.65:
+        if tot > 0 and 0.30 < buy_score / tot < 0.70:
             return {'side': None, 'score': 0, 'reason': f'divergencia [{regime}]', 'strategies': []}
 
         # Filtro de spread temporal: rejeita se preço se moveu < 0.02% nas últimas 5 velas
@@ -918,7 +918,7 @@ class HFTEngine:
             if ps['losses'] >= 2 and ps['wins'] == 0:
                 min_sc *= 1.3  # exige score 30% maior em par com 2+ losses seguidos
 
-        if buy_count >= min_sg and buy_score >= min_sc and buy_score > sell_score * 1.4:
+        if buy_count >= min_sg and buy_score >= min_sc and buy_score > sell_score * 1.6:
             # Counter-trend: BUY em tendência de baixa → precisa score 30% maior
             if regime == 'trending_down' and buy_score < min_sc * 1.3:
                 return {'side': None, 'score': 0, 'strategies': [],
@@ -937,7 +937,7 @@ class HFTEngine:
                     'regime': regime, 'rsi': rsi_v, 'price': close,
                     'confidence': min(buy_score / 6.0, 1.0)}
 
-        if sell_count >= min_sg and sell_score >= min_sc and sell_score > buy_score * 1.4:
+        if sell_count >= min_sg and sell_score >= min_sc and sell_score > buy_score * 1.6:
             if HFT_ONLY_BUY:
                 return {'side': None, 'score': 0, 'strategies': [],
                         'reason': f'SELL ignorado (HFT_ONLY_BUY=true) [{regime}]'}
