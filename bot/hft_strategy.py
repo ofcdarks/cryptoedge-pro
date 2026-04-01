@@ -1869,45 +1869,45 @@ class HFTEngine:
             # Custo de taxa em % para cálculo de break-even real
             fee_pct_rt = HFT_FEE_RATE * 2 * 100  # ex: 0.05% × 2 = 0.10%
 
-            # ── Fase L6: Lock 85% (trailing dinâmico contínuo) ───────────
+            # ── Fase L6: Lock 88% (trailing dinâmico contínuo) ───────────
             if pnl_pct >= HFT_TRAIL_L6:
-                lock = pnl_pct * 0.85
+                lock = pnl_pct * 0.88
                 cand = entry * (1 + lock / 100) if side == 'BUY' else entry * (1 - lock / 100)
                 if side == 'BUY' and (trail_sl is None or cand > trail_sl):
                     new_tsl = cand; new_level = max(new_level, 6)
                 elif side == 'SELL' and (trail_sl is None or cand < trail_sl):
                     new_tsl = cand; new_level = max(new_level, 6)
 
-            # ── Fase L5: Lock 80% ────────────────────────────────────────
+            # ── Fase L5: Lock 82% ────────────────────────────────────────
             elif pnl_pct >= HFT_TRAIL_L5:
-                lock = pnl_pct * 0.80
+                lock = pnl_pct * 0.82
                 cand = entry * (1 + lock / 100) if side == 'BUY' else entry * (1 - lock / 100)
                 if side == 'BUY' and (trail_sl is None or cand > trail_sl):
                     new_tsl = cand; new_level = max(new_level, 5)
                 elif side == 'SELL' and (trail_sl is None or cand < trail_sl):
                     new_tsl = cand; new_level = max(new_level, 5)
 
-            # ── Fase L4: Lock 70% ────────────────────────────────────────
+            # ── Fase L4: Lock 75% ────────────────────────────────────────
             elif pnl_pct >= HFT_TRAIL_L4:
-                lock = pnl_pct * 0.70
+                lock = pnl_pct * 0.75
                 cand = entry * (1 + lock / 100) if side == 'BUY' else entry * (1 - lock / 100)
                 if side == 'BUY' and (trail_sl is None or cand > trail_sl):
                     new_tsl = cand; new_level = max(new_level, 4)
                 elif side == 'SELL' and (trail_sl is None or cand < trail_sl):
                     new_tsl = cand; new_level = max(new_level, 4)
 
-            # ── Fase L3: Lock 60% ────────────────────────────────────────
+            # ── Fase L3: Lock 65% ────────────────────────────────────────
             elif pnl_pct >= HFT_TRAIL_L3:
-                lock = pnl_pct * 0.60
+                lock = pnl_pct * 0.65
                 cand = entry * (1 + lock / 100) if side == 'BUY' else entry * (1 - lock / 100)
                 if side == 'BUY' and (trail_sl is None or cand > trail_sl):
                     new_tsl = cand; new_level = max(new_level, 3)
                 elif side == 'SELL' and (trail_sl is None or cand < trail_sl):
                     new_tsl = cand; new_level = max(new_level, 3)
 
-            # ── Fase L2: Lock 40% ────────────────────────────────────────
+            # ── Fase L2: Lock 50% ────────────────────────────────────────
             elif pnl_pct >= HFT_TRAIL_L2:
-                lock = pnl_pct * 0.40
+                lock = pnl_pct * 0.50
                 cand = entry * (1 + lock / 100) if side == 'BUY' else entry * (1 - lock / 100)
                 if side == 'BUY' and (trail_sl is None or cand > trail_sl):
                     new_tsl = cand; new_level = max(new_level, 2)
@@ -1930,7 +1930,7 @@ class HFTEngine:
 
             # Trail dinâmico contínuo para L4+ (acompanha o preço em tempo real)
             if cur_level >= 4 and pnl_pct > 0:
-                lock_pcts = {4: 0.70, 5: 0.80, 6: 0.85}
+                lock_pcts = {4: 0.75, 5: 0.82, 6: 0.88}
                 lock_pct = lock_pcts.get(cur_level, 0.65)
                 lock = pnl_pct * lock_pct
                 dyn = entry * (1 + lock / 100) if side == 'BUY' else entry * (1 - lock / 100)
@@ -1951,7 +1951,7 @@ class HFTEngine:
                 self.positions[key]['trail_level']  = new_level
                 self.positions[key]['be_activated'] = new_level >= 1
                 if new_level > cur_level:
-                    lnames = {1:'BE', 2:'Lock-40%', 3:'Lock-60%', 4:'Lock-70%', 5:'Lock-80%', 6:'Lock-85%'}
+                    lnames = {1:'BE', 2:'Lock-50%', 3:'Lock-65%', 4:'Lock-75%', 5:'Lock-82%', 6:'Lock-88%'}
                     locked_pct = (new_tsl - entry) / entry * 100 if side == 'BUY' else (entry - new_tsl) / entry * 100
                     log.info(
                         f'  🔒 TRAIL L{new_level} ({lnames.get(new_level,"?")}) {pair} {side} '
