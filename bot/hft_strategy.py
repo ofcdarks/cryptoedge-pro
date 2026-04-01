@@ -193,10 +193,12 @@ HFT_CAPITAL_FILE  = os.environ.get('HFT_CAPITAL_FILE', os.path.join(_DATA_DIR, '
 # Max posições na mesma direção (BUY ou SELL) — evita risco triplicado
 HFT_MAX_SAME_DIRECTION = int(os.environ.get('HFT_MAX_SAME_DIRECTION', '2'))
 
-# ── MELHORIA 2: Multi-Timeframe (confirma 3m com 15m) ───────────────────────
-HFT_MTF_ENABLED   = os.environ.get('HFT_MTF_ENABLED', 'true').lower() == 'true'
-HFT_MTF_TIMEFRAME = os.environ.get('HFT_MTF_TIMEFRAME', '5m')
-HFT_MTF_KLINES    = int(os.environ.get('HFT_MTF_KLINES', '50'))
+# ── MELHORIA 2: Multi-Timeframe (15m setup + 1H macro) ──────────────────────
+HFT_MTF_ENABLED    = os.environ.get('HFT_MTF_ENABLED', 'true').lower() == 'true'
+HFT_MTF_TIMEFRAME  = os.environ.get('HFT_MTF_TIMEFRAME', '5m')
+HFT_MTF_TF_SETUP   = os.environ.get('HFT_MTF_TF_SETUP', '15m')
+HFT_MTF_TF_MACRO   = os.environ.get('HFT_MTF_TF_MACRO', '1h')
+HFT_MTF_KLINES     = int(os.environ.get('HFT_MTF_KLINES', '50'))
 
 # ── MELHORIA 3: Funding Rate Filter ─────────────────────────────────────────
 HFT_FUNDING_ENABLED = os.environ.get('HFT_FUNDING_ENABLED', 'true').lower() == 'true'
@@ -213,19 +215,23 @@ HFT_VOLATILITY_PAUSE_SEC  = int(os.environ.get('HFT_VOL_PAUSE_SEC', '1800'))   #
 
 STRATEGY_NAMES = [
     'ema_micro', 'rsi_reversion', 'bollinger', 'vwap_dev',
-    'volume_mom', 'stochastic', 'cci', 'macd_fast', 'price_action'
+    'volume_mom', 'stochastic', 'cci', 'macd_fast', 'price_action',
+    'ob_imbalance', 'fvg_smc', 'cvd_divergence'
 ]
 
 BASE_WEIGHTS = {
-    'ema_micro':     1.0,   # OK em tendência
-    'rsi_reversion': 1.6,   # forte em 15m — oversold/overbought confiável
-    'bollinger':     1.3,   # bom em ranging — toque nas bandas
-    'vwap_dev':      1.3,   # bom — desvio do preço médio
-    'volume_mom':    1.5,   # forte — volume confirma direção real
-    'stochastic':    1.1,   # complementar
-    'cci':           0.7,   # fraco em 15m — muito ruído, penalizado
-    'macd_fast':     0.6,   # fraco em 15m — atrasa, penalizado
-    'price_action':  1.6,   # forte — pinbar/engulfing confiáveis
+    'ema_micro':      1.0,   # OK em tendência
+    'rsi_reversion':  1.6,   # forte em 15m — oversold/overbought confiável
+    'bollinger':      1.3,   # bom em ranging — toque nas bandas
+    'vwap_dev':       1.3,   # bom — desvio do preço médio
+    'volume_mom':     1.5,   # forte — volume confirma direção real
+    'stochastic':     1.1,   # complementar
+    'cci':            0.7,   # fraco em 15m — muito ruído, penalizado
+    'macd_fast':      0.6,   # fraco em 15m — atrasa, penalizado
+    'price_action':   1.6,   # forte — pinbar/engulfing confiáveis
+    'ob_imbalance':   1.3,   # order book bid/ask imbalance
+    'fvg_smc':        1.4,   # fair value gap (smart money concepts)
+    'cvd_divergence': 1.2,   # CVD divergence (approximated)
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -740,12 +746,180 @@ class HFTEngine:
             if close < ema21 < ema50: return 'trending_down'
         return 'ranging'
 
+    def _get_session_config(self):
+        """Returns session-specific parameter multipliers based on UTC hour."""
+        h = datetime.datetime.utcnow().hour
+        if 0 <= h < 7:      # Asian session — ranging, be selective
+            return {'tp_mult': 0.8, 'sl_mult': 0.8, 'score_mult': 1.2, 'session': 'asian'}
+        elif 7 <= h < 9:     # London open — liquidity sweeps, very selective
+            return {'tp_mult': 1.2, 'sl_mult': 1.0, 'score_mult': 1.3, 'session': 'london_open'}
+        elif 13 <= h < 16:   # London-NY overlap — best time, less selective
+            return {'tp_mult': 1.5, 'sl_mult': 1.2, 'score_mult': 0.9, 'session': 'london_ny'}
+        elif 9 <= h < 13 or 16 <= h < 22:  # Normal London or NY
+            return {'tp_mult': 1.0, 'sl_mult': 1.0, 'score_mult': 1.0, 'session': 'normal'}
+        else:  # 22-00 — low liquidity, very selective
+            return {'tp_mult': 0.7, 'sl_mult': 0.7, 'score_mult': 1.5, 'session': 'late'}
+
     def _in_active_session(self):
         if not HFT_SESSION_FILTER: return True
-        # Usa timezone local configurável (padrão UTC-3 = BRT)
         h = (datetime.datetime.utcnow().hour + HFT_TZ_OFFSET) % 24
-        # Janela ampla: das 06h às 23h59 horário local — cobre toda sessão cripto relevante
         return 6 <= h < 24
+
+    # ── MTF Bias 15m + 1H ──────────────────────────────────────────────────
+
+    def _get_mtf_bias(self, pair):
+        """Returns multi-timeframe bias from 15m (setup) and 1H (macro) EMAs."""
+        now = time.time()
+        cached = self._mtf_cache.get(pair)
+        if cached and now - cached.get('ts', 0) < self._mtf_cache_ttl:
+            return cached
+        try:
+            # 15m setup
+            k15 = self.client.get_klines(symbol=pair, interval=HFT_MTF_TF_SETUP, limit=50)
+            c15 = [float(k[4]) for k in k15]
+            e8_15 = self._ema(c15[-8:], 8)
+            e21_15 = self._ema(c15[-21:], 21)
+            trend_15m = 'BULL' if e8_15 > e21_15 * 1.001 else ('BEAR' if e8_15 < e21_15 * 0.999 else 'NEUTRAL')
+
+            # 1H macro
+            k1h = self.client.get_klines(symbol=pair, interval=HFT_MTF_TF_MACRO, limit=50)
+            c1h = [float(k[4]) for k in k1h]
+            e21_1h = self._ema(c1h[-21:], 21)
+            e50_1h = self._ema(c1h[-50:], 50) if len(c1h) >= 50 else e21_1h
+            trend_1h = 'BULL' if e21_1h > e50_1h * 1.001 else ('BEAR' if e21_1h < e50_1h * 0.999 else 'NEUTRAL')
+
+            result = {'trend_15m': trend_15m, 'trend_1h': trend_1h, 'ts': now}
+            self._mtf_cache[pair] = result
+            return result
+        except Exception as e:
+            log.warning(f'  MTF bias {pair}: {e}')
+            return {'trend_15m': 'NEUTRAL', 'trend_1h': 'NEUTRAL', 'ts': now}
+
+    # ── VWAP with Standard Deviation Bands ───────────────────────────────────
+
+    def _vwap_with_std(self, closes, volumes, highs, lows, period=20):
+        """VWAP with standard deviation bands."""
+        c = list(closes)[-period:]; v = list(volumes)[-period:]
+        h = list(highs)[-period:]; l = list(lows)[-period:]
+        if len(c) < period or not v: return None
+        tp = [(h[i] + l[i] + c[i]) / 3 for i in range(len(c))]
+        cum_tp_vol = 0; cum_vol = 0; cum_tp2_vol = 0
+        for i in range(len(tp)):
+            cum_tp_vol += tp[i] * v[i]
+            cum_vol += v[i]
+            cum_tp2_vol += (tp[i] ** 2) * v[i]
+        if cum_vol == 0: return None
+        vwap = cum_tp_vol / cum_vol
+        variance = (cum_tp2_vol / cum_vol) - (vwap ** 2)
+        std_dev = max(variance, 0) ** 0.5
+        return vwap, std_dev
+
+    # ── Order Book Imbalance ─────────────────────────────────────────────────
+
+    def _order_book_imbalance(self, pair):
+        """Fetch order book and calculate bid/ask imbalance. Returns -1 to +1."""
+        try:
+            if HFT_MARKET == 'futures':
+                depth = self.client.futures_order_book(symbol=pair, limit=10)
+            else:
+                depth = self.client.get_order_book(symbol=pair, limit=10)
+            bid_vol = sum(float(b[1]) for b in depth['bids'][:5])
+            ask_vol = sum(float(a[1]) for a in depth['asks'][:5])
+            total = bid_vol + ask_vol
+            return (bid_vol - ask_vol) / total if total > 0 else 0
+        except Exception:
+            return 0
+
+    # ── Fair Value Gap Detection (SMC) ───────────────────────────────────────
+
+    def _detect_fvg(self, pair):
+        """Detect Fair Value Gaps in recent candles. Returns 'BUY', 'SELL', or None."""
+        h = list(self.highs[pair])
+        l = list(self.lows[pair])
+        c = list(self.closes[pair])
+        o = list(self.opens[pair])
+        if len(c) < 5: return None
+
+        # Check last 10 candles for FVG
+        for i in range(-3, -min(10, len(c)), -1):
+            try:
+                # Bullish FVG: candle[i-2].high < candle[i].low (gap up)
+                if h[i-2] < l[i]:
+                    gap_size = (l[i] - h[i-2]) / c[i] * 100
+                    # Price returning to fill the gap = buy opportunity
+                    if gap_size > 0.05 and c[-1] <= l[i] and c[-1] >= h[i-2]:
+                        return 'BUY'
+                # Bearish FVG: candle[i-2].low > candle[i].high (gap down)
+                if l[i-2] > h[i]:
+                    gap_size = (l[i-2] - h[i]) / c[i] * 100
+                    if gap_size > 0.05 and c[-1] >= h[i] and c[-1] <= l[i-2]:
+                        return 'SELL'
+            except IndexError:
+                break
+        return None
+
+    # ── CVD Divergence (approximated from candles) ───────────────────────────
+
+    def _cvd_divergence(self, pair):
+        """Approximate CVD divergence from candle data. Returns 'BUY', 'SELL', or None."""
+        c = list(self.closes[pair])
+        o = list(self.opens[pair])
+        v = list(self.volumes[pair])
+        if len(c) < 20: return None
+
+        # Calculate approximate CVD (buy volume - sell volume)
+        cvd = []
+        running = 0
+        for i in range(-20, 0):
+            if c[i] > o[i]:  # bullish candle: most volume is buy
+                running += v[i] * 0.7
+            else:  # bearish candle: most volume is sell
+                running -= v[i] * 0.7
+            cvd.append(running)
+
+        # Check for divergence in last 10 candles
+        price_trend = c[-1] - c[-10]  # price direction
+        cvd_trend = cvd[-1] - cvd[-10]  # CVD direction
+
+        # Bearish divergence: price up, CVD down
+        if price_trend > 0 and cvd_trend < 0:
+            return 'SELL'
+        # Bullish divergence: price down, CVD up
+        if price_trend < 0 and cvd_trend > 0:
+            return 'BUY'
+        return None
+
+    # ── Funding Score Multiplier (replaces additive adjustment) ──────────────
+
+    def _funding_score_multiplier(self, pair, side):
+        """Returns multiplier for score based on funding rate. >1 = aligned, <1 = against."""
+        if not HFT_FUNDING_ENABLED:
+            return 1.0
+        try:
+            now = time.time()
+            cached = self._funding_cache.get(pair)
+            if cached and now - cached.get('ts', 0) < self._funding_cache_ttl:
+                rate = cached['rate']
+            else:
+                if HFT_MARKET == 'futures':
+                    fr = self.client.futures_funding_rate(symbol=pair, limit=1)
+                    rate = float(fr[-1]['fundingRate']) if fr else 0
+                else:
+                    rate = 0
+                self._funding_cache[pair] = {'rate': rate, 'ts': now}
+
+            # Extreme funding = contrarian signal
+            if rate > 0.0005:  # > 0.05% - longs overleveraged
+                return 1.3 if side == 'SELL' else 0.7
+            elif rate < -0.0005:  # shorts overleveraged
+                return 1.3 if side == 'BUY' else 0.7
+            elif rate > 0.0001:
+                return 1.1 if side == 'SELL' else 0.9
+            elif rate < -0.0001:
+                return 1.1 if side == 'BUY' else 0.9
+            return 1.0
+        except Exception:
+            return 1.0
 
     # ── Geração de Sinal ─────────────────────────────────────────────────────
 
@@ -799,6 +973,10 @@ class HFTEngine:
         min_sc   = self._get_pair_param(pair, 'min_score', float(os.environ.get('HFT_MIN_SCORE', '3.5')))
         min_sg   = self._get_pair_param(pair, 'min_signals', int(os.environ.get('HFT_MIN_SIGNALS', '3')))
 
+        # Session-based score adjustment
+        session_cfg = self._get_session_config()
+        min_sc *= session_cfg['score_mult']
+
         # Filtro macro EMA 50
         ema50      = self._ema(list(closes)[-50:], 50) if len(closes) >= 50 else None
         macro_bull = ema50 and close > ema50 * 1.001
@@ -834,13 +1012,16 @@ class HFTEngine:
                 elif pct_b > 0.94: signals.append(('SELL', 'bollinger', f'BB high {pct_b:.2f}', 1.4))
                 elif pct_b > 0.82: signals.append(('SELL', 'bollinger', 'BB near high',         0.8))
 
-        # 4. VWAP
-        vw  = self._vwap(closes, volumes)
-        dev = (close - vw) / vw * 100 if vw else 0
-        if   dev < -0.35: signals.append(('BUY',  'vwap_dev', f'VWAP {dev:.2f}%',  1.3))
-        elif dev < -0.18: signals.append(('BUY',  'vwap_dev', f'VWAP {dev:.2f}%',  0.7))
-        elif dev >  0.35: signals.append(('SELL', 'vwap_dev', f'VWAP +{dev:.2f}%', 1.3))
-        elif dev >  0.18: signals.append(('SELL', 'vwap_dev', f'VWAP +{dev:.2f}%', 0.7))
+        # 4. VWAP with Dynamic Bands
+        vwap_data = self._vwap_with_std(closes, volumes, highs, lows)
+        if vwap_data:
+            vw, vw_std = vwap_data
+            if vw_std > 0:
+                dev_sigma = (close - vw) / vw_std  # deviation in standard deviations
+                if dev_sigma < -1.5:    signals.append(('BUY',  'vwap_dev', f'VWAP -{abs(dev_sigma):.1f}\u03c3', 1.3))
+                elif dev_sigma < -0.8:  signals.append(('BUY',  'vwap_dev', f'VWAP -{abs(dev_sigma):.1f}\u03c3', 0.7))
+                elif dev_sigma > 1.5:   signals.append(('SELL', 'vwap_dev', f'VWAP +{dev_sigma:.1f}\u03c3',      1.3))
+                elif dev_sigma > 0.8:   signals.append(('SELL', 'vwap_dev', f'VWAP +{dev_sigma:.1f}\u03c3',      0.7))
 
         # 5. Volume Momentum (limiar calibrado)
         vols = list(volumes)
@@ -875,6 +1056,23 @@ class HFTEngine:
             if pa == 'BUY':   signals.append(('BUY',  'price_action', 'Pinbar/Engulf bull', 1.5))
             elif pa == 'SELL': signals.append(('SELL', 'price_action', 'Pinbar/Engulf bear', 1.5))
 
+        # 10. Order Book Imbalance
+        obi = self._order_book_imbalance(pair)
+        if obi > 0.30:    signals.append(('BUY',  'ob_imbalance', f'OBI +{obi:.2f}', 1.3))
+        elif obi > 0.15:  signals.append(('BUY',  'ob_imbalance', f'OBI +{obi:.2f}', 0.7))
+        elif obi < -0.30: signals.append(('SELL', 'ob_imbalance', f'OBI {obi:.2f}',  1.3))
+        elif obi < -0.15: signals.append(('SELL', 'ob_imbalance', f'OBI {obi:.2f}',  0.7))
+
+        # 11. Fair Value Gap (Smart Money Concepts)
+        fvg = self._detect_fvg(pair)
+        if fvg == 'BUY':  signals.append(('BUY',  'fvg_smc', 'FVG fill bull', 1.4))
+        elif fvg == 'SELL': signals.append(('SELL', 'fvg_smc', 'FVG fill bear', 1.4))
+
+        # 12. CVD Divergence (approximated)
+        cvd_sig = self._cvd_divergence(pair)
+        if cvd_sig == 'BUY':  signals.append(('BUY',  'cvd_divergence', 'CVD bull div', 1.2))
+        elif cvd_sig == 'SELL': signals.append(('SELL', 'cvd_divergence', 'CVD bear div', 1.2))
+
         # ── Pesos adaptativos + filtros ───────────────────────────────────
         buy_score = 0.0; sell_score = 0.0
         buy_count = 0;   sell_count = 0
@@ -888,10 +1086,13 @@ class HFTEngine:
             if side == 'SELL' and macro_bull:  tm = 0.6
             if side == 'BUY'  and macro_bull:  tm = 1.2
             if side == 'SELL' and macro_bear:  tm = 1.2
+            # Regime-adaptive weights: boost strategies that work in current regime
             if regime in ('trending_up', 'trending_down'):
-                if strat in ('ema_micro', 'macd_fast', 'volume_mom'): tm *= 1.15
-            else:
-                if strat in ('rsi_reversion', 'bollinger', 'vwap_dev', 'stochastic'): tm *= 1.15
+                if strat in ('ema_micro', 'macd_fast', 'volume_mom', 'price_action'): tm *= 1.4
+                elif strat in ('rsi_reversion', 'bollinger', 'stochastic'): tm *= 0.6
+            else:  # ranging
+                if strat in ('rsi_reversion', 'bollinger', 'vwap_dev', 'stochastic'): tm *= 1.4
+                elif strat in ('ema_micro', 'macd_fast'): tm *= 0.6
             w *= tm
 
             if side == 'BUY':
@@ -918,6 +1119,22 @@ class HFTEngine:
             if ps['losses'] >= 2 and ps['wins'] == 0:
                 min_sc *= 1.3  # exige score 30% maior em par com 2+ losses seguidos
 
+        # ── FILTRO MTF 15m + 1H ──────────────────────────────────────────────
+        if HFT_MTF_ENABLED:
+            mtf = self._get_mtf_bias(pair)
+            # HARD FILTER: never trade against 1H trend
+            if mtf['trend_1h'] == 'BEAR' and buy_count >= min_sg and buy_score >= min_sc:
+                if buy_score > sell_score * 1.6:
+                    return {'side': None, 'score': 0, 'strategies': [],
+                            'reason': f'BUY bloqueado — 1H bearish (MTF filter)'}
+            if mtf['trend_1h'] == 'BULL' and sell_count >= min_sg and sell_score >= min_sc:
+                if sell_score > buy_score * 1.6:
+                    return {'side': None, 'score': 0, 'strategies': [],
+                            'reason': f'SELL bloqueado — 1H bullish (MTF filter)'}
+            # Conflicting timeframes → require higher score
+            if mtf['trend_15m'] != mtf['trend_1h'] and mtf['trend_15m'] != 'NEUTRAL' and mtf['trend_1h'] != 'NEUTRAL':
+                min_sc *= 1.3
+
         if buy_count >= min_sg and buy_score >= min_sc and buy_score > sell_score * 1.6:
             # Counter-trend: BUY em tendência de baixa → precisa score 30% maior
             if regime == 'trending_down' and buy_score < min_sc * 1.3:
@@ -928,11 +1145,11 @@ class HFTEngine:
             if regime == 'ranging' and rsi_v > ranging_rsi_buy:
                 return {'side': None, 'score': 0, 'strategies': [],
                         'reason': f'BUY ranging RSI {rsi_v:.0f} > {ranging_rsi_buy:.0f}'}
-            # Funding rate bonus/penalidade
-            funding_adj = self._funding_score_adjustment(pair, 'BUY')
-            buy_score += funding_adj
+            # Funding rate multiplier (replaces additive bonus)
+            funding_mult = self._funding_score_multiplier(pair, 'BUY')
+            buy_score *= funding_mult
             return {'side': 'BUY', 'score': buy_score, 'count': buy_count,
-                    'reason': ' + '.join(buy_reasons[:3]) + (f' +funding' if funding_adj > 0 else ''),
+                    'reason': ' + '.join(buy_reasons[:3]) + (f' +funding' if funding_mult > 1.0 else ''),
                     'strategies': list(set(buy_strats)),
                     'regime': regime, 'rsi': rsi_v, 'price': close,
                     'confidence': min(buy_score / 6.0, 1.0)}
@@ -950,11 +1167,11 @@ class HFTEngine:
             if regime == 'ranging' and rsi_v < ranging_rsi_sell:
                 return {'side': None, 'score': 0, 'strategies': [],
                         'reason': f'SELL ranging RSI {rsi_v:.0f} < {ranging_rsi_sell:.0f}'}
-            # Funding rate bonus/penalidade
-            funding_adj = self._funding_score_adjustment(pair, 'SELL')
-            sell_score += funding_adj
+            # Funding rate multiplier (replaces additive bonus)
+            funding_mult = self._funding_score_multiplier(pair, 'SELL')
+            sell_score *= funding_mult
             return {'side': 'SELL', 'score': sell_score, 'count': sell_count,
-                    'reason': ' + '.join(sell_reasons[:3]) + (f' +funding' if funding_adj > 0 else ''),
+                    'reason': ' + '.join(sell_reasons[:3]) + (f' +funding' if funding_mult > 1.0 else ''),
                     'strategies': list(set(sell_strats)),
                     'regime': regime, 'rsi': rsi_v, 'price': close,
                     'confidence': min(sell_score / 6.0, 1.0)}
@@ -1210,6 +1427,18 @@ class HFTEngine:
         # Escala mais agressiva: conf 0.3→0.6x, conf 0.5→1.0x, conf 0.8→1.4x, conf 1.0→1.7x
         risk_mult = 0.4 + confidence * 1.3
         risk_mult = min(risk_mult, 1.7)  # teto 1.7x para sinais excepcionais
+        # Kelly Criterion: dynamic risk based on actual win rate
+        if len(self.trades_today) >= 5 or (self.daily_wins + self.daily_losses) >= 5:
+            total = self.daily_wins + self.daily_losses
+            wr = self.daily_wins / total if total > 0 else 0.5
+            # Calculate average win/loss from pair stats
+            avg_win = sum(s['pnl'] for s in self.pair_stats.values() if s['pnl'] > 0) or 1
+            avg_loss = abs(sum(s['pnl'] for s in self.pair_stats.values() if s['pnl'] < 0)) or 1
+            rr_ratio = avg_win / avg_loss if avg_loss > 0 else 1.0
+            kelly = wr - (1 - wr) / rr_ratio if rr_ratio > 0 else 0
+            kelly_frac = kelly * 0.25  # use 25% Kelly (conservative)
+            kelly_frac = max(0.3, min(1.5, kelly_frac * 5))  # scale to multiplier range
+            risk_mult *= kelly_frac
         # Reduz após losses consecutivos
         if self.consec_losses >= 3: risk_mult *= 0.5
         elif self.consec_losses >= 2: risk_mult *= 0.7
@@ -1235,8 +1464,9 @@ class HFTEngine:
         if atr_val <= 0: atr_val = price * 0.002
 
         min_rr  = self._get_pair_param(pair, 'min_rr', HFT_MIN_RR)
-        sl_dist = max(atr_val * 1.0, price * HFT_SL_PCT / 100) * sl_mult
-        tp_dist = max(atr_val * 2.0, sl_dist * min_rr) * tp_mult
+        session_cfg = self._get_session_config()
+        sl_dist = max(atr_val * 1.0, price * HFT_SL_PCT / 100) * sl_mult * session_cfg['sl_mult']
+        tp_dist = max(atr_val * 2.0, sl_dist * min_rr) * tp_mult * session_cfg['tp_mult']
         if confidence > 0.7: tp_dist *= 1.2
 
         if side == 'BUY':
