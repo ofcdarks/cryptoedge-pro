@@ -2050,7 +2050,7 @@ class HFTEngine:
         """Retorna True se o bot deve parar de abrir novas posições."""
         return self.daily_protect_stopped
 
-    def _check_exit(self, pair, price):
+    def _check_exit(self, pair, price, candle_high=None, candle_low=None):
         for key, pos in list(self.positions.items()):
             if pos['pair'] != pair: continue
             side  = pos['side']
@@ -2083,8 +2083,10 @@ class HFTEngine:
             tp    = pos['tp']  # referência, NÃO é teto de saída
             sl_orig = pos['sl']
 
-            # Lucro atual em %
-            pnl_pct = (price - entry) / entry * 100 if side == 'BUY' else (entry - price) / entry * 100
+            # Lucro atual em % — usa HIGH para BUY, LOW para SELL (pico real da vela)
+            peak_price = (candle_high if candle_high is not None else price) if side == 'BUY' else (candle_low if candle_low is not None else price)
+            pnl_pct = (peak_price - entry) / entry * 100 if side == 'BUY' else (entry - peak_price) / entry * 100
+            pnl_pct_close = (price - entry) / entry * 100 if side == 'BUY' else (entry - price) / entry * 100
             if pnl_pct > pos.get('peak_pnl_pct', 0.0):
                 self.positions[key]['peak_pnl_pct'] = pnl_pct
 
@@ -2220,6 +2222,10 @@ class HFTEngine:
             pnl_net      = pnl_gross - total_cost
 
             # ── Decisões de saída — SEM TP FIXO ──────────────────────────
+            # Usa high/low da vela para detectar SL tocado DURANTE a vela
+            check_low  = candle_low  if candle_low  is not None else price
+            check_high = candle_high if candle_high is not None else price
+
             # SLIP GATE timeout: máximo 60s aguardando, depois fecha mesmo com loss
             slip_gate_timeout = 60  # segundos
             slip_gate_since = pos.get('slip_gate_since', 0)
@@ -2228,7 +2234,7 @@ class HFTEngine:
             if side == 'BUY':
                 if not HFT_NO_TP_CEILING and price >= tp:
                     self._close_position(key, price, f'TP +{(price/entry-1)*100:.2f}%')
-                elif price <= active_sl:
+                elif check_low <= active_sl:
                     # FEE+SLIP GATE: trail diz fechar mas lucro não cobre custos reais
                     if tlv > 0 and pnl_net < 0 and price > sl_orig and not slip_gate_expired:
                         if slip_gate_since == 0:
@@ -2248,7 +2254,7 @@ class HFTEngine:
             else:
                 if not HFT_NO_TP_CEILING and price <= tp:
                     self._close_position(key, price, f'TP +{(entry/price-1)*100:.2f}%')
-                elif price >= active_sl:
+                elif check_high >= active_sl:
                     if tlv > 0 and pnl_net < 0 and price < sl_orig and not slip_gate_expired:
                         if slip_gate_since == 0:
                             self.positions[key]['slip_gate_since'] = time.time()
@@ -2310,8 +2316,8 @@ class HFTEngine:
             self.opens[pair]   = deque(maxlen=250)
             self._candle_count[pair] = 0
 
-        # Ticks: verificar SL/TP apenas (sem I/O de disco por tick)
-        self._check_exit(pair, close)
+        # Ticks: verificar SL/TP com high/low da vela (detecta SL tocado durante a vela)
+        self._check_exit(pair, close, candle_high=high, candle_low=low)
         # Sincronização periódica com Binance (max 1x a cada 30s)
         self._sync_positions_with_binance()
 
