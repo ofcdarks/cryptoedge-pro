@@ -973,9 +973,8 @@ class HFTEngine:
         min_sc   = self._get_pair_param(pair, 'min_score', float(os.environ.get('HFT_MIN_SCORE', '3.5')))
         min_sg   = self._get_pair_param(pair, 'min_signals', int(os.environ.get('HFT_MIN_SIGNALS', '3')))
 
-        # Session-based score adjustment
+        # Session config (usado só para TP/SL, NÃO para score — não bloqueia trades)
         session_cfg = self._get_session_config()
-        min_sc *= session_cfg['score_mult']
 
         # Filtro macro EMA 50
         ema50      = self._ema(list(closes)[-50:], 50) if len(closes) >= 50 else None
@@ -1056,22 +1055,11 @@ class HFTEngine:
             if pa == 'BUY':   signals.append(('BUY',  'price_action', 'Pinbar/Engulf bull', 1.5))
             elif pa == 'SELL': signals.append(('SELL', 'price_action', 'Pinbar/Engulf bear', 1.5))
 
-        # 10. Order Book Imbalance
-        obi = self._order_book_imbalance(pair)
-        if obi > 0.30:    signals.append(('BUY',  'ob_imbalance', f'OBI +{obi:.2f}', 1.3))
-        elif obi > 0.15:  signals.append(('BUY',  'ob_imbalance', f'OBI +{obi:.2f}', 0.7))
-        elif obi < -0.30: signals.append(('SELL', 'ob_imbalance', f'OBI {obi:.2f}',  1.3))
-        elif obi < -0.15: signals.append(('SELL', 'ob_imbalance', f'OBI {obi:.2f}',  0.7))
-
-        # 11. Fair Value Gap (Smart Money Concepts)
-        fvg = self._detect_fvg(pair)
-        if fvg == 'BUY':  signals.append(('BUY',  'fvg_smc', 'FVG fill bull', 1.4))
-        elif fvg == 'SELL': signals.append(('SELL', 'fvg_smc', 'FVG fill bear', 1.4))
-
-        # 12. CVD Divergence (approximated)
-        cvd_sig = self._cvd_divergence(pair)
-        if cvd_sig == 'BUY':  signals.append(('BUY',  'cvd_divergence', 'CVD bull div', 1.2))
-        elif cvd_sig == 'SELL': signals.append(('SELL', 'cvd_divergence', 'CVD bear div', 1.2))
+        # 10-12: OBI, FVG, CVD — desativados (experimentais, causar ruído em live)
+        # Para reativar: remover pass e descomentar
+        # obi = self._order_book_imbalance(pair)
+        # fvg = self._detect_fvg(pair)
+        # cvd_sig = self._cvd_divergence(pair)
 
         # ── Pesos adaptativos + filtros ───────────────────────────────────
         buy_score = 0.0; sell_score = 0.0
@@ -1086,13 +1074,13 @@ class HFTEngine:
             if side == 'SELL' and macro_bull:  tm = 0.6
             if side == 'BUY'  and macro_bull:  tm = 1.2
             if side == 'SELL' and macro_bear:  tm = 1.2
-            # Regime-adaptive weights: boost strategies that work in current regime
+            # Regime-adaptive weights: suave — boost sem penalizar demais
             if regime in ('trending_up', 'trending_down'):
-                if strat in ('ema_micro', 'macd_fast', 'volume_mom', 'price_action'): tm *= 1.4
-                elif strat in ('rsi_reversion', 'bollinger', 'stochastic'): tm *= 0.6
+                if strat in ('ema_micro', 'macd_fast', 'volume_mom', 'price_action'): tm *= 1.2
+                elif strat in ('rsi_reversion', 'bollinger', 'stochastic'): tm *= 0.85
             else:  # ranging
-                if strat in ('rsi_reversion', 'bollinger', 'vwap_dev', 'stochastic'): tm *= 1.4
-                elif strat in ('ema_micro', 'macd_fast'): tm *= 0.6
+                if strat in ('rsi_reversion', 'bollinger', 'vwap_dev', 'stochastic'): tm *= 1.2
+                elif strat in ('ema_micro', 'macd_fast'): tm *= 0.85
             w *= tm
 
             if side == 'BUY':
@@ -1427,18 +1415,9 @@ class HFTEngine:
         # Escala mais agressiva: conf 0.3→0.6x, conf 0.5→1.0x, conf 0.8→1.4x, conf 1.0→1.7x
         risk_mult = 0.4 + confidence * 1.3
         risk_mult = min(risk_mult, 1.7)  # teto 1.7x para sinais excepcionais
-        # Kelly Criterion: dynamic risk based on actual win rate
-        if len(self.trades_today) >= 5 or (self.daily_wins + self.daily_losses) >= 5:
-            total = self.daily_wins + self.daily_losses
-            wr = self.daily_wins / total if total > 0 else 0.5
-            # Calculate average win/loss from pair stats
-            avg_win = sum(s['pnl'] for s in self.pair_stats.values() if s['pnl'] > 0) or 1
-            avg_loss = abs(sum(s['pnl'] for s in self.pair_stats.values() if s['pnl'] < 0)) or 1
-            rr_ratio = avg_win / avg_loss if avg_loss > 0 else 1.0
-            kelly = wr - (1 - wr) / rr_ratio if rr_ratio > 0 else 0
-            kelly_frac = kelly * 0.25  # use 25% Kelly (conservative)
-            kelly_frac = max(0.3, min(1.5, kelly_frac * 5))  # scale to multiplier range
-            risk_mult *= kelly_frac
+        # Kelly Criterion: DESATIVADO — cortava position size após losses iniciais
+        # TODO: reativar após ter dados suficientes de WR
+        pass
         # Reduz após losses consecutivos
         if self.consec_losses >= 3: risk_mult *= 0.5
         elif self.consec_losses >= 2: risk_mult *= 0.7
